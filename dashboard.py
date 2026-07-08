@@ -75,13 +75,32 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     df["월"] = df["기간_일자"].dt.month
     df["연월"] = df["기간_일자"].dt.to_period("M").astype(str)
 
-    # 주차 컬럼 생성 (없으면 일자 기준으로 파생)
-    if "기간_주" not in df.columns:
-        df["기간_주"] = df["기간_일자"].dt.strftime("%Y%m") + df["기간_일자"].dt.isocalendar().week.astype(str).str.zfill(2) + "주차"
-    if "대상여부" not in df.columns:
-        df["대상여부"] = "대상"
-    if "구분_광고유형" not in df.columns:
-        df["구분_광고유형"] = "DA"
+    # 없는 컬럼에 기본값 채우기
+    defaults = {
+        "기간_주": None,  # 아래에서 별도 처리
+        "대상여부": "대상",
+        "구분_광고유형": "DA",
+        "구분_비용출처": "기타",
+        "구분_채널": "기타",
+        "구분_디바이스": "기타",
+        "구분_부서명": "기타",
+        "카테고리": "기타",
+        "구분_캠페인": "기타",
+        "구분_매체명": "기타",
+        "구분_AF코드": "",
+        "구분_AF코드이름": "",
+        "구분_하위캠페인": "",
+    }
+    for col, val in defaults.items():
+        if col not in df.columns:
+            df[col] = val
+
+    if df["기간_주"].isna().all():
+        df["기간_주"] = (
+            df["기간_일자"].dt.strftime("%Y%m")
+            + df["기간_일자"].dt.isocalendar().week.astype(str).str.zfill(2)
+            + "주차"
+        )
 
     return df
 
@@ -681,10 +700,6 @@ def page_weekly(df: pd.DataFrame):
     st.header("📅 주차별 성과")
     if df.empty:
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
-        return
-
-    if "기간_주" not in df.columns:
-        st.info("주차 정보(기간_주 컬럼)가 없습니다.")
         return
 
     weekly = agg(df, ["연도", "기간_주"]).sort_values(["연도", "기간_주"])
