@@ -35,16 +35,24 @@ PURPOSE_COLORS = {
 # ───────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
-    enc_list = ["utf-8-sig", "utf-8", "cp949", "euc-kr"]
-    df = None
-    for enc in enc_list:
-        try:
-            df = pd.read_csv(io.BytesIO(file_bytes), encoding=enc)
-            break
-        except Exception:
-            continue
-    if df is None:
-        raise ValueError("파일 인코딩을 인식할 수 없습니다.")
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext == "csv":
+        enc_list = ["utf-8-sig", "utf-8", "cp949", "euc-kr"]
+        df = None
+        for enc in enc_list:
+            try:
+                df = pd.read_csv(io.BytesIO(file_bytes), encoding=enc)
+                break
+            except Exception:
+                continue
+        if df is None:
+            raise ValueError("파일 인코딩을 인식할 수 없습니다.")
+    elif ext == "xlsx":
+        df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+    elif ext == "xlsb":
+        df = pd.read_excel(io.BytesIO(file_bytes), engine="pyxlsb")
+    else:
+        raise ValueError(f"지원하지 않는 파일 형식입니다: {ext}")
 
     df.columns = df.columns.str.strip()
     df["기간_일자"] = pd.to_datetime(df["기간_일자"], errors="coerce")
@@ -83,7 +91,6 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
 # ───────────────────────────────────────────────
 def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
-    # 기존 지표
     d["CTR"]        = safe_div(d["지표_클릭수"],                        d["지표_노출수"])
     d["CPC"]        = safe_div(d["지표_광고비"],                        d["지표_클릭수"])
     d["순결제ROAS"]  = safe_div(d["지표_총결제거래액"],                   d["지표_광고비"])
@@ -92,7 +99,6 @@ def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
     d["첫구매CPA"]  = safe_div(d["지표_광고비"],                        d["지표_순결제고객수(첫구매)"])
     d["가입률"]     = safe_div(d["지표_가입회원"],                       d["지표_UV(전체)"])
     d["첫구매율"]   = safe_div(d["지표_순결제고객수(첫구매)"],             d["지표_UV(전체)"])
-    # 추가 지표 (기존 리포트 기준)
     d["CPM"]        = safe_div(d["지표_광고비"] * 1000,                 d["지표_노출수"])
     d["CPUV"]       = safe_div(d["지표_광고비"],                        d["지표_UV(전체)"])
     d["UV/클릭"]    = safe_div(d["지표_UV(전체)"],                      d["지표_클릭수"])
@@ -133,7 +139,6 @@ def fmt_roas(v):
     return f"{v:.2f}x"
 
 def fmt_delta(cur, prev, is_pct=False):
-    """전년비/전월비 증감 포맷 (감소=△, 증가=+)"""
     if pd.isna(cur) or pd.isna(prev) or prev == 0:
         return "–"
     ratio = (cur - prev) / abs(prev)
@@ -162,7 +167,6 @@ AGG_COLS = [
 def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
     cols = [c for c in AGG_COLS if c in df.columns]
     grouped = df.groupby(by, dropna=False)[cols].sum().reset_index()
-    # 집행일수: by 그룹 내 일자 고유값 수
     if "기간_일자" in df.columns and "집행일수" not in by:
         days = df.groupby(by, dropna=False)["기간_일자"].nunique().reset_index()
         days.columns = list(days.columns[:-1]) + ["집행일수"]
@@ -184,7 +188,6 @@ def sidebar_filters(df: pd.DataFrame):
                                        format_func=lambda x: f"{x}월")
     st.sidebar.divider()
 
-    # 비용출처 모드
     cost_mode = st.sidebar.radio("비용출처 모드",
                                  ["TOTAL", "TOTAL(서비스비용제외)", "개별 선택"], index=0)
     sel_sources = None
@@ -194,14 +197,12 @@ def sidebar_filters(df: pd.DataFrame):
 
     st.sidebar.divider()
 
-    # 대상여부
     if df["대상여부"].nunique() > 1:
         target_opts = sorted(df["대상여부"].dropna().unique())
         sel_target = st.sidebar.multiselect("대상여부", target_opts, default=["대상"])
     else:
         sel_target = list(df["대상여부"].dropna().unique())
 
-    # 광고유형
     if df["구분_광고유형"].nunique() > 1:
         ad_types = sorted(df["구분_광고유형"].dropna().unique())
         sel_adtype = st.sidebar.multiselect("광고유형", ad_types, default=ad_types)
@@ -286,7 +287,6 @@ def get_targets():
 
 
 def progress_pill(cur, target, label):
-    """목표 대비 진도율 pill 렌더링"""
     if target <= 0:
         return
     rate = cur / target
@@ -343,7 +343,6 @@ def kpi_cards(df: pd.DataFrame, targets: dict):
 # 전년비 계산 헬퍼
 # ───────────────────────────────────────────────
 def yoy_compare(df: pd.DataFrame, cur_year: int, by_col: str, val_col: str):
-    """by_col(월 or 주차) × (cur_year, cur_year-1) 비교 DataFrame 반환"""
     prev_year = cur_year - 1
     sub = df[df["연도"].isin([cur_year, prev_year])]
     piv = agg(sub, ["연도", by_col])
@@ -366,7 +365,6 @@ def page_summary(df: pd.DataFrame, targets: dict):
     kpi_cards(df, targets)
     st.divider()
 
-    # ── 월별 광고비·거래액 추이 + 목표선
     col1, col2 = st.columns(2)
     with col1:
         monthly = agg(df, ["연도", "월", "연월"]).sort_values(["연도", "월"])
@@ -396,7 +394,6 @@ def page_summary(df: pd.DataFrame, targets: dict):
         base_layout(fig2, "매체별 광고비 비중", 400)
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ── ROAS 추이 + 거래액 구성 비중
     col3, col4 = st.columns(2)
     with col3:
         monthly2 = agg(df, ["연도", "월", "연월"]).sort_values(["연도", "월"])
@@ -428,7 +425,6 @@ def page_summary(df: pd.DataFrame, targets: dict):
         base_layout(fig4, "거래액 유형별 구성", 380)
         st.plotly_chart(fig4, use_container_width=True)
 
-    # ── 월별 YoY 요약표
     st.subheader("월별 전년비 요약")
     cur_year = max(df["연도"].unique())
     yoy_metrics = {
@@ -438,10 +434,6 @@ def page_summary(df: pd.DataFrame, targets: dict):
     }
     sel_yoy = st.selectbox("비교 지표", list(yoy_metrics.keys()), key="yoy_sel")
     yoy_df = yoy_compare(df, cur_year, "연월", yoy_metrics[sel_yoy])
-
-    def color_yoy(val):
-        if not isinstance(val, float): return ""
-        return "color: #16A34A" if val >= 0 else "color: #DC2626"
 
     fmt_fn = fmt_roas if "ROAS" in sel_yoy else (fmt_pct if sel_yoy == "CTR" else fmt_money if "비" not in sel_yoy else fmt_pct)
     yoy_disp = yoy_df.copy()
@@ -491,7 +483,6 @@ def page_media(df: pd.DataFrame):
         base_layout(fig2, "광고비 vs 순결제ROAS (버블=클릭수)", 420)
         st.plotly_chart(fig2, use_container_width=True)
 
-    # 매체별 요약 테이블 (전체 지표)
     st.subheader("매체별 지표 요약")
     disp_cols = [
         "구분_매체명", "집행일수", "지표_광고비", "지표_노출수", "지표_클릭수",
@@ -519,7 +510,6 @@ def page_media(df: pd.DataFrame):
             tbl_fmt[c] = tbl_fmt[c].apply(fn)
     st.dataframe(tbl_fmt, use_container_width=True, hide_index=True)
 
-    # 월별 매체 추이
     st.subheader("매체별 월별 추이")
     sel_media_list = st.multiselect("매체 선택", sorted(df["구분_매체명"].unique()),
                                     default=sorted(df["구분_매체명"].unique())[:5])
@@ -645,7 +635,6 @@ def page_funnel(df: pd.DataFrame):
         base_layout(fig2, "거래액 유형별 구성", 430)
         st.plotly_chart(fig2, use_container_width=True)
 
-    # 카테고리별 성과
     st.subheader("카테고리별 성과")
     by_cat = agg(df, ["카테고리"]).sort_values("지표_광고비", ascending=False).head(15)
     c3, c4 = st.columns(2)
@@ -661,7 +650,6 @@ def page_funnel(df: pd.DataFrame):
         base_layout(fig4, "카테고리별 순결제ROAS", 420)
         st.plotly_chart(fig4, use_container_width=True)
 
-    # 월별 CR·객단가 추이
     st.subheader("월별 전환 지표 추이")
     monthly = agg(df, ["연도", "월", "연월"]).sort_values(["연도", "월"])
     tab1, tab2 = st.tabs(["CR & 가입률", "객단가"])
@@ -687,7 +675,7 @@ def page_funnel(df: pd.DataFrame):
 
 
 # ───────────────────────────────────────────────
-# 페이지 5: 주차별 성과 (신규)
+# 페이지 5: 주차별 성과
 # ───────────────────────────────────────────────
 def page_weekly(df: pd.DataFrame):
     st.header("📅 주차별 성과")
@@ -710,7 +698,6 @@ def page_weekly(df: pd.DataFrame):
     sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="wk_metric")
     sel_col   = metric_options[sel_label]
 
-    # 연도별 라인 오버레이
     fig = go.Figure()
     for yr in sorted(weekly["연도"].unique()):
         sub = weekly[weekly["연도"] == yr].dropna(subset=[sel_col])
@@ -720,7 +707,6 @@ def page_weekly(df: pd.DataFrame):
     fig.update_xaxes(tickangle=-45)
     st.plotly_chart(fig, use_container_width=True)
 
-    # 주차별 YoY 비교표
     st.subheader("주차별 전년비 비교표")
     cur_year = max(df["연도"].unique())
     yoy = yoy_compare(df, cur_year, "기간_주", sel_col)
@@ -731,7 +717,6 @@ def page_weekly(df: pd.DataFrame):
     yoy_disp["전년비"] = yoy_disp["전년비"].apply(lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–")
     st.dataframe(yoy_disp, use_container_width=True, hide_index=True)
 
-    # 주차별 상세 집계표
     st.subheader("주차별 전체 지표")
     disp_cols = [
         "기간_주", "집행일수", "지표_광고비", "지표_노출수", "지표_클릭수",
@@ -843,15 +828,16 @@ def main():
     st.title("📊 DA 광고 실적 대시보드")
 
     uploaded = st.sidebar.file_uploader(
-        "데이터 파일 업로드 (CSV)", type=["csv"],
-        help="DA 광고 로데이터 CSV를 업로드하세요.",
+        "데이터 파일 업로드", type=["csv", "xlsx", "xlsb"],
+        help="DA 광고 로데이터 파일을 업로드하세요. (CSV / Excel)",
     )
 
     if uploaded is None:
-        st.info("👈 사이드바에서 CSV 파일을 업로드해주세요.")
+        st.info("👈 사이드바에서 파일을 업로드해주세요.")
         st.markdown("""
         **지원 파일 형식**
-        - DA 광고 로데이터 CSV (UTF-8, UTF-8-BOM, CP949)
+        - CSV (UTF-8, UTF-8-BOM, CP949)
+        - Excel (xlsx, xlsb)
         - 필수 컬럼: `기간_일자`, `구분_*`, `지표_*`
 
         **주차별 페이지 활용 시** `기간_주` 컬럼이 있으면 자동 인식합니다.
