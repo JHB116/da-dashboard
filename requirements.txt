@@ -1,1 +1,5 @@
-c3RyZWFtbGl0Pj0xLjM1LjAKcGFuZGFzPj0yLjAuMApwbG90bHk+PTUuMjAuMApudW1weT49MS4yNi4wCm9wZW5weXhsPj0zLjEuMAo=
+streamlit>=1.35.0
+pandas>=2.0.0
+plotly>=5.20.0
+numpy>=1.26.0
+openpyxl>=3.1.0
