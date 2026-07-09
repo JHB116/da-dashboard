@@ -113,6 +113,76 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(show_spinner=False)
+def load_targets_from_report(file_bytes: bytes) -> dict:
+    """보고서 엑셀에서 월별/주차별 목표를 파싱.
+    Returns: {
+      "monthly": {tab_name: {(year, month): {spend, rev, roas}}},
+      "weekly":  {(year, iso_week): {spend, rev, roas}},
+    }
+    """
+    SHEET_MAP = {
+        "월별_TOTAL(서비스비용제외)": "TOTAL(서비스비용제외)",
+        "월별_TOTAL": "TOTAL",
+        "월별_거래액": "거래액확대",
+        "월별_신규확대": "신규확대/인지도",
+    }
+    result = {"monthly": {}, "weekly": {}}
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+
+        # 월별 목표 파싱
+        for sheet, tab in SHEET_MAP.items():
+            if sheet not in xls.sheet_names:
+                continue
+            df = pd.read_excel(xls, sheet_name=sheet, header=None)
+            tab_targets = {}
+            for _, row in df.iterrows():
+                label = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
+                if "년" not in label or "주차" in label:
+                    continue
+                try:
+                    year = int(label[:4])
+                    month = int(label[5:7])
+                except Exception:
+                    continue
+                spend = row.iloc[41] if pd.notna(row.iloc[41]) else 0
+                rev   = row.iloc[42] if pd.notna(row.iloc[42]) else 0
+                roas  = row.iloc[43] if pd.notna(row.iloc[43]) else 0
+                tab_targets[(year, month)] = dict(
+                    spend=float(spend or 0),
+                    rev=float(rev or 0),
+                    roas=float(roas or 0),
+                )
+            result["monthly"][tab] = tab_targets
+
+        # 주차별 목표 파싱
+        if "주차별" in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name="주차별", header=None)
+            for _, row in df.iterrows():
+                label = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
+                if "주차" not in label or len(label) < 8:
+                    continue
+                try:
+                    date = pd.to_datetime(label[:8], format="%Y%m%d")
+                    year = date.isocalendar().year
+                    week = date.isocalendar().week
+                except Exception:
+                    continue
+                spend = row.iloc[38] if pd.notna(row.iloc[38]) else 0
+                rev   = row.iloc[39] if pd.notna(row.iloc[39]) else 0
+                roas  = row.iloc[40] if pd.notna(row.iloc[40]) else 0
+                if float(spend or 0) > 0 or float(rev or 0) > 0:
+                    result["weekly"][(int(year), int(week))] = dict(
+                        spend=float(spend or 0),
+                        rev=float(rev or 0),
+                        roas=float(roas or 0),
+                    )
+    except Exception as e:
+        st.warning(f"목표 파일 파싱 오류: {e}")
+    return result
+
+
 # ───────────────────────────────────────────────
 # 파생지표 계산
 # ───────────────────────────────────────────────
@@ -269,8 +339,13 @@ def yoy_sameday_prev(df: pd.DataFrame, cur_year: int, group_col: str) -> pd.Data
 
 def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
                   group_col: str, group_label_fn,
-                  targets: dict, period_type: str = "월") -> pd.DataFrame:
-    """실적요약 테이블: 실적 + 전년비 + 목표 + 목표비 한 눈에."""
+                  targets: dict = None, period_type: str = "월",
+                  targets_per_period: dict = None, cur_year: int = None) -> pd.DataFrame:
+    """실적요약 테이블: 실적 + 전년비 + 목표 + 목표비 한 눈에.
+    targets_per_period: {(year, period_val): {spend, rev, roas}} 형태로 월별/주차별 목표 개별 지정.
+    """
+    if targets is None:
+        targets = {}
     rows = []
     for _, r in cur_agg.iterrows():
         gval = r[group_col]
@@ -287,9 +362,14 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
         else:
             p_spend = p_rev = p_roas = np.nan
 
-        t_spend = targets.get("spend", 0)
-        t_rev   = targets.get("rev", 0)
-        t_roas  = targets.get("roas", 0)
+        # 목표: targets_per_period[(year, period_val)] 우선, 없으면 global targets
+        if targets_per_period and cur_year:
+            pt = targets_per_period.get((cur_year, int(gval)), {})
+        else:
+            pt = {}
+        t_spend = pt.get("spend", targets.get("spend", 0)) or 0
+        t_rev   = pt.get("rev",   targets.get("rev",   0)) or 0
+        t_roas  = pt.get("roas",  targets.get("roas",  0)) or 0
 
         def _chg(c, p):
             if pd.isna(c) or pd.isna(p) or p == 0: return np.nan
@@ -518,7 +598,7 @@ def _filter_cost(df, tab_name):
     return df
 
 
-def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
+def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None, tab_name=None):
     """비용출처별 탭 내부: 실적요약 테이블 + 차트"""
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
@@ -532,8 +612,11 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
     else:
         monthly_prev = agg(df_tab[df_tab["연도"] == cur_year - 1], ["월"])
 
+    # 탭별 월별 목표 매핑
+    tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
     tbl = summary_table(monthly_cur, monthly_prev, "월",
-                        lambda m: f"{int(m)}월", targets, period_type="월")
+                        lambda m: f"{int(m)}월", targets, period_type="월",
+                        targets_per_period=tab_monthly or None, cur_year=cur_year)
 
     # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
 
@@ -581,7 +664,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
         st.plotly_chart(fig2, use_container_width=True)
 
 
-def page_summary(df: pd.DataFrame, targets: dict):
+def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None):
     st.header("📊 전체 요약")
     if df.empty:
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
@@ -597,11 +680,13 @@ def page_summary(df: pd.DataFrame, targets: dict):
 
     sameday = st.sidebar.checkbox("동요일 기준 전년비", value=True, key="sameday_toggle")
 
+    monthly_targets = (report_targets or {}).get("monthly", {})
     for i, tname in enumerate(tab_names):
         with main_tabs[i]:
             st.caption(f"비용출처: {tname}  |  {'동요일 기준' if sameday else '동월 기준'} 전년비")
             df_tab = _filter_cost(df, tname)
-            _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday)
+            _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday,
+                                    monthly_targets=monthly_targets, tab_name=tname)
 
     # ── 예산 페이싱
     with main_tabs[4]:
@@ -1005,7 +1090,7 @@ def page_funnel(df: pd.DataFrame):
 # ───────────────────────────────────────────────
 # 페이지 5: 주차별 성과
 # ───────────────────────────────────────────────
-def page_weekly(df: pd.DataFrame, targets: dict = None):
+def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     if targets is None:
         targets = {}
     st.header("📅 주차별 성과")
@@ -1052,8 +1137,10 @@ def page_weekly(df: pd.DataFrame, targets: dict = None):
         else:
             weekly_prev = agg(df[df["연도"] == cur_year - 1], ["주차번호"])
 
+        weekly_targets = (report_targets or {}).get("weekly", {})
         wk_tbl = summary_table(weekly_cur, weekly_prev, "주차번호",
-                               lambda w: f"W{int(w):02d}", targets, period_type="주차")
+                               lambda w: f"W{int(w):02d}", targets, period_type="주차",
+                               targets_per_period=weekly_targets or None, cur_year=cur_year)
         # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
         st.dataframe(
             wk_tbl.style.map(
@@ -1408,6 +1495,18 @@ def main():
         f"총 {len(df):,}행 | {df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
     )
 
+    # 보고서 파일에서 목표 로드
+    report_file = st.sidebar.file_uploader(
+        "목표 파일 업로드 (보고서 엑셀)", type=["xlsx"],
+        help="월별/주차별 목표가 있는 보고서 엑셀을 업로드하면 자동으로 목표비를 계산합니다.",
+        key="report_uploader",
+    )
+    report_targets = {}
+    if report_file is not None:
+        with st.spinner("목표 파일 로딩 중..."):
+            report_targets = load_targets_from_report(report_file.read())
+        st.sidebar.success("✅ 목표 파일 로드 완료")
+
     filters = sidebar_filters(df)
     filtered = filter_df(df, filters)
     st.sidebar.caption(f"필터 적용 후: {len(filtered):,}행")
@@ -1421,7 +1520,7 @@ def main():
     ])
 
     if page == "📊 전체 요약":
-        page_summary(filtered, targets)
+        page_summary(filtered, targets, report_targets)
     elif page == "📆 일별 성과":
         page_daily(filtered, targets)
     elif page == "📡 매체별 성과":
@@ -1429,7 +1528,7 @@ def main():
     elif page == "🎯 캠페인별 성과":
         page_campaign(filtered)
     elif page == "📅 주차별 성과":
-        page_weekly(filtered, targets)
+        page_weekly(filtered, targets, report_targets)
     elif page == "🔍 퍼널 & 전환 분석":
         page_funnel(filtered)
     elif page == "🎨 소재 상세":
