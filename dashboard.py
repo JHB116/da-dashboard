@@ -544,7 +544,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
         tbl = tbl.drop(columns=drop_cols)
 
     st.dataframe(
-        tbl.style.applymap(
+        tbl.style.map(
             lambda v: "color: #16A34A" if isinstance(v, str) and v.startswith("▲")
             else ("color: #DC2626" if isinstance(v, str) and v.startswith("▼") else ""),
             subset=[c for c in tbl.columns if "전년비" in c],
@@ -1062,7 +1062,7 @@ def page_weekly(df: pd.DataFrame):
         if not has_target:
             wk_tbl = wk_tbl.drop(columns=[c for c in wk_tbl.columns if "목표" in c])
         st.dataframe(
-            wk_tbl.style.applymap(
+            wk_tbl.style.map(
                 lambda v: "color: #16A34A" if isinstance(v, str) and v.startswith("▲")
                 else ("color: #DC2626" if isinstance(v, str) and v.startswith("▼") else ""),
                 subset=[c for c in wk_tbl.columns if "전년비" in c],
