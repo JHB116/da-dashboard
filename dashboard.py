@@ -194,7 +194,7 @@ AGG_COLS = [
 def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
     cols = [c for c in AGG_COLS if c in df.columns]
     grouped = df.groupby(by, dropna=False)[cols].sum().reset_index()
-    if "기간_일자" in df.columns and "집행일수" not in by:
+    if "기간_일자" in df.columns and "집행일수" not in by and "기간_일자" not in by:
         days = df.groupby(by, dropna=False)["기간_일자"].nunique().reset_index()
         days.columns = list(days.columns[:-1]) + ["집행일수"]
         grouped = grouped.merge(days, on=by, how="left")
