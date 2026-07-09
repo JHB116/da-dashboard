@@ -251,6 +251,86 @@ def yoy_compare(df: pd.DataFrame, cur_year: int, by_col: str, val_col: str):
     return merged
 
 
+def yoy_sameday_prev(df: pd.DataFrame, cur_year: int, group_col: str) -> pd.DataFrame:
+    """동요일 기준 전년 집계: 현재년도 각 날짜의 -364일(52주) 전 날짜로 전년 데이터 매핑."""
+    cur = df[df["연도"] == cur_year][["기간_일자", group_col]].drop_duplicates()
+    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    date_to_group = cur.set_index("비교일자")[group_col].to_dict()
+
+    prev = df[df["연도"] == cur_year - 1].copy()
+    prev[group_col + "_cur"] = prev["기간_일자"].map(date_to_group)
+    prev_valid = prev.dropna(subset=[group_col + "_cur"])
+    if prev_valid.empty:
+        return pd.DataFrame()
+    prev_agg = agg(prev_valid, [group_col + "_cur"])
+    prev_agg = prev_agg.rename(columns={group_col + "_cur": group_col})
+    return prev_agg
+
+
+def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
+                  group_col: str, group_label_fn,
+                  targets: dict, period_type: str = "월") -> pd.DataFrame:
+    """실적요약 테이블: 실적 + 전년비 + 목표 + 목표비 한 눈에."""
+    rows = []
+    for _, r in cur_agg.iterrows():
+        gval = r[group_col]
+        label = group_label_fn(gval)
+        spend = r.get("지표_광고비", np.nan)
+        rev   = r.get("지표_총결제거래액", np.nan)
+        roas  = r.get("순결제ROAS", np.nan)
+
+        if prev_agg is not None and not prev_agg.empty:
+            prow = prev_agg[prev_agg[group_col] == gval]
+            p_spend = prow["지표_광고비"].values[0] if not prow.empty else np.nan
+            p_rev   = prow["지표_총결제거래액"].values[0] if not prow.empty else np.nan
+            p_roas  = prow["순결제ROAS"].values[0] if not prow.empty else np.nan
+        else:
+            p_spend = p_rev = p_roas = np.nan
+
+        t_spend = targets.get("spend", 0)
+        t_rev   = targets.get("rev", 0)
+        t_roas  = targets.get("roas", 0)
+
+        def _chg(c, p):
+            if pd.isna(c) or pd.isna(p) or p == 0: return np.nan
+            return (c - p) / abs(p)
+
+        rows.append({
+            period_type: label,
+            "광고비(백만)": round(spend / 1e6, 1) if not pd.isna(spend) else np.nan,
+            "거래액(백만)": round(rev / 1e6, 1) if not pd.isna(rev) else np.nan,
+            "ROAS": round(roas, 2) if not pd.isna(roas) else np.nan,
+            "전년비_광고비": _chg(spend, p_spend),
+            "전년비_거래액": _chg(rev, p_rev),
+            "전년비_ROAS": _chg(roas, p_roas),
+            "목표_광고비(백만)": round(t_spend / 1e6, 1) if t_spend > 0 else np.nan,
+            "목표_거래액(백만)": round(t_rev / 1e6, 1) if t_rev > 0 else np.nan,
+            "목표_ROAS": t_roas if t_roas > 0 else np.nan,
+            "목표비_광고비": spend / t_spend if (t_spend > 0 and not pd.isna(spend)) else np.nan,
+            "목표비_거래액": rev / t_rev   if (t_rev > 0 and not pd.isna(rev)) else np.nan,
+            "목표비_ROAS":  roas / t_roas  if (t_roas > 0 and not pd.isna(roas)) else np.nan,
+        })
+    result = pd.DataFrame(rows)
+
+    def _fmt_chg(v):
+        if pd.isna(v): return "–"
+        color = "▲" if v >= 0 else "▼"
+        return f"{color} {abs(v)*100:.1f}%"
+
+    def _fmt_rate(v):
+        if pd.isna(v): return "–"
+        return f"{v*100:.1f}%"
+
+    for c in ["전년비_광고비", "전년비_거래액", "전년비_ROAS"]:
+        if c in result.columns:
+            result[c] = result[c].apply(_fmt_chg)
+    for c in ["목표비_광고비", "목표비_거래액", "목표비_ROAS"]:
+        if c in result.columns:
+            result[c] = result[c].apply(_fmt_rate)
+
+    return result
+
+
 # ───────────────────────────────────────────────
 # 사이드바 필터
 # ───────────────────────────────────────────────
@@ -419,6 +499,94 @@ def kpi_cards(df: pd.DataFrame, targets: dict):
 # ───────────────────────────────────────────────
 # 페이지 1: 전체 요약
 # ───────────────────────────────────────────────
+
+# 비용출처 탭 정의 (Excel 시트와 동일)
+COST_TABS = {
+    "TOTAL(서비스비용제외)": ["거래액확대", "신규고객확대", "인지도제고"],
+    "TOTAL": None,  # 전체 (필터 그대로)
+    "거래액확대": ["거래액확대"],
+    "신규확대/인지도": ["신규고객확대", "인지도제고"],
+}
+
+
+def _filter_cost(df, tab_name):
+    sources = COST_TABS.get(tab_name)
+    if tab_name == "TOTAL":
+        return df
+    if sources:
+        return df[df["구분_비용출처"].isin(sources)]
+    return df
+
+
+def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
+    """비용출처별 탭 내부: 실적요약 테이블 + 차트"""
+    if df_tab.empty:
+        st.info("해당 비용출처 데이터가 없습니다.")
+        return
+
+    cur_year = int(df_tab["연도"].max())
+    monthly_cur = agg(df_tab[df_tab["연도"] == cur_year], ["월"]).sort_values("월")
+
+    if sameday:
+        monthly_prev = yoy_sameday_prev(df_tab, cur_year, "월")
+    else:
+        monthly_prev = agg(df_tab[df_tab["연도"] == cur_year - 1], ["월"])
+
+    tbl = summary_table(monthly_cur, monthly_prev, "월",
+                        lambda m: f"{int(m)}월", targets, period_type="월")
+
+    # 목표/목표비 컬럼 유무에 따라 표시 여부 결정
+    has_target = targets.get("spend", 0) > 0 or targets.get("rev", 0) > 0
+    drop_cols = []
+    if not has_target:
+        drop_cols = [c for c in tbl.columns if "목표" in c]
+    if drop_cols:
+        tbl = tbl.drop(columns=drop_cols)
+
+    st.dataframe(
+        tbl.style.applymap(
+            lambda v: "color: #16A34A" if isinstance(v, str) and v.startswith("▲")
+            else ("color: #DC2626" if isinstance(v, str) and v.startswith("▼") else ""),
+            subset=[c for c in tbl.columns if "전년비" in c],
+        ),
+        use_container_width=True, hide_index=True,
+    )
+
+    # 광고비 + ROAS 차트
+    col1, col2 = st.columns(2)
+    with col1:
+        monthly_all = agg(df_tab, ["연도", "월"]).sort_values(["연도", "월"])
+        fig = go.Figure()
+        for i, yr in enumerate(sorted(monthly_all["연도"].unique())):
+            sub = monthly_all[monthly_all["연도"] == yr]
+            fig.add_trace(go.Bar(
+                x=sub["월"], y=sub["지표_광고비"],
+                name=f"{yr}년", marker_color=YEAR_COLORS[i % len(YEAR_COLORS)], opacity=0.8,
+            ))
+        if targets.get("spend", 0) > 0:
+            fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
+                          annotation_text="목표")
+        fig.update_xaxes(tickvals=list(range(1, 13)),
+                         ticktext=[f"{m}월" for m in range(1, 13)])
+        base_layout(fig, "월별 광고비 (YoY)", 360)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        metric_opts = {
+            "순결제ROAS": "순결제ROAS", "거래액": "지표_총결제거래액",
+            "CTR": "CTR", "CPM": "CPM", "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
+        }
+        sel_m = st.selectbox("지표 선택", list(metric_opts.keys()), key=f"sum_m_{tab_key}")
+        fig2 = yoy_overlay_fig(
+            monthly_all, "월", metric_opts[sel_m],
+            f"월별 {sel_m} (YoY)", ticklabels=MONTH_LABELS, height=360,
+        )
+        if sel_m == "순결제ROAS" and targets.get("roas", 0) > 0:
+            fig2.add_hline(y=targets["roas"], line_dash="dot", line_color="#EF4444",
+                           annotation_text=f"목표 {targets['roas']:.1f}x")
+        st.plotly_chart(fig2, use_container_width=True)
+
+
 def page_summary(df: pd.DataFrame, targets: dict):
     st.header("📊 전체 요약")
     if df.empty:
@@ -428,86 +596,22 @@ def page_summary(df: pd.DataFrame, targets: dict):
     kpi_cards(df, targets)
     st.divider()
 
-    # ── 탭 구성
-    tab_trend, tab_pacing, tab_composition = st.tabs(
-        ["📈 월별 추이 (YoY)", "💰 예산 페이싱", "🧩 거래액 구성"]
-    )
+    # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
+    main_tabs = st.tabs(["📋 TOTAL(서비스비용제외)", "📋 TOTAL", "📋 거래액확대", "📋 신규확대/인지도",
+                          "💰 예산 페이싱", "🧩 거래액 구성"])
+    tab_names = ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"]
 
-    # ── 월별 추이 (동기간 YoY 오버레이)
-    with tab_trend:
-        monthly = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
+    sameday = st.sidebar.checkbox("동요일 기준 전년비", value=False, key="sameday_toggle")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            fig = go.Figure()
-            years = sorted(monthly["연도"].unique())
-            for i, yr in enumerate(years):
-                sub = monthly[monthly["연도"] == yr]
-                color = YEAR_COLORS[i % len(YEAR_COLORS)]
-                fig.add_trace(go.Bar(
-                    x=sub["월"], y=sub["지표_광고비"],
-                    name=f"{yr}년 광고비", marker_color=color, opacity=0.75,
-                ))
-            if targets["spend"] > 0:
-                fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
-                              annotation_text="목표 광고비")
-            fig.update_xaxes(tickvals=list(range(1, 13)),
-                             ticktext=[f"{m}월" for m in range(1, 13)])
-            base_layout(fig, "월별 광고비 (동기간 YoY)", 380)
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            metric_opts = {
-                "순결제ROAS": "순결제ROAS", "거래액": "지표_총결제거래액",
-                "CTR": "CTR", "CPM": "CPM", "UV": "지표_UV(전체)",
-                "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
-            }
-            sel_m = st.selectbox("비교 지표", list(metric_opts.keys()), key="sum_metric")
-            fig2 = yoy_overlay_fig(
-                monthly, "월", metric_opts[sel_m],
-                f"월별 {sel_m} (동기간 YoY)",
-                ticklabels=MONTH_LABELS, height=380,
-            )
-            if sel_m == "순결제ROAS" and targets["roas"] > 0:
-                fig2.add_hline(y=targets["roas"], line_dash="dot", line_color="#EF4444",
-                               annotation_text=f"목표 ROAS {targets['roas']:.1f}x")
-            st.plotly_chart(fig2, use_container_width=True)
-
-        # 매체 파이
-        col3, col4 = st.columns(2)
-        with col3:
-            by_media = agg(df, ["구분_매체명"]).nlargest(10, "지표_광고비")
-            fig3 = px.pie(by_media, names="구분_매체명", values="지표_광고비",
-                          color="구분_매체명", color_discrete_map=MEDIA_COLORS)
-            fig3.update_traces(textposition="inside", textinfo="percent+label")
-            base_layout(fig3, "매체별 광고비 비중", 380)
-            st.plotly_chart(fig3, use_container_width=True)
-
-        with col4:
-            st.subheader("월별 전년비 요약")
-            cur_year = max(df["연도"].unique())
-            yoy_metrics = {
-                "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
-                "순결제ROAS": "순결제ROAS", "UV": "지표_UV(전체)",
-                "CTR": "CTR", "CPM": "CPM",
-            }
-            sel_yoy = st.selectbox("비교 지표", list(yoy_metrics.keys()), key="yoy_sel")
-            yoy_df = yoy_compare(df, cur_year, "월", yoy_metrics[sel_yoy])
-            yoy_df["월"] = yoy_df["월"].map(MONTH_LABELS)
-
-            fmt_fn = fmt_roas if "ROAS" in sel_yoy else (
-                fmt_pct if sel_yoy in ("CTR",) else fmt_money
-            )
-            yoy_disp = yoy_df.copy()
-            yoy_disp["당년"]  = yoy_disp["당년"].apply(fmt_fn)
-            yoy_disp["전년"]  = yoy_disp["전년"].apply(fmt_fn)
-            yoy_disp["전년비"] = yoy_disp["전년비"].apply(
-                lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–"
-            )
-            st.dataframe(yoy_disp, use_container_width=True, hide_index=True)
+    for i, tname in enumerate(tab_names):
+        with main_tabs[i]:
+            st.caption(f"비용출처: {tname}  |  {'동요일 기준' if sameday else '동월 기준'} 전년비")
+            df_tab = _filter_cost(df, tname)
+            _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday)
 
     # ── 예산 페이싱
-    with tab_pacing:
+    with main_tabs[4]:
+        import calendar
         st.markdown("**당월 일별 광고비 소진 추이 & 월말 예측**")
         avail_months = sorted(df["연월"].unique(), reverse=True)
         sel_ym = st.selectbox("조회 연월", avail_months, key="pacing_ym")
@@ -515,11 +619,9 @@ def page_summary(df: pd.DataFrame, targets: dict):
         daily = daily.sort_values("기간_일자")
         daily["누적광고비"] = daily["지표_광고비"].cumsum()
 
-        # 월 전체 일수
         year_p, month_p = int(sel_ym[:4]), int(sel_ym[5:7])
-        import calendar
         total_days = calendar.monthrange(year_p, month_p)[1]
-        last_day = (daily["기간_일자"].max() - pd.Timestamp(year_p, month_p, 1)).days + 1
+        last_day = (daily["기간_일자"].max() - pd.Timestamp(year_p, month_p, 1)).days + 1 if not daily.empty else 0
 
         fig_p = go.Figure()
         fig_p.add_trace(go.Bar(
@@ -531,51 +633,41 @@ def page_summary(df: pd.DataFrame, targets: dict):
             name="누적 광고비", mode="lines+markers",
             line=dict(color="#2563EB", width=2.5), yaxis="y2",
         ))
-
-        # 선형 예측선
-        if last_day > 0 and targets["spend"] > 0:
+        if last_day > 0 and targets.get("spend", 0) > 0:
             cur_cum = daily["누적광고비"].iloc[-1]
-            proj_rate = cur_cum / last_day
-            proj_end = proj_rate * total_days
-            last_date = daily["기간_일자"].max()
-            month_end = pd.Timestamp(year_p, month_p, total_days)
+            proj_end = (cur_cum / last_day) * total_days
             fig_p.add_trace(go.Scatter(
-                x=[last_date, month_end],
+                x=[daily["기간_일자"].max(), pd.Timestamp(year_p, month_p, total_days)],
                 y=[cur_cum, proj_end],
                 name=f"예측 ({fmt_money(proj_end)})",
-                mode="lines", line=dict(color="#F59E0B", width=2, dash="dash"),
-                yaxis="y2",
+                mode="lines", line=dict(color="#F59E0B", width=2, dash="dash"), yaxis="y2",
             ))
             fig_p.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
                             annotation_text=f"목표 {fmt_money(targets['spend'])}", yref="y2")
-
         fig_p.update_layout(yaxis2=dict(overlaying="y", side="right", title="누적 광고비"))
         base_layout(fig_p, f"{sel_ym} 예산 페이싱", 420)
         st.plotly_chart(fig_p, use_container_width=True)
-
-        # 페이싱 지표
         if not daily.empty:
             cur_cum = daily["누적광고비"].iloc[-1]
+            daily_avg = cur_cum / last_day if last_day > 0 else 0
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("누적 광고비", fmt_money(cur_cum))
             c2.metric("집행일", f"{last_day}일 / {total_days}일")
-            daily_avg = cur_cum / last_day if last_day > 0 else 0
             c3.metric("일평균 광고비", fmt_money(daily_avg))
-            if targets["spend"] > 0:
+            if targets.get("spend", 0) > 0:
                 proj = daily_avg * total_days
                 c4.metric("월말 예측", fmt_money(proj),
                           delta=f"목표 대비 {fmt_delta(proj, targets['spend'])}")
 
     # ── 거래액 구성
-    with tab_composition:
+    with main_tabs[5]:
         col1, col2 = st.columns(2)
         tot = df[AGG_COLS].sum()
-
         with col1:
-            first  = tot["지표_순결제거래액(첫구매)"]
+            first   = tot["지표_순결제거래액(첫구매)"]
             winback = tot["지표_순결제거래액(윈백)"]
             new_rev = tot["지표_당년신규순결제거래액"]
-            other  = max(0, tot["지표_총결제거래액"] - first - winback)
+            other   = max(0, tot["지표_총결제거래액"] - first - winback)
             bkd = pd.DataFrame({
                 "구분": ["첫구매", "윈백", "신규(당년)", "기타"],
                 "금액": [first, winback, new_rev, other],
@@ -586,11 +678,10 @@ def page_summary(df: pd.DataFrame, targets: dict):
             fig4.update_traces(textposition="inside", textinfo="percent+label")
             base_layout(fig4, "거래액 유형별 구성 (전체)", 400)
             st.plotly_chart(fig4, use_container_width=True)
-
         with col2:
-            # 월별 거래액 구성 스택 바
             monthly_comp = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
-            monthly_comp["연월라벨"] = monthly_comp["연도"].astype(str) + "-" + monthly_comp["월"].astype(str).str.zfill(2)
+            monthly_comp["연월라벨"] = (monthly_comp["연도"].astype(str) + "-"
+                                       + monthly_comp["월"].astype(str).str.zfill(2))
             fig5 = go.Figure()
             for seg, color in [
                 ("지표_순결제거래액(첫구매)", "#3B82F6"),
@@ -599,8 +690,7 @@ def page_summary(df: pd.DataFrame, targets: dict):
             ]:
                 if seg in monthly_comp.columns:
                     fig5.add_trace(go.Bar(
-                        x=monthly_comp["연월라벨"],
-                        y=monthly_comp[seg],
+                        x=monthly_comp["연월라벨"], y=monthly_comp[seg],
                         name=seg.replace("지표_", "").replace("순결제거래액", ""),
                         marker_color=color,
                     ))
@@ -930,6 +1020,7 @@ def page_weekly(df: pd.DataFrame):
     tab_weekly, tab_heatmap = st.tabs(["📈 주차별 추이", "🗓️ 요일별 히트맵"])
 
     with tab_weekly:
+        cur_year = int(df["연도"].max())
         weekly = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
 
         metric_options = {
@@ -938,25 +1029,48 @@ def page_weekly(df: pd.DataFrame):
             "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
             "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
         }
-        col_a, col_b = st.columns([3, 1])
+        col_a, col_b, col_c = st.columns([3, 1, 1])
         with col_a:
             sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="wk_metric")
         with col_b:
             use_ma = st.checkbox("4주 이동평균", value=True, key="wk_ma")
+        with col_c:
+            wk_sameday = st.checkbox("동요일 전년비", value=False, key="wk_sameday")
 
         sel_col = metric_options[sel_label]
 
-        # 동기간 주차번호 오버레이
         week_labels = {w: f"W{w:02d}" for w in range(1, 54)}
         fig = yoy_overlay_fig(
             weekly, "주차번호", sel_col,
-            f"주차별 {sel_label} (동기간 YoY — W01~W53)",
+            f"주차별 {sel_label} (YoY — W01~W53)",
             ticklabels=week_labels, height=440,
             ma_window=4 if use_ma else 0,
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 이상치 강조: 전주 대비 ±30% 변화 주차
+        # 주차별 실적요약 테이블 (전년비 + 목표 + 목표비)
+        st.subheader("주차별 실적요약")
+        weekly_cur = agg(df[df["연도"] == cur_year], ["주차번호"]).sort_values("주차번호")
+        if wk_sameday:
+            weekly_prev = yoy_sameday_prev(df, cur_year, "주차번호")
+        else:
+            weekly_prev = agg(df[df["연도"] == cur_year - 1], ["주차번호"])
+
+        wk_tbl = summary_table(weekly_cur, weekly_prev, "주차번호",
+                               lambda w: f"W{int(w):02d}", targets, period_type="주차")
+        has_target = targets.get("spend", 0) > 0 or targets.get("rev", 0) > 0
+        if not has_target:
+            wk_tbl = wk_tbl.drop(columns=[c for c in wk_tbl.columns if "목표" in c])
+        st.dataframe(
+            wk_tbl.style.applymap(
+                lambda v: "color: #16A34A" if isinstance(v, str) and v.startswith("▲")
+                else ("color: #DC2626" if isinstance(v, str) and v.startswith("▼") else ""),
+                subset=[c for c in wk_tbl.columns if "전년비" in c],
+            ),
+            use_container_width=True, hide_index=True,
+        )
+
+        # 이상치 감지
         st.subheader("⚠️ 이상치 감지 (전주 대비 ±30% 이상 변화)")
         anomaly_rows = []
         for yr in sorted(weekly["연도"].unique()):
@@ -974,37 +1088,16 @@ def page_weekly(df: pd.DataFrame):
             anom_df = pd.concat(anomaly_rows)
             anom_df["주차"] = anom_df["주차번호"].apply(lambda w: f"W{w:02d}")
             anom_df["변화율"] = anom_df["변화율"].apply(lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–")
-
             fmt_fn = fmt_roas if "ROAS" in sel_label else (
                 fmt_pct if sel_label in ("CTR", "CR(순)") else
                 fmt_num if "수" in sel_label else fmt_money
             )
             anom_df[sel_col] = anom_df[sel_col].apply(fmt_fn)
             anom_df["전주"] = anom_df["전주"].apply(fmt_fn)
-            st.dataframe(
-                anom_df[["연도", "주차", sel_col, "전주", "변화율"]],
-                use_container_width=True, hide_index=True,
-            )
+            st.dataframe(anom_df[["연도", "주차", sel_col, "전주", "변화율"]],
+                         use_container_width=True, hide_index=True)
         else:
             st.info("±30% 이상 변화 주차가 없습니다.")
-
-        # 주차별 YoY 비교표
-        st.subheader("주차별 전년비 비교표")
-        cur_year = max(df["연도"].unique())
-        yoy = yoy_compare(df, cur_year, "주차번호", sel_col)
-        yoy["주차번호"] = yoy["주차번호"].apply(lambda w: f"W{int(w):02d}" if not pd.isna(w) else "–")
-
-        fmt_fn2 = fmt_roas if "ROAS" in sel_label else (
-            fmt_pct if sel_label in ("CTR", "CR(순)") else
-            fmt_num if "수" in sel_label else fmt_money
-        )
-        yoy_disp = yoy.copy()
-        yoy_disp["당년"]  = yoy_disp["당년"].apply(fmt_fn2)
-        yoy_disp["전년"]  = yoy_disp["전년"].apply(fmt_fn2)
-        yoy_disp["전년비"] = yoy_disp["전년비"].apply(
-            lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–"
-        )
-        st.dataframe(yoy_disp, use_container_width=True, hide_index=True)
 
     # ── 요일별 히트맵
     with tab_heatmap:
@@ -1063,7 +1156,158 @@ def page_weekly(df: pd.DataFrame):
 
 
 # ───────────────────────────────────────────────
-# 페이지 6: 소재(AF코드) 상세
+# 페이지 6: 일별 성과 (신규)
+# ───────────────────────────────────────────────
+def page_daily(df: pd.DataFrame, targets: dict):
+    st.header("📆 일별 성과")
+    if df.empty:
+        st.warning("필터 조건에 해당하는 데이터가 없습니다.")
+        return
+
+    import calendar
+
+    cur_year = int(df["연도"].max())
+    avail_months = sorted(df[df["연도"] == cur_year]["연월"].unique(), reverse=True)
+    sel_ym = st.selectbox("조회 연월", avail_months, key="daily_ym")
+
+    df_month = df[df["연월"] == sel_ym]
+    daily_cur = agg(df_month, ["기간_일자"]).sort_values("기간_일자")
+
+    # 동요일 전년 비교
+    daily_cur["비교일자"] = daily_cur["기간_일자"] - pd.Timedelta(days=364)
+    prev_dates = daily_cur["비교일자"].tolist()
+    df_prev = df[df["기간_일자"].isin(prev_dates)].copy()
+    df_prev = df_prev.rename(columns={"기간_일자": "비교일자_orig"})
+    daily_prev_raw = agg(df[df["기간_일자"].isin(prev_dates)], ["기간_일자"])
+    date_to_cur = {row["비교일자"]: row["기간_일자"] for _, row in daily_cur.iterrows()}
+
+    # 일별 라벨 (날짜 + 요일)
+    daily_cur["일자라벨"] = daily_cur["기간_일자"].dt.strftime("%m/%d") + " (" + \
+        daily_cur["기간_일자"].dt.dayofweek.map(dict(enumerate(WEEKDAY_LABELS))) + ")"
+
+    # 지표 선택
+    metric_options = {
+        "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+        "순결제ROAS": "순결제ROAS", "CTR": "CTR", "CPM": "CPM",
+        "UV": "지표_UV(전체)", "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
+        "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
+    }
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="daily_metric")
+    with col_b:
+        show_prev = st.checkbox("동요일 전년 비교", value=True, key="daily_prev")
+
+    sel_col = metric_options[sel_label]
+
+    # 차트
+    fig = go.Figure()
+
+    if sel_label == "광고비":
+        fig.add_trace(go.Bar(
+            x=daily_cur["일자라벨"], y=daily_cur[sel_col],
+            name=f"{cur_year}년", marker_color=YEAR_COLORS[0], opacity=0.8,
+        ))
+    else:
+        fig.add_trace(go.Scatter(
+            x=daily_cur["일자라벨"], y=daily_cur[sel_col],
+            name=f"{cur_year}년", mode="lines+markers",
+            line=dict(color=YEAR_COLORS[0], width=2), marker=dict(size=5),
+        ))
+
+    if show_prev and not daily_prev_raw.empty:
+        daily_prev_raw["일자라벨"] = daily_prev_raw["기간_일자"].apply(
+            lambda d: date_to_cur.get(d, d)
+        )
+        daily_prev_raw["일자라벨"] = daily_prev_raw["일자라벨"].dt.strftime("%m/%d") + " (" + \
+            daily_prev_raw["일자라벨"].dt.dayofweek.map(dict(enumerate(WEEKDAY_LABELS))) + ")"
+        fig.add_trace(go.Scatter(
+            x=daily_prev_raw["일자라벨"], y=daily_prev_raw[sel_col],
+            name=f"{cur_year-1}년 동요일", mode="lines+markers",
+            line=dict(color=YEAR_COLORS[1], width=1.5, dash="dash"), marker=dict(size=4),
+        ))
+
+    if sel_label == "광고비" and targets.get("spend", 0) > 0:
+        year_p, month_p = int(sel_ym[:4]), int(sel_ym[5:7])
+        total_days = calendar.monthrange(year_p, month_p)[1]
+        daily_target = targets["spend"] / total_days
+        fig.add_hline(y=daily_target, line_dash="dot", line_color="#EF4444",
+                      annotation_text=f"일 목표 {fmt_money(daily_target)}")
+
+    base_layout(fig, f"{sel_ym} 일별 {sel_label} (동요일 전년 비교)", 420)
+    fig.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 요일별 집계 요약
+    col1, col2 = st.columns(2)
+    with col1:
+        dow_agg = daily_cur.copy()
+        dow_agg["요일"] = daily_cur["기간_일자"].dt.dayofweek
+        dow_summary = dow_agg.groupby("요일").agg(
+            일수=("기간_일자", "count"),
+            **{sel_col: (sel_col, "mean")},
+        ).reset_index()
+        dow_summary["요일명"] = dow_summary["요일"].map(dict(enumerate(WEEKDAY_LABELS)))
+        fig2 = px.bar(dow_summary, x="요일명", y=sel_col,
+                      color="요일명", color_discrete_sequence=px.colors.qualitative.Set2)
+        base_layout(fig2, f"요일별 평균 {sel_label}", 320)
+        fig2.update_layout(showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+
+    with col2:
+        # 전년비 테이블 (동요일 기준)
+        if show_prev and not daily_prev_raw.empty:
+            merge_df = daily_cur[["기간_일자", "비교일자", sel_col]].copy()
+            merge_df = merge_df.merge(
+                daily_prev_raw[["기간_일자", sel_col]].rename(
+                    columns={"기간_일자": "비교일자", sel_col: "전년_동요일"}),
+                on="비교일자", how="left",
+            )
+            merge_df["전년비"] = (merge_df[sel_col] - merge_df["전년_동요일"]) / merge_df["전년_동요일"].abs()
+            merge_df["일자"] = merge_df["기간_일자"].dt.strftime("%m/%d") + " (" + \
+                merge_df["기간_일자"].dt.dayofweek.map(dict(enumerate(WEEKDAY_LABELS))) + ")"
+            merge_df["비교(전년)"] = merge_df["비교일자"].dt.strftime("%m/%d") + " (" + \
+                merge_df["비교일자"].dt.dayofweek.map(dict(enumerate(WEEKDAY_LABELS))) + ")"
+
+            fmt_fn = fmt_roas if "ROAS" in sel_label else (
+                fmt_pct if sel_label in ("CTR", "CR(순)") else
+                fmt_num if "수" in sel_label else fmt_money
+            )
+            disp = merge_df[["일자", sel_col, "비교(전년)", "전년_동요일", "전년비"]].copy()
+            disp[sel_col] = disp[sel_col].apply(fmt_fn)
+            disp["전년_동요일"] = disp["전년_동요일"].apply(fmt_fn)
+            disp["전년비"] = disp["전년비"].apply(
+                lambda v: ("▲ " if v >= 0 else "▼ ") + f"{abs(v)*100:.1f}%"
+                if not pd.isna(v) else "–"
+            )
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    # 상세 지표 테이블
+    st.subheader("일별 상세 지표")
+    disp_cols = [
+        "일자라벨", "지표_광고비", "지표_노출수", "지표_클릭수",
+        "지표_UV(전체)", "CTR", "CPC", "CPM", "CPUV",
+        "순결제ROAS", "CR(순)", "객단가(순)",
+        "지표_가입회원", "지표_순결제고객수(첫구매)",
+    ]
+    tbl = daily_cur[[c for c in disp_cols if c in daily_cur.columns]].copy()
+    fmt_map = {
+        "지표_광고비": fmt_money, "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
+        "지표_UV(전체)": fmt_num, "CTR": fmt_pct, "CPC": fmt_money, "CPM": fmt_money,
+        "CPUV": fmt_money, "순결제ROAS": fmt_roas,
+        "CR(순)": lambda v: fmt_pct(v, 3), "객단가(순)": fmt_money,
+        "지표_가입회원": fmt_num, "지표_순결제고객수(첫구매)": fmt_num,
+    }
+    tbl_fmt = tbl.copy()
+    for c, fn in fmt_map.items():
+        if c in tbl_fmt.columns:
+            tbl_fmt[c] = tbl_fmt[c].apply(fn)
+    st.dataframe(tbl_fmt.rename(columns={"일자라벨": "일자"}),
+                 use_container_width=True, hide_index=True)
+
+
+# ───────────────────────────────────────────────
+# 페이지 7: 소재(AF코드) 상세
 # ───────────────────────────────────────────────
 def page_creative(df: pd.DataFrame):
     st.header("🎨 소재(AF코드) 상세")
@@ -1178,12 +1422,14 @@ def main():
 
     st.sidebar.divider()
     page = st.sidebar.radio("페이지", [
-        "📊 전체 요약", "📡 매체별 성과", "🎯 캠페인별 성과",
+        "📊 전체 요약", "📆 일별 성과", "📡 매체별 성과", "🎯 캠페인별 성과",
         "📅 주차별 성과", "🔍 퍼널 & 전환 분석", "🎨 소재 상세",
     ])
 
     if page == "📊 전체 요약":
         page_summary(filtered, targets)
+    elif page == "📆 일별 성과":
+        page_daily(filtered, targets)
     elif page == "📡 매체별 성과":
         page_media(filtered)
     elif page == "🎯 캠페인별 성과":
