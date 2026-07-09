@@ -1011,7 +1011,9 @@ def page_funnel(df: pd.DataFrame):
 # ───────────────────────────────────────────────
 # 페이지 5: 주차별 성과
 # ───────────────────────────────────────────────
-def page_weekly(df: pd.DataFrame):
+def page_weekly(df: pd.DataFrame, targets: dict = None):
+    if targets is None:
+        targets = {}
     st.header("📅 주차별 성과")
     if df.empty:
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
@@ -1435,7 +1437,7 @@ def main():
     elif page == "🎯 캠페인별 성과":
         page_campaign(filtered)
     elif page == "📅 주차별 성과":
-        page_weekly(filtered)
+        page_weekly(filtered, targets)
     elif page == "🔍 퍼널 & 전환 분석":
         page_funnel(filtered)
     elif page == "🎨 소재 상세":
