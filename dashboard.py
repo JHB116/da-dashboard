@@ -375,38 +375,35 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
             if pd.isna(c) or pd.isna(p) or p == 0: return np.nan
             return (c - p) / abs(p)
 
+        def _chg_fmt(c, p):
+            v = _chg(c, p)
+            if pd.isna(v): return "–"
+            return f"{'▲' if v >= 0 else '▼'} {abs(v)*100:.1f}%"
+
+        def _rate_fmt(num, den):
+            if den and den > 0 and not pd.isna(num): return f"{num/den*100:.1f}%"
+            return "–"
+
+        def _fmt_num(v, decimals=1):
+            if pd.isna(v): return "–"
+            return f"{round(v, decimals):,.{decimals}f}"
+
         rows.append({
             period_type: label,
-            "광고비(백만)": round(spend / 1e6, 1) if not pd.isna(spend) else np.nan,
-            "거래액(백만)": round(rev / 1e6, 1) if not pd.isna(rev) else np.nan,
-            "ROAS": round(roas, 2) if not pd.isna(roas) else np.nan,
-            "전년비_광고비": _chg(spend, p_spend),
-            "전년비_거래액": _chg(rev, p_rev),
-            "전년비_ROAS": _chg(roas, p_roas),
-            "목표_광고비(백만)": round(t_spend / 1e6, 1) if t_spend > 0 else np.nan,
-            "목표_거래액(백만)": round(t_rev / 1e6, 1) if t_rev > 0 else np.nan,
-            "목표_ROAS": t_roas if t_roas > 0 else np.nan,
-            "목표비_광고비": spend / t_spend if (t_spend > 0 and not pd.isna(spend)) else np.nan,
-            "목표비_거래액": rev / t_rev   if (t_rev > 0 and not pd.isna(rev)) else np.nan,
-            "목표비_ROAS":  roas / t_roas  if (t_roas > 0 and not pd.isna(roas)) else np.nan,
+            "광고비(백만)": _fmt_num(spend / 1e6) if not pd.isna(spend) else "–",
+            "거래액(백만)": _fmt_num(rev / 1e6) if not pd.isna(rev) else "–",
+            "ROAS": _fmt_num(roas, 2) if not pd.isna(roas) else "–",
+            "전년비_광고비": _chg_fmt(spend, p_spend),
+            "전년비_거래액": _chg_fmt(rev, p_rev),
+            "전년비_ROAS": _chg_fmt(roas, p_roas),
+            "목표_광고비(백만)": _fmt_num(t_spend / 1e6) if t_spend > 0 else "–",
+            "목표_거래액(백만)": _fmt_num(t_rev / 1e6) if t_rev > 0 else "–",
+            "목표_ROAS": _fmt_num(t_roas, 2) if t_roas > 0 else "–",
+            "목표비_광고비": _rate_fmt(spend, t_spend),
+            "목표비_거래액": _rate_fmt(rev, t_rev),
+            "목표비_ROAS": _rate_fmt(roas, t_roas),
         })
     result = pd.DataFrame(rows)
-
-    def _fmt_chg(v):
-        if pd.isna(v): return "–"
-        color = "▲" if v >= 0 else "▼"
-        return f"{color} {abs(v)*100:.1f}%"
-
-    def _fmt_rate(v):
-        if pd.isna(v): return "–"
-        return f"{v*100:.1f}%"
-
-    for c in ["전년비_광고비", "전년비_거래액", "전년비_ROAS"]:
-        if c in result.columns:
-            result[c] = result[c].apply(_fmt_chg)
-    for c in ["목표비_광고비", "목표비_거래액", "목표비_ROAS"]:
-        if c in result.columns:
-            result[c] = result[c].apply(_fmt_rate)
 
     return result
 
