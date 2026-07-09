@@ -535,13 +535,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False):
     tbl = summary_table(monthly_cur, monthly_prev, "월",
                         lambda m: f"{int(m)}월", targets, period_type="월")
 
-    # 목표/목표비 컬럼 유무에 따라 표시 여부 결정
-    has_target = targets.get("spend", 0) > 0 or targets.get("rev", 0) > 0
-    drop_cols = []
-    if not has_target:
-        drop_cols = [c for c in tbl.columns if "목표" in c]
-    if drop_cols:
-        tbl = tbl.drop(columns=drop_cols)
+    # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
 
     st.dataframe(
         tbl.style.map(
@@ -601,7 +595,7 @@ def page_summary(df: pd.DataFrame, targets: dict):
                           "💰 예산 페이싱", "🧩 거래액 구성"])
     tab_names = ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"]
 
-    sameday = st.sidebar.checkbox("동요일 기준 전년비", value=False, key="sameday_toggle")
+    sameday = st.sidebar.checkbox("동요일 기준 전년비", value=True, key="sameday_toggle")
 
     for i, tname in enumerate(tab_names):
         with main_tabs[i]:
@@ -1037,7 +1031,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None):
         with col_b:
             use_ma = st.checkbox("4주 이동평균", value=True, key="wk_ma")
         with col_c:
-            wk_sameday = st.checkbox("동요일 전년비", value=False, key="wk_sameday")
+            wk_sameday = st.checkbox("동요일 전년비", value=True, key="wk_sameday")
 
         sel_col = metric_options[sel_label]
 
@@ -1060,9 +1054,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None):
 
         wk_tbl = summary_table(weekly_cur, weekly_prev, "주차번호",
                                lambda w: f"W{int(w):02d}", targets, period_type="주차")
-        has_target = targets.get("spend", 0) > 0 or targets.get("rev", 0) > 0
-        if not has_target:
-            wk_tbl = wk_tbl.drop(columns=[c for c in wk_tbl.columns if "목표" in c])
+        # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
         st.dataframe(
             wk_tbl.style.map(
                 lambda v: "color: #16A34A" if isinstance(v, str) and v.startswith("▲")
