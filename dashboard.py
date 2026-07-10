@@ -13,6 +13,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""<style>
+/* 전체 배경 */
+.main .block-container { padding-top: 1.5rem; max-width: 1400px; }
+/* 헤더 */
+h1 { font-size: 1.6rem !important; font-weight: 700 !important; color: #0F172A !important; }
+h2 { font-size: 1.2rem !important; font-weight: 600 !important; color: #1E293B !important; }
+h3 { font-size: 1rem !important; font-weight: 600 !important; }
+/* 기본 st.metric 숨김 (커스텀 카드로 대체) */
+[data-testid="metric-container"] > div:first-child { font-size: 12px !important; color: #64748B !important; }
+[data-testid="metric-container"] > div:nth-child(2) > div { font-size: 1.5rem !important; font-weight: 700 !important; color: #0F172A !important; }
+/* 탭 스타일 */
+.stTabs [data-baseweb="tab"] { font-size: 13px; font-weight: 500; }
+/* 구분선 */
+hr { margin: 0.8rem 0 !important; border-color: #E2E8F0 !important; }
+/* 데이터프레임 */
+[data-testid="stDataFrameResizable"] { border-radius: 8px !important; }
+</style>""", unsafe_allow_html=True)
+
 # ───────────────────────────────────────────────
 # 상수
 # ───────────────────────────────────────────────
@@ -532,6 +550,151 @@ def progress_pill(cur, target, label):
     )
 
 
+def render_kpi_card(label: str, value: str, sub_label: str = "", sub_value: str = "",
+                    accent: str = "#2563EB", progress: float = None):
+    """레퍼런스 디자인 스타일의 KPI 카드."""
+    progress_html = ""
+    if progress is not None:
+        pct = min(progress * 100, 100)
+        bar_color = "#16A34A" if progress >= 1.0 else ("#D97706" if progress >= 0.7 else "#EF4444")
+        progress_html = f"""
+        <div style="margin-top:8px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+            <span style="font-size:11px;color:#64748B;">목표 달성률</span>
+            <span style="font-size:11px;font-weight:600;color:{bar_color};">{progress*100:.1f}%</span>
+          </div>
+          <div style="background:#E2E8F0;border-radius:4px;height:4px;">
+            <div style="background:{bar_color};width:{pct}%;height:4px;border-radius:4px;"></div>
+          </div>
+        </div>"""
+    sub_html = ""
+    if sub_label:
+        sub_html = f'<div style="margin-top:4px;font-size:12px;color:#64748B;">{sub_label} <b style="color:#334155;">{sub_value}</b></div>'
+    st.markdown(f"""
+    <div style="background:white;border:1px solid #E2E8F0;border-radius:12px;padding:16px 18px;
+                box-shadow:0 1px 4px rgba(0,0,0,.06);min-height:90px;">
+      <div style="font-size:12px;color:#64748B;font-weight:500;margin-bottom:4px;">{label}</div>
+      <div style="font-size:22px;font-weight:700;color:#0F172A;line-height:1.2;">{value}</div>
+      {sub_html}
+      {progress_html}
+    </div>""", unsafe_allow_html=True)
+
+
+def render_goal_bar(targets: dict, cur_spend: float, cur_rev: float, cur_roas: float):
+    """목표 KPI 한줄 요약 바."""
+    items = []
+    if targets.get("spend", 0) > 0:
+        items.append(("월 광고비 목표", fmt_money(targets["spend"]),
+                       cur_spend / targets["spend"] if cur_spend else None))
+    if targets.get("roas", 0) > 0:
+        items.append(("ROAS 목표", f"{targets['roas']:.2f}x",
+                       cur_roas / targets["roas"] if cur_roas else None))
+    if targets.get("rev", 0) > 0:
+        items.append(("월 거래액 목표", fmt_money(targets["rev"]),
+                       cur_rev / targets["rev"] if cur_rev else None))
+    if not items:
+        return
+    parts = []
+    for name, val, rate in items:
+        badge = ""
+        if rate is not None:
+            bc = "#16A34A" if rate >= 1.0 else ("#D97706" if rate >= 0.7 else "#EF4444")
+            badge = f' <span style="background:{bc};color:white;border-radius:8px;padding:1px 7px;font-size:11px;">{rate*100:.1f}%</span>'
+        parts.append(f'<span style="margin-right:24px;"><span style="color:#64748B;">{name}</span> <b style="color:#0F172A;">{val}</b>{badge}</span>')
+    st.markdown(
+        f'<div style="background:#F1F5F9;border-radius:10px;padding:10px 18px;margin-bottom:12px;font-size:13px;">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_top3_section(df: pd.DataFrame, targets: dict):
+    """잘 되는 캠페인 TOP3 / 개선 우선순위 TOP3 / 알림"""
+    by_camp = agg(df, ["구분_캠페인명"]).dropna(subset=["순결제ROAS"])
+    by_camp = by_camp[by_camp["지표_광고비"] > 0]
+
+    t_roas = targets.get("roas", 0)
+
+    top3 = by_camp.nlargest(3, "순결제ROAS")
+    bot3 = by_camp.nsmallest(3, "순결제ROAS")
+
+    # 알림 자동 생성
+    alerts = []
+    tot = calc_kpi(pd.DataFrame([df[AGG_COLS].sum()])).iloc[0]
+    cur_roas = tot["순결제ROAS"]
+    if t_roas > 0 and cur_roas < t_roas:
+        gap = t_roas - cur_roas
+        alerts.append(("⚠️", "ROAS 목표 미달", f"현재 {cur_roas:.2f}x | 목표 {t_roas:.2f}x | 부족 {gap:.2f}x"))
+    # 전월 대비 급변 캠페인
+    years = sorted(df["연도"].unique())
+    if len(years) >= 1:
+        cur_year = int(df["연도"].max())
+        cur_month = int(df[df["연도"] == cur_year]["월"].max())
+        prev_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month - 1)] if cur_month > 1 else pd.DataFrame()
+        cur_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month)]
+        if not prev_month_df.empty and not cur_month_df.empty:
+            pm = agg(prev_month_df, ["구분_캠페인명"]).set_index("구분_캠페인명")
+            cm = agg(cur_month_df, ["구분_캠페인명"]).set_index("구분_캠페인명")
+            common = pm.index.intersection(cm.index)
+            for c in common:
+                p, n = pm.loc[c, "지표_광고비"], cm.loc[c, "지표_광고비"]
+                if p > 0 and abs(n - p) / p > 0.5:
+                    direction = "급증" if n > p else "급감"
+                    alerts.append(("📊", f"캠페인 광고비 {direction}", f"{c[:30]} ({(n-p)/p*100:+.0f}%)"))
+    if not alerts:
+        alerts.append(("✅", "이상 없음", "모든 주요 지표가 정상 범위입니다."))
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**🏆 잘 되는 캠페인 TOP 3** <span style='font-size:11px;color:#64748B;'>ROAS 기준</span>", unsafe_allow_html=True)
+        for rank, (_, row) in enumerate(top3.iterrows(), 1):
+            name = str(row["구분_캠페인명"])[:35]
+            roas = row["순결제ROAS"]
+            spend = fmt_money(row["지표_광고비"])
+            badge_color = ["#F59E0B", "#94A3B8", "#CD7F32"][rank - 1]
+            st.markdown(f"""
+            <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:11px;font-weight:700;color:{badge_color};">#{rank}</span>
+                <span style="font-size:13px;font-weight:700;color:#16A34A;">{roas:.2f}x</span>
+              </div>
+              <div style="font-size:12px;color:#334155;margin-top:4px;word-break:break-all;">{name}</div>
+              <div style="font-size:11px;color:#94A3B8;margin-top:2px;">광고비 {spend}</div>
+            </div>""", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("**🔧 개선 우선순위 TOP 3** <span style='font-size:11px;color:#64748B;'>ROAS 낮음</span>", unsafe_allow_html=True)
+        for rank, (_, row) in enumerate(bot3.iterrows(), 1):
+            name = str(row["구분_캠페인명"])[:35]
+            roas = row["순결제ROAS"]
+            spend = fmt_money(row["지표_광고비"])
+            gap_html = ""
+            if t_roas > 0:
+                gap = roas - t_roas
+                gc = "#EF4444" if gap < 0 else "#16A34A"
+                gap_html = f'<span style="color:{gc};font-size:11px;">목표 대비 {gap:+.2f}x</span>'
+            st.markdown(f"""
+            <div style="background:white;border:1px solid #FEE2E2;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:11px;font-weight:700;color:#EF4444;">#{rank}</span>
+                <span style="font-size:13px;font-weight:700;color:#EF4444;">{roas:.2f}x</span>
+              </div>
+              <div style="font-size:12px;color:#334155;margin-top:4px;word-break:break-all;">{name}</div>
+              <div style="font-size:11px;color:#94A3B8;margin-top:2px;">광고비 {spend} &nbsp; {gap_html}</div>
+            </div>""", unsafe_allow_html=True)
+
+    with col3:
+        st.markdown("**🔔 알림 & 인사이트**", unsafe_allow_html=True)
+        for icon, title, desc in alerts[:5]:
+            bg = "#FFF7ED" if icon == "⚠️" else ("#F0FDF4" if icon == "✅" else "#EFF6FF")
+            bd = "#FED7AA" if icon == "⚠️" else ("#BBF7D0" if icon == "✅" else "#BFDBFE")
+            st.markdown(f"""
+            <div style="background:{bg};border:1px solid {bd};border-radius:10px;padding:10px 13px;margin-bottom:8px;">
+              <div style="font-size:12px;font-weight:600;color:#1E293B;">{icon} {title}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px;">{desc}</div>
+            </div>""", unsafe_allow_html=True)
+
+
 # ───────────────────────────────────────────────
 # KPI 카드
 # ───────────────────────────────────────────────
@@ -542,35 +705,48 @@ def kpi_cards(df: pd.DataFrame, targets: dict):
 
     days = df["기간_일자"].nunique()
 
-    cards = [
-        ("💰 광고비",     fmt_money(tot["지표_광고비"]),        "spend",  tot["지표_광고비"]),
-        ("📺 노출수",     fmt_num(tot["지표_노출수"]),           None,     None),
-        ("🖱️ 클릭수",    fmt_num(tot["지표_클릭수"]),           None,     None),
-        ("📈 CTR",        fmt_pct(tot["CTR"]),                  None,     None),
-        ("💵 CPC",        fmt_money(tot["CPC"]),                None,     None),
-        ("📡 CPM",        fmt_money(tot["CPM"]),                None,     None),
-        ("🌐 UV",         fmt_num(tot["지표_UV(전체)"]),         "uv",     tot["지표_UV(전체)"]),
-        ("🔗 CPUV",       fmt_money(tot["CPUV"]),               None,     None),
-        ("↩️ UV/클릭",   fmt_pct(tot["UV/클릭"]),              None,     None),
-        ("🔄 순결제ROAS", fmt_roas(tot["순결제ROAS"]),           "roas",   tot["순결제ROAS"]),
-        ("🎯 총결제ROAS", fmt_roas(tot["총결제ROAS"]),           None,     None),
-        ("📊 CR(순)",     fmt_pct(tot["CR(순)"], 3),            None,     None),
-        ("💎 객단가(순)", fmt_money(tot["객단가(순)"]),          None,     None),
-        ("🛒 첫구매CPA",  fmt_money(tot["첫구매CPA"]),          None,     None),
-        ("👤 가입CPA",    fmt_money(tot["가입CPA"]),            None,     None),
-        ("✅ 가입수",     fmt_num(tot["지표_가입회원"]),          "join",   tot["지표_가입회원"]),
-        ("🛍️ 첫구매수",  fmt_num(tot["지표_순결제고객수(첫구매)"]), "first", tot["지표_순결제고객수(첫구매)"]),
-        ("🔁 윈백거래액", fmt_money(tot["지표_순결제거래액(윈백)"]), None, None),
-        ("🆕 신규거래액", fmt_money(tot["지표_당년신규순결제거래액"]), None, None),
-        ("📅 집행일수",   fmt_num(days),                        None,     None),
-    ]
+    spend = tot["지표_광고비"]
+    rev   = tot["지표_총결제거래액"]
+    roas  = tot["순결제ROAS"]
 
-    cols = st.columns(5)
-    for i, (label, val, tkey, cur_val) in enumerate(cards):
-        with cols[i % 5]:
-            st.metric(label=label, value=val)
-            if tkey and targets.get(tkey, 0) > 0 and cur_val is not None:
-                progress_pill(cur_val, targets[tkey], "진도율")
+    # 목표 KPI 바
+    render_goal_bar(targets, spend, rev, roas)
+
+    # 1행: 핵심 지표 (레퍼런스 디자인처럼 크게)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        prog = spend / targets["spend"] if targets.get("spend", 0) > 0 and spend else None
+        render_kpi_card("💰 광고비", fmt_money(spend), "집행일수", f"{days}일", progress=prog)
+    with c2:
+        render_kpi_card("🖱️ 클릭수 / CTR", fmt_num(tot["지표_클릭수"]),
+                        "CTR", fmt_pct(tot["CTR"]))
+    with c3:
+        render_kpi_card("👤 가입수 / CPA", fmt_num(tot["지표_가입회원"]),
+                        "가입CPA", fmt_money(tot["가입CPA"]))
+    with c4:
+        prog_r = spend / targets["rev"] if targets.get("rev", 0) > 0 and rev else None
+        render_kpi_card("🛒 거래액(순결제)", fmt_money(rev),
+                        "첫구매수", fmt_num(tot["지표_순결제고객수(첫구매)"]), progress=prog_r)
+    with c5:
+        prog_roas = roas / targets["roas"] if targets.get("roas", 0) > 0 and roas else None
+        render_kpi_card("📈 순결제ROAS", fmt_roas(roas), progress=prog_roas)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # 2행: 보조 지표
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        render_kpi_card("📡 CPM", fmt_money(tot["CPM"]), "노출수", fmt_num(tot["지표_노출수"]))
+    with c2:
+        render_kpi_card("🌐 UV", fmt_num(tot["지표_UV(전체)"]), "UV/클릭", fmt_pct(tot["UV/클릭"]))
+    with c3:
+        render_kpi_card("🔄 CR(순)", fmt_pct(tot["CR(순)"], 3), "객단가", fmt_money(tot["객단가(순)"]))
+    with c4:
+        render_kpi_card("🛍️ 첫구매CPA", fmt_money(tot["첫구매CPA"]),
+                        "윈백거래액", fmt_money(tot["지표_순결제거래액(윈백)"]))
+    with c5:
+        render_kpi_card("🆕 신규거래액", fmt_money(tot["지표_당년신규순결제거래액"]),
+                        "총결제ROAS", fmt_roas(tot["총결제ROAS"]))
 
 
 # ───────────────────────────────────────────────
@@ -668,6 +844,10 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None):
         return
 
     kpi_cards(df, targets)
+    st.divider()
+
+    # ── TOP3 / 개선 우선순위 / 알림
+    render_top3_section(df, targets)
     st.divider()
 
     # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
