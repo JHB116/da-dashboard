@@ -635,9 +635,9 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
         cur_month = int(df[df["연도"] == cur_year]["월"].max())
         prev_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month - 1)] if cur_month > 1 else pd.DataFrame()
         cur_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month)]
-        if not prev_month_df.empty and not cur_month_df.empty:
-            pm = agg(prev_month_df, ["구분_캠페인명"]).set_index("구분_캠페인명")
-            cm = agg(cur_month_df, ["구분_캠페인명"]).set_index("구분_캠페인명")
+        if not prev_month_df.empty and not cur_month_df.empty and camp_col in df.columns:
+            pm = agg(prev_month_df, [camp_col]).set_index(camp_col)
+            cm = agg(cur_month_df, [camp_col]).set_index(camp_col)
             common = pm.index.intersection(cm.index)
             for c in common:
                 p, n = pm.loc[c, "지표_광고비"], cm.loc[c, "지표_광고비"]
