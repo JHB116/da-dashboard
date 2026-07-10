@@ -609,8 +609,12 @@ def render_goal_bar(targets: dict, cur_spend: float, cur_rev: float, cur_roas: f
 
 def render_top3_section(df: pd.DataFrame, targets: dict):
     """잘 되는 캠페인 TOP3 / 개선 우선순위 TOP3 / 알림"""
-    by_camp = agg(df, ["구분_캠페인명"]).dropna(subset=["순결제ROAS"])
+    camp_col = next((c for c in ["구분_캠페인명", "구분_하위캠페인", "구분_매체명"] if c in df.columns), None)
+    if camp_col is None:
+        return
+    by_camp = agg(df, [camp_col]).dropna(subset=["순결제ROAS"])
     by_camp = by_camp[by_camp["지표_광고비"] > 0]
+    by_camp = by_camp.rename(columns={camp_col: "구분_캠페인명"})
 
     t_roas = targets.get("roas", 0)
 
