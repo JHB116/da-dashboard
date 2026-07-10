@@ -427,6 +427,79 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
 
 
 # ───────────────────────────────────────────────
+# ───────────────────────────────────────────────
+# 날짜 범위 필터 (페이지 상단)
+# ───────────────────────────────────────────────
+def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """페이지 상단 날짜 범위 선택기. 프리셋 버튼 + 직접 입력."""
+    import datetime as dt
+
+    today = pd.Timestamp.today().normalize()
+    data_max = df["기간_일자"].max()
+    data_min = df["기간_일자"].min()
+
+    presets = {
+        "이번주":   (today - pd.Timedelta(days=today.dayofweek), today),
+        "최근 7일": (today - pd.Timedelta(days=6), today),
+        "이번달":   (today.replace(day=1), today),
+        "저번달":   ((today.replace(day=1) - pd.Timedelta(days=1)).replace(day=1),
+                     today.replace(day=1) - pd.Timedelta(days=1)),
+        "올해":     (today.replace(month=1, day=1), today),
+        "전체":     (data_min, data_max),
+    }
+
+    # 상단 날짜 바 렌더링
+    st.markdown("""<style>
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+        font-size: 12px !important; padding: 4px 10px !important;
+        border-radius: 6px !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    # 초기 상태
+    if "dr_start" not in st.session_state:
+        st.session_state["dr_start"] = data_min.date()
+        st.session_state["dr_end"]   = data_max.date()
+    if "dr_preset" not in st.session_state:
+        st.session_state["dr_preset"] = "전체"
+
+    cols = st.columns([1, 1, 1, 1, 1, 1, 0.1, 2, 0.5, 2])
+    for i, (label, (ps, pe)) in enumerate(presets.items()):
+        with cols[i]:
+            # clamp to data range
+            ps_clamped = max(ps, data_min).date()
+            pe_clamped = min(pe, data_max).date()
+            is_active = st.session_state.get("dr_preset") == label
+            btn_style = "primary" if is_active else "secondary"
+            if st.button(label, key=f"dr_btn_{label}", type=btn_style, use_container_width=True):
+                st.session_state["dr_start"]  = ps_clamped
+                st.session_state["dr_end"]    = pe_clamped
+                st.session_state["dr_preset"] = label
+                st.rerun()
+
+    with cols[7]:
+        new_start = st.date_input("시작일", value=st.session_state["dr_start"],
+                                  min_value=data_min.date(), max_value=data_max.date(),
+                                  key="dr_start_input", label_visibility="collapsed")
+    with cols[8]:
+        st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
+                    unsafe_allow_html=True)
+    with cols[9]:
+        new_end = st.date_input("종료일", value=st.session_state["dr_end"],
+                                min_value=data_min.date(), max_value=data_max.date(),
+                                key="dr_end_input", label_visibility="collapsed")
+
+    if new_start != st.session_state["dr_start"] or new_end != st.session_state["dr_end"]:
+        st.session_state["dr_start"]  = new_start
+        st.session_state["dr_end"]    = new_end
+        st.session_state["dr_preset"] = "직접 지정"
+
+    start = pd.Timestamp(st.session_state["dr_start"])
+    end   = pd.Timestamp(st.session_state["dr_end"])
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    return df[(df["기간_일자"] >= start) & (df["기간_일자"] <= end)]
+
+
 # 사이드바 필터
 # ───────────────────────────────────────────────
 def sidebar_filters(df: pd.DataFrame):
@@ -1690,6 +1763,10 @@ def main():
 
     filters = sidebar_filters(df)
     filtered = filter_df(df, filters)
+
+    # ── 날짜 범위 필터 (페이지 상단)
+    filtered = date_range_filter(filtered)
+
     st.sidebar.caption(f"필터 적용 후: {len(filtered):,}행")
 
     targets = get_targets()
