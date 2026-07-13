@@ -251,7 +251,7 @@ def fmt_pct(v, decimals=2):
 
 def fmt_roas(v):
     if pd.isna(v): return "–"
-    return f"{v:.2f}x"
+    return f"{v*100:.0f}%"
 
 def fmt_delta(cur, prev, is_pct=False):
     if pd.isna(cur) or pd.isna(prev) or prev == 0:
@@ -438,53 +438,43 @@ def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
     data_max = df["기간_일자"].max()
     data_min = df["기간_일자"].min()
 
+    week_start = today - pd.Timedelta(days=today.dayofweek)
     presets = {
-        "이번주":   (today - pd.Timedelta(days=today.dayofweek), today),
-        "최근 7일": (today - pd.Timedelta(days=6), today),
-        "이번달":   (today.replace(day=1), today),
-        "저번달":   ((today.replace(day=1) - pd.Timedelta(days=1)).replace(day=1),
-                     today.replace(day=1) - pd.Timedelta(days=1)),
-        "올해":     (today.replace(month=1, day=1), today),
-        "전체":     (data_min, data_max),
+        "전일":   (today - pd.Timedelta(days=1), today - pd.Timedelta(days=1)),
+        "이번주": (week_start, today),
+        "이번달": (today.replace(day=1), today),
+        "올해":   (today.replace(month=1, day=1), today),
     }
 
-    # 상단 날짜 바 렌더링
-    st.markdown("""<style>
-    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-        font-size: 12px !important; padding: 4px 10px !important;
-        border-radius: 6px !important;
-    }
-    </style>""", unsafe_allow_html=True)
-
-    # 초기 상태
+    # 초기 상태 — 기본값: 이번주
     if "dr_start" not in st.session_state:
-        st.session_state["dr_start"] = data_min.date()
-        st.session_state["dr_end"]   = data_max.date()
-    if "dr_preset" not in st.session_state:
-        st.session_state["dr_preset"] = "전체"
+        ps_def = max(week_start, data_min)
+        st.session_state["dr_start"] = ps_def.date()
+        st.session_state["dr_end"]   = min(today, data_max).date()
+        st.session_state["dr_preset"] = "이번주"
 
-    cols = st.columns([1, 1, 1, 1, 1, 1, 0.1, 2, 0.5, 2])
+    cols = st.columns([1, 1, 1, 1, 0.2, 2, 0.4, 2])
     for i, (label, (ps, pe)) in enumerate(presets.items()):
         with cols[i]:
-            # clamp to data range
             ps_clamped = max(ps, data_min).date()
             pe_clamped = min(pe, data_max).date()
             is_active = st.session_state.get("dr_preset") == label
-            btn_style = "primary" if is_active else "secondary"
-            if st.button(label, key=f"dr_btn_{label}", type=btn_style, use_container_width=True):
+            if st.button(label, key=f"dr_btn_{label}",
+                         type="primary" if is_active else "secondary",
+                         use_container_width=True):
                 st.session_state["dr_start"]  = ps_clamped
                 st.session_state["dr_end"]    = pe_clamped
                 st.session_state["dr_preset"] = label
                 st.rerun()
 
-    with cols[7]:
+    with cols[5]:
         new_start = st.date_input("시작일", value=st.session_state["dr_start"],
                                   min_value=data_min.date(), max_value=data_max.date(),
                                   key="dr_start_input", label_visibility="collapsed")
-    with cols[8]:
+    with cols[6]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
-    with cols[9]:
+    with cols[7]:
         new_end = st.date_input("종료일", value=st.session_state["dr_end"],
                                 min_value=data_min.date(), max_value=data_max.date(),
                                 key="dr_end_input", label_visibility="collapsed")
@@ -601,14 +591,7 @@ def base_layout(fig, title="", height=400):
 # 목표 입력 UI
 # ───────────────────────────────────────────────
 def get_targets():
-    with st.sidebar.expander("📌 당월 목표 입력", expanded=False):
-        t_spend  = st.number_input("목표 광고비 (원)", value=0, step=1_000_000)
-        t_rev    = st.number_input("목표 거래액 (원)", value=0, step=1_000_000)
-        t_roas   = st.number_input("목표 ROAS", value=0.0, step=0.1, format="%.2f")
-        t_uv     = st.number_input("목표 UV", value=0, step=1_000)
-        t_join   = st.number_input("목표 가입수", value=0, step=10)
-        t_first  = st.number_input("목표 첫구매수", value=0, step=10)
-    return dict(spend=t_spend, rev=t_rev, roas=t_roas, uv=t_uv, join=t_join, first=t_first)
+    return dict(spend=0, rev=0, roas=0, uv=0, join=0, first=0)
 
 
 def progress_pill(cur, target, label):
@@ -643,6 +626,9 @@ def render_kpi_card(label: str, value: str, sub_label: str = "", sub_value: str 
     sub_html = ""
     if sub_label:
         sub_html = f'<div style="margin-top:4px;font-size:12px;color:#64748B;">{sub_label} <b style="color:#334155;">{sub_value}</b></div>'
+    elif sub_value:
+        # sub_value only (e.g. YoY HTML span)
+        sub_html = f'<div style="margin-top:4px;">{sub_value}</div>'
     st.markdown(f"""
     <div style="background:white;border:1px solid #E2E8F0;border-radius:12px;padding:16px 18px;
                 box-shadow:0 1px 4px rgba(0,0,0,.06);min-height:90px;">
@@ -660,7 +646,7 @@ def render_goal_bar(targets: dict, cur_spend: float, cur_rev: float, cur_roas: f
         items.append(("월 광고비 목표", fmt_money(targets["spend"]),
                        cur_spend / targets["spend"] if cur_spend else None))
     if targets.get("roas", 0) > 0:
-        items.append(("ROAS 목표", f"{targets['roas']:.2f}x",
+        items.append(("ROAS 목표", fmt_roas(targets["roas"]),
                        cur_roas / targets["roas"] if cur_roas else None))
     if targets.get("rev", 0) > 0:
         items.append(("월 거래액 목표", fmt_money(targets["rev"]),
@@ -687,6 +673,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
         return
     by_camp = agg(df, [camp_col]).dropna(subset=["순결제ROAS"])
     by_camp = by_camp[by_camp["지표_광고비"] > 0]
+    by_camp = by_camp[~by_camp[camp_col].astype(str).str.contains("친구추가", na=False)]
     by_camp = by_camp.rename(columns={camp_col: "구분_캠페인명"})
 
     t_roas = targets.get("roas", 0)
@@ -700,7 +687,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
     cur_roas = tot["순결제ROAS"]
     if t_roas > 0 and cur_roas < t_roas:
         gap = t_roas - cur_roas
-        alerts.append(("⚠️", "ROAS 목표 미달", f"현재 {cur_roas:.2f}x | 목표 {t_roas:.2f}x | 부족 {gap:.2f}x"))
+        alerts.append(("⚠️", "ROAS 목표 미달", f"현재 {fmt_roas(cur_roas)} | 목표 {fmt_roas(t_roas)} | 부족 {gap*100:.0f}%p"))
     # 전월 대비 급변 캠페인
     years = sorted(df["연도"].unique())
     if len(years) >= 1:
@@ -709,6 +696,8 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
         prev_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month - 1)] if cur_month > 1 else pd.DataFrame()
         cur_month_df = df[(df["연도"] == cur_year) & (df["월"] == cur_month)]
         if not prev_month_df.empty and not cur_month_df.empty and camp_col in df.columns:
+            prev_month_df = prev_month_df[~prev_month_df[camp_col].astype(str).str.contains("친구추가", na=False)]
+            cur_month_df = cur_month_df[~cur_month_df[camp_col].astype(str).str.contains("친구추가", na=False)]
             pm = agg(prev_month_df, [camp_col]).set_index(camp_col)
             cm = agg(cur_month_df, [camp_col]).set_index(camp_col)
             common = pm.index.intersection(cm.index)
@@ -733,7 +722,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
             <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-size:11px;font-weight:700;color:{badge_color};">#{rank}</span>
-                <span style="font-size:13px;font-weight:700;color:#16A34A;">{roas:.2f}x</span>
+                <span style="font-size:13px;font-weight:700;color:#16A34A;">{fmt_roas(roas)}</span>
               </div>
               <div style="font-size:12px;color:#334155;margin-top:4px;word-break:break-all;">{name}</div>
               <div style="font-size:11px;color:#94A3B8;margin-top:2px;">광고비 {spend}</div>
@@ -749,12 +738,12 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
             if t_roas > 0:
                 gap = roas - t_roas
                 gc = "#EF4444" if gap < 0 else "#16A34A"
-                gap_html = f'<span style="color:{gc};font-size:11px;">목표 대비 {gap:+.2f}x</span>'
+                gap_html = f'<span style="color:{gc};font-size:11px;">목표 대비 {gap*100:+.0f}%p</span>'
             st.markdown(f"""
             <div style="background:white;border:1px solid #FEE2E2;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-size:11px;font-weight:700;color:#EF4444;">#{rank}</span>
-                <span style="font-size:13px;font-weight:700;color:#EF4444;">{roas:.2f}x</span>
+                <span style="font-size:13px;font-weight:700;color:#EF4444;">{fmt_roas(roas)}</span>
               </div>
               <div style="font-size:12px;color:#334155;margin-top:4px;word-break:break-all;">{name}</div>
               <div style="font-size:11px;color:#94A3B8;margin-top:2px;">광고비 {spend} &nbsp; {gap_html}</div>
@@ -775,55 +764,66 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
 # ───────────────────────────────────────────────
 # KPI 카드
 # ───────────────────────────────────────────────
-def kpi_cards(df: pd.DataFrame, targets: dict):
+def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
+    """full_df: 필터 전 전체 데이터 (동요일 전년비 계산용)"""
     tot_raw = df[AGG_COLS].sum()
-    tot_raw_df = pd.DataFrame([tot_raw])
-    tot = calc_kpi(tot_raw_df).iloc[0]
-
-    days = df["기간_일자"].nunique()
+    tot = calc_kpi(pd.DataFrame([tot_raw])).iloc[0]
 
     spend = tot["지표_광고비"]
     rev   = tot["지표_총결제거래액"]
     roas  = tot["순결제ROAS"]
 
+    # 동요일 전년비 계산
+    def yoy_delta(col):
+        if full_df is None or df.empty: return ""
+        cur_dates = df["기간_일자"].dropna()
+        if cur_dates.empty: return ""
+        prev_dates = cur_dates - pd.Timedelta(days=364)
+        prev_df = full_df[full_df["기간_일자"].isin(prev_dates)]
+        if prev_df.empty: return ""
+        p = calc_kpi(pd.DataFrame([prev_df[AGG_COLS].sum()])).iloc[0]
+        c_val, p_val = tot.get(col, np.nan), p.get(col, np.nan)
+        if pd.isna(c_val) or pd.isna(p_val) or p_val == 0: return ""
+        chg = (c_val - p_val) / abs(p_val)
+        arrow = "▲" if chg >= 0 else "▼"
+        color = "#16A34A" if chg >= 0 else "#EF4444"
+        return f'<span style="color:{color};font-size:11px;">{arrow} {abs(chg)*100:.1f}% YoY</span>'
+
     # 목표 KPI 바
     render_goal_bar(targets, spend, rev, roas)
 
-    # 1행: 핵심 지표 (레퍼런스 디자인처럼 크게)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        prog = spend / targets["spend"] if targets.get("spend", 0) > 0 and spend else None
-        render_kpi_card("💰 광고비", fmt_money(spend), "집행일수", f"{days}일", progress=prog)
-    with c2:
-        render_kpi_card("🖱️ 클릭수 / CTR", fmt_num(tot["지표_클릭수"]),
-                        "CTR", fmt_pct(tot["CTR"]))
-    with c3:
-        render_kpi_card("👤 가입수 / CPA", fmt_num(tot["지표_가입회원"]),
-                        "가입CPA", fmt_money(tot["가입CPA"]))
-    with c4:
-        prog_r = spend / targets["rev"] if targets.get("rev", 0) > 0 and rev else None
-        render_kpi_card("🛒 거래액(순결제)", fmt_money(rev),
-                        "첫구매수", fmt_num(tot["지표_순결제고객수(첫구매)"]), progress=prog_r)
-    with c5:
-        prog_roas = roas / targets["roas"] if targets.get("roas", 0) > 0 and roas else None
-        render_kpi_card("📈 순결제ROAS", fmt_roas(roas), progress=prog_roas)
+    # 9개 지표: 광고비, 거래액, ROAS, UV, CTR, 가입률, 가입CPA, CR(순), 신규거래액
+    metrics = [
+        ("💰 광고비",       fmt_money(spend),                        "지표_광고비",
+         targets.get("spend", 0), spend),
+        ("🛒 거래액(순결제)", fmt_money(rev),                         "지표_총결제거래액",
+         targets.get("rev", 0), rev),
+        ("📈 ROAS(순결제)",  fmt_roas(roas),                          "순결제ROAS",
+         None, None),
+        ("🌐 UV",            fmt_num(tot["지표_UV(전체)"]),            "지표_UV(전체)",
+         None, None),
+        ("📊 CTR",           fmt_pct(tot["CTR"]),                     "CTR",
+         None, None),
+        ("👤 가입률",        fmt_pct(tot["가입률"], 3),               "가입률",
+         None, None),
+        ("💸 가입CPA",       fmt_money(tot["가입CPA"]),               "가입CPA",
+         None, None),
+        ("🔄 CR(순)",        fmt_pct(tot["CR(순)"], 3),              "CR(순)",
+         None, None),
+        ("🆕 신규거래액",    fmt_money(tot["지표_당년신규순결제거래액"]), "지표_당년신규순결제거래액",
+         None, None),
+    ]
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-    # 2행: 보조 지표
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        render_kpi_card("📡 CPM", fmt_money(tot["CPM"]), "노출수", fmt_num(tot["지표_노출수"]))
-    with c2:
-        render_kpi_card("🌐 UV", fmt_num(tot["지표_UV(전체)"]), "UV/클릭", fmt_pct(tot["UV/클릭"]))
-    with c3:
-        render_kpi_card("🔄 CR(순)", fmt_pct(tot["CR(순)"], 3), "객단가", fmt_money(tot["객단가(순)"]))
-    with c4:
-        render_kpi_card("🛍️ 첫구매CPA", fmt_money(tot["첫구매CPA"]),
-                        "윈백거래액", fmt_money(tot["지표_순결제거래액(윈백)"]))
-    with c5:
-        render_kpi_card("🆕 신규거래액", fmt_money(tot["지표_당년신규순결제거래액"]),
-                        "총결제ROAS", fmt_roas(tot["총결제ROAS"]))
+    cols = st.columns(3)
+    for i, (label, val, col_key, t_val, c_val) in enumerate(metrics):
+        prog = None
+        if t_val and t_val > 0 and c_val:
+            prog = c_val / t_val
+        with cols[i % 3]:
+            yoy = yoy_delta(col_key)
+            render_kpi_card(label, val, sub_label="", sub_value=yoy, progress=prog)
+        if (i + 1) % 3 == 0 and i < len(metrics) - 1:
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 
 # ───────────────────────────────────────────────
@@ -914,13 +914,13 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         st.plotly_chart(fig2, use_container_width=True)
 
 
-def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None):
+def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
     st.header("📊 전체 요약")
     if df.empty:
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
-    kpi_cards(df, targets)
+    kpi_cards(df, targets, full_df=full_df)
     st.divider()
 
     # ── TOP3 / 개선 우선순위 / 알림
@@ -1762,10 +1762,10 @@ def main():
         st.sidebar.success("✅ 목표 파일 로드 완료")
 
     filters = sidebar_filters(df)
-    filtered = filter_df(df, filters)
+    pre_date_filtered = filter_df(df, filters)  # 날짜 범위 필터 전 (전년비 계산용)
 
     # ── 날짜 범위 필터 (페이지 상단)
-    filtered = date_range_filter(filtered)
+    filtered = date_range_filter(pre_date_filtered)
 
     st.sidebar.caption(f"필터 적용 후: {len(filtered):,}행")
 
@@ -1778,7 +1778,7 @@ def main():
     ])
 
     if page == "📊 전체 요약":
-        page_summary(filtered, targets, report_targets)
+        page_summary(filtered, targets, report_targets, full_df=pre_date_filtered)
     elif page == "📆 일별 성과":
         page_daily(filtered, targets)
     elif page == "📡 매체별 성과":
