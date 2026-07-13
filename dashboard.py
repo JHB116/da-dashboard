@@ -253,6 +253,17 @@ def fmt_roas(v):
     if pd.isna(v): return "–"
     return f"{v*100:.0f}%"
 
+def week_of_month_label(year: int, week: int) -> str:
+    """ISO (연도, 주차) → '26년7월1주차' 형식."""
+    import datetime as _dt
+    try:
+        d = _dt.date.fromisocalendar(int(year), int(week), 4)  # 목요일 기준
+    except Exception:
+        return f"W{int(week):02d}"
+    wom = (d.day - 1) // 7 + 1
+    return f"{str(d.year)[2:]}년{d.month}월{wom}주차"
+
+
 def fmt_delta(cur, prev, is_pct=False):
     if pd.isna(cur) or pd.isna(prev) or prev == 0:
         return "–"
@@ -324,6 +335,33 @@ def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
     if ticklabels:
         vals = sorted(ticklabels.keys())
         fig.update_xaxes(tickvals=vals, ticktext=[ticklabels[v] for v in vals])
+    base_layout(fig, title, height)
+    return fig
+
+
+def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
+                     height: int = 380) -> go.Figure:
+    """월/주/일 단위 지표 추이 (선형). 월·주는 연도별 YoY 오버레이, 일은 시계열."""
+    if gran == "월":
+        d = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
+        return yoy_overlay_fig(d, "월", val_col, title,
+                               ticklabels=MONTH_LABELS, height=height)
+    if gran == "주":
+        d = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
+        cur_year = int(df["연도"].max())
+        wk_labels = {w: week_of_month_label(cur_year, w) for w in range(1, 54)}
+        return yoy_overlay_fig(d, "주차번호", val_col, title,
+                               ticklabels=wk_labels, height=height)
+    # 일 단위: 실제 날짜 시계열 (연도별 색상)
+    d = agg(df, ["기간_일자"]).sort_values("기간_일자").dropna(subset=[val_col])
+    d["연도"] = d["기간_일자"].dt.year
+    fig = go.Figure()
+    for i, yr in enumerate(sorted(d["연도"].unique())):
+        sub = d[d["연도"] == yr]
+        fig.add_trace(go.Scatter(
+            x=sub["기간_일자"], y=sub[val_col], name=f"{yr}년",
+            mode="lines", line=dict(color=YEAR_COLORS[i % len(YEAR_COLORS)], width=1.8),
+        ))
     base_layout(fig, title, height)
     return fig
 
@@ -430,9 +468,10 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
 # ───────────────────────────────────────────────
 # 날짜 범위 필터 (페이지 상단)
 # ───────────────────────────────────────────────
-def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
-    """페이지 상단 날짜 범위 선택기. 프리셋 버튼 + 직접 입력."""
-    import datetime as dt
+def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr") -> pd.DataFrame:
+    """페이지 상단 날짜 범위 선택기. 프리셋 버튼 + 직접 입력.
+    key_prefix로 페이지별 독립 상태를 유지한다."""
+    k_start, k_end, k_preset = f"{key_prefix}_start", f"{key_prefix}_end", f"{key_prefix}_preset"
 
     today = pd.Timestamp.today().normalize()
     data_max = df["기간_일자"].max()
@@ -447,51 +486,51 @@ def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     # 초기 상태 — 기본값: 이번주
-    if "dr_start" not in st.session_state:
+    if k_start not in st.session_state:
         ps_def = max(week_start, data_min)
-        st.session_state["dr_start"] = ps_def.date()
-        st.session_state["dr_end"]   = min(today, data_max).date()
-        st.session_state["dr_preset"] = "이번주"
+        st.session_state[k_start]  = ps_def.date()
+        st.session_state[k_end]    = min(today, data_max).date()
+        st.session_state[k_preset] = "이번주"
 
     cols = st.columns([1, 1, 1, 1, 0.2, 2, 0.4, 2])
     for i, (label, (ps, pe)) in enumerate(presets.items()):
         with cols[i]:
             ps_clamped = max(ps, data_min).date()
             pe_clamped = min(pe, data_max).date()
-            is_active = st.session_state.get("dr_preset") == label
-            if st.button(label, key=f"dr_btn_{label}",
+            is_active = st.session_state.get(k_preset) == label
+            if st.button(label, key=f"{key_prefix}_btn_{label}",
                          type="primary" if is_active else "secondary",
                          use_container_width=True):
-                st.session_state["dr_start"]  = ps_clamped
-                st.session_state["dr_end"]    = pe_clamped
-                st.session_state["dr_preset"] = label
+                st.session_state[k_start]  = ps_clamped
+                st.session_state[k_end]    = pe_clamped
+                st.session_state[k_preset] = label
                 st.rerun()
 
     d_min = data_min.date()
     d_max = data_max.date()
     # clamp session state values to valid data range before passing to date_input
-    clamped_start = max(d_min, min(d_max, st.session_state["dr_start"]))
-    clamped_end   = max(d_min, min(d_max, st.session_state["dr_end"]))
+    clamped_start = max(d_min, min(d_max, st.session_state[k_start]))
+    clamped_end   = max(d_min, min(d_max, st.session_state[k_end]))
 
     with cols[5]:
         new_start = st.date_input("시작일", value=clamped_start,
                                   min_value=d_min, max_value=d_max,
-                                  key="dr_start_input", label_visibility="collapsed")
+                                  key=f"{key_prefix}_start_input", label_visibility="collapsed")
     with cols[6]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
     with cols[7]:
         new_end = st.date_input("종료일", value=clamped_end,
                                 min_value=d_min, max_value=d_max,
-                                key="dr_end_input", label_visibility="collapsed")
+                                key=f"{key_prefix}_end_input", label_visibility="collapsed")
 
-    if new_start != st.session_state["dr_start"] or new_end != st.session_state["dr_end"]:
-        st.session_state["dr_start"]  = new_start
-        st.session_state["dr_end"]    = new_end
-        st.session_state["dr_preset"] = "직접 지정"
+    if new_start != st.session_state[k_start] or new_end != st.session_state[k_end]:
+        st.session_state[k_start]  = new_start
+        st.session_state[k_end]    = new_end
+        st.session_state[k_preset] = "직접 지정"
 
-    start = pd.Timestamp(st.session_state["dr_start"])
-    end   = pd.Timestamp(st.session_state["dr_end"])
+    start = pd.Timestamp(st.session_state[k_start])
+    end   = pd.Timestamp(st.session_state[k_end])
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     return df[(df["기간_일자"] >= start) & (df["기간_일자"] <= end)]
 
@@ -799,7 +838,7 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     # 목표 KPI 바
     render_goal_bar(targets, spend, rev, roas)
 
-    # 9개 지표: 광고비, 거래액, ROAS, UV, CTR, 가입률, 가입CPA, CR(순), 신규거래액
+    # 10개 지표: 광고비, 거래액, ROAS, UV, CTR / 가입률, 가입CPA, CR(순), 신규거래액, CPC
     metrics = [
         ("💰 광고비",       fmt_money(spend),                        "지표_광고비",
          targets.get("spend", 0), spend),
@@ -819,17 +858,20 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
          None, None),
         ("🆕 신규거래액",    fmt_money(tot["지표_당년신규순결제거래액"]), "지표_당년신규순결제거래액",
          None, None),
+        ("🖱️ CPC",          fmt_money(tot["CPC"]),                   "CPC",
+         None, None),
     ]
 
-    cols = st.columns(3)
+    ncol = 5
+    cols = st.columns(ncol)
     for i, (label, val, col_key, t_val, c_val) in enumerate(metrics):
         prog = None
         if t_val and t_val > 0 and c_val:
             prog = c_val / t_val
-        with cols[i % 3]:
+        with cols[i % ncol]:
             yoy = yoy_delta(col_key)
             render_kpi_card(label, val, sub_label="", sub_value=yoy, progress=prog)
-        if (i + 1) % 3 == 0 and i < len(metrics) - 1:
+        if (i + 1) % ncol == 0 and i < len(metrics) - 1:
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 
@@ -886,39 +928,24 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         use_container_width=True, hide_index=True,
     )
 
-    # 광고비 + ROAS 차트
-    col1, col2 = st.columns(2)
-    with col1:
-        monthly_all = agg(df_tab, ["연도", "월"]).sort_values(["연도", "월"])
-        fig = go.Figure()
-        for i, yr in enumerate(sorted(monthly_all["연도"].unique())):
-            sub = monthly_all[monthly_all["연도"] == yr]
-            fig.add_trace(go.Bar(
-                x=sub["월"], y=sub["지표_광고비"],
-                name=f"{yr}년", marker_color=YEAR_COLORS[i % len(YEAR_COLORS)], opacity=0.8,
-            ))
-        if targets.get("spend", 0) > 0:
-            fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
-                          annotation_text="목표")
-        fig.update_xaxes(tickvals=list(range(1, 13)),
-                         ticktext=[f"{m}월" for m in range(1, 13)])
-        base_layout(fig, "월별 광고비 (YoY)", 360)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        metric_opts = {
-            "순결제ROAS": "순결제ROAS", "거래액": "지표_총결제거래액",
-            "CTR": "CTR", "CPM": "CPM", "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
-        }
-        sel_m = st.selectbox("지표 선택", list(metric_opts.keys()), key=f"sum_m_{tab_key}")
-        fig2 = yoy_overlay_fig(
-            monthly_all, "월", metric_opts[sel_m],
-            f"월별 {sel_m} (YoY)", ticklabels=MONTH_LABELS, height=360,
-        )
-        if sel_m == "순결제ROAS" and targets.get("roas", 0) > 0:
-            fig2.add_hline(y=targets["roas"], line_dash="dot", line_color="#EF4444",
-                           annotation_text=f"목표 {targets['roas']:.1f}x")
-        st.plotly_chart(fig2, use_container_width=True)
+    # 지표 추이 차트 (선형, 월/주/일 단위 선택, 요약 카드 지표 모두 지원)
+    chart_metrics = {
+        "ROAS(순결제)": "순결제ROAS", "광고비": "지표_광고비",
+        "거래액(순결제)": "지표_총결제거래액", "UV": "지표_UV(전체)", "CTR": "CTR",
+        "가입률": "가입률", "가입CPA": "가입CPA", "CR(순)": "CR(순)",
+        "신규거래액": "지표_당년신규순결제거래액", "CPC": "CPC",
+    }
+    cc1, cc2 = st.columns([3, 1.4])
+    with cc1:
+        sel_m = st.selectbox("지표 선택", list(chart_metrics.keys()), key=f"sum_m_{tab_key}")
+    with cc2:
+        gran = st.radio("단위", ["월", "주", "일"], horizontal=True, key=f"sum_g_{tab_key}")
+    fig = metric_trend_fig(df_tab, chart_metrics[sel_m], gran,
+                           f"{sel_m} 추이 ({gran} 단위, 연도별 YoY)", height=400)
+    if sel_m == "광고비" and gran == "월" and targets.get("spend", 0) > 0:
+        fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
+                      annotation_text="목표")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
@@ -927,8 +954,12 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
-    kpi_cards(df, targets, full_df=full_df)
+    # ── 지표별 카드 요약: 이 영역에만 날짜 범위 카드 적용
+    st.markdown("##### 📇 지표별 카드 요약")
+    kpi_df = date_range_filter(df, key_prefix="sum")
+    kpi_cards(kpi_df, targets, full_df=df)
     st.divider()
+    st.caption("아래 표·그래프는 날짜 카드와 무관하게 전체 기간(사이드바 필터 적용) 데이터를 표시합니다.")
 
     # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
     main_tabs = st.tabs(["📋 TOTAL(서비스비용제외)", "📋 TOTAL", "📋 거래액확대", "📋 신규확대/인지도",
@@ -1045,23 +1076,42 @@ def page_media(df: pd.DataFrame):
         return
 
     metric_options = {
-        "광고비": "지표_광고비", "노출수": "지표_노출수", "클릭수": "지표_클릭수",
+        "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+        "노출수": "지표_노출수", "클릭수": "지표_클릭수",
         "UV": "지표_UV(전체)", "CTR": "CTR", "CPC": "CPC", "CPM": "CPM", "CPUV": "CPUV",
-        "순결제ROAS": "순결제ROAS", "총결제ROAS": "총결제ROAS",
-        "CR(순)": "CR(순)", "CR(총)": "CR(총)",
+        "총결제ROAS": "총결제ROAS", "CR(순)": "CR(순)", "CR(총)": "CR(총)",
         "객단가(순)": "객단가(순)", "첫구매CPA": "첫구매CPA", "가입CPA": "가입CPA",
-        "가입률": "가입률", "첫구매율": "첫구매율", "거래액": "지표_총결제거래액",
+        "가입률": "가입률", "첫구매율": "첫구매율",
     }
-    sel_label = st.selectbox("비교 지표", list(metric_options.keys()))
-    sel_col   = metric_options[sel_label]
 
     by_media = agg(df, ["구분_매체명"]).sort_values("지표_광고비", ascending=False)
+
+    # 매체별 광고비 · 순결제ROAS · 거래액 (고정 3종 그래프)
+    fixed = [("광고비", "지표_광고비", False), ("순결제ROAS", "순결제ROAS", True),
+             ("거래액", "지표_총결제거래액", False)]
+    fcols = st.columns(3)
+    for (flabel, fcol, is_ratio), fc in zip(fixed, fcols):
+        with fc:
+            top = by_media.dropna(subset=[fcol]).sort_values(fcol, ascending=True).tail(12)
+            fig = px.bar(top, x=fcol, y="구분_매체명", orientation="h",
+                         color="구분_매체명", color_discrete_map=MEDIA_COLORS)
+            if is_ratio:
+                fig.update_xaxes(tickformat=".0%")
+            base_layout(fig, f"매체별 {flabel}", 380)
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    sel_label = st.selectbox("비교 지표 (아래 상세)", list(metric_options.keys()))
+    sel_col   = metric_options[sel_label]
 
     col1, col2 = st.columns(2)
     with col1:
         top = by_media.dropna(subset=[sel_col]).sort_values(sel_col, ascending=True).tail(12)
         fig = px.bar(top, x=sel_col, y="구분_매체명", orientation="h",
                      color="구분_매체명", color_discrete_map=MEDIA_COLORS)
+        if sel_col in ("순결제ROAS", "총결제ROAS", "CTR", "CR(순)", "CR(총)", "가입률", "첫구매율"):
+            fig.update_xaxes(tickformat=".0%")
         base_layout(fig, f"매체별 {sel_label}", 420)
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
@@ -1072,6 +1122,7 @@ def page_media(df: pd.DataFrame):
                           color="구분_매체명", color_discrete_map=MEDIA_COLORS,
                           hover_name="구분_매체명", text="구분_매체명")
         fig2.update_traces(textposition="top center")
+        fig2.update_yaxes(tickformat=".0%")
         base_layout(fig2, "광고비 vs 순결제ROAS (버블=클릭수)", 420)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -1138,6 +1189,12 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
+    # ── 날짜 범위 카드 (이 페이지 전용)
+    df = date_range_filter(df, key_prefix="camp")
+    if df.empty:
+        st.warning("선택한 날짜 범위에 데이터가 없습니다.")
+        return
+
     # ── 잘 되는 캠페인 / 개선 우선순위 / 알림 (전체 요약에서 이동)
     render_top3_section(df, targets)
     st.divider()
@@ -1168,47 +1225,20 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             fig2.update_layout(showlegend=False)
             st.plotly_chart(fig2, use_container_width=True)
 
-        # 컨트롤: 검색 / 기준(캠페인·매체·상품·비용출처) / 비용출처 / 정렬
-        c1, c2, c3, c4 = st.columns([2, 1.2, 1.2, 1.2])
-        with c1:
-            search = st.text_input("검색", placeholder="키워드 입력...")
-        with c2:
-            dim = st.selectbox("기준", ["캠페인", "매체", "상품(카테고리)", "비용출처"])
-        with c3:
-            src = st.selectbox("비용출처", ["전체", "거래액확대", "신규고객확대", "인지도제고"])
-        with c4:
-            sort_opt = st.selectbox("정렬 기준",
-                                    ["순결제ROAS", "광고비", "거래액", "노출수", "클릭수",
-                                     "CTR", "CPM", "CR(순)", "첫구매CPA", "객단가(순)"])
+        # 필터: 매체 · 상품(카테고리) — 다중 선택
+        f1, f2 = st.columns(2)
+        with f1:
+            sel_media = st.multiselect("매체 필터", sorted(df["구분_매체명"].dropna().unique()),
+                                       key="camp_media")
+        with f2:
+            sel_cat = st.multiselect("상품(카테고리) 필터", sorted(df["카테고리"].dropna().unique()),
+                                     key="camp_cat")
+        dff = df
+        if sel_media:
+            dff = dff[dff["구분_매체명"].isin(sel_media)]
+        if sel_cat:
+            dff = dff[dff["카테고리"].isin(sel_cat)]
 
-        dim_map = {"캠페인": "구분_캠페인", "매체": "구분_매체명",
-                   "상품(카테고리)": "카테고리", "비용출처": "구분_비용출처"}
-        dim_col = dim_map[dim]
-        sort_map = {
-            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
-            "노출수": "지표_노출수", "클릭수": "지표_클릭수", "CTR": "CTR", "CPM": "CPM",
-            "CR(순)": "CR(순)", "첫구매CPA": "첫구매CPA", "객단가(순)": "객단가(순)",
-        }
-        sort_col = sort_map[sort_opt]
-
-        dfx = df if src == "전체" else df[df["구분_비용출처"] == src]
-        camp_df = agg(dfx, [dim_col])
-        if search:
-            camp_df = camp_df[camp_df[dim_col].astype(str).str.contains(search, na=False)]
-        asc = sort_opt in ("첫구매CPA",)
-        camp_df = camp_df.sort_values(sort_col, ascending=asc, na_position="last").head(50)
-
-        src_label = "" if src == "전체" else f" · {src}"
-        st.subheader(f"{dim}별 실적 상위 50개 (정렬: {sort_opt}{src_label})")
-        disp = [
-            dim_col,
-            "집행일수", "지표_광고비", "지표_총결제거래액", "지표_노출수", "지표_클릭수",
-            "CTR", "CPC", "CPM", "CPUV", "UV/클릭",
-            "순결제ROAS", "총결제ROAS", "CR(순)", "객단가(순)",
-            "첫구매CPA", "가입CPA", "가입률", "첫구매율",
-            "신규비중", "윈백비중",
-        ]
-        tbl = camp_df[[c for c in disp if c in camp_df.columns]].copy()
         fmt_map = {
             "지표_광고비": fmt_money, "지표_총결제거래액": fmt_money,
             "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
@@ -1219,13 +1249,35 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             "가입률": lambda v: fmt_pct(v, 3), "첫구매율": lambda v: fmt_pct(v, 3),
             "신규비중": fmt_pct, "윈백비중": fmt_pct,
         }
-        tbl_fmt = tbl.copy()
-        for c, fn in fmt_map.items():
-            if c in tbl_fmt.columns:
-                tbl_fmt[c] = tbl_fmt[c].apply(fn)
-        # 지표명에서 '구분_' '지표_' 접두어 제거
-        tbl_fmt.columns = [c.replace("구분_", "").replace("지표_", "") for c in tbl_fmt.columns]
-        st.dataframe(tbl_fmt, use_container_width=True, hide_index=True)
+        disp = [
+            "구분_캠페인", "구분_매체명", "카테고리",
+            "집행일수", "지표_광고비", "지표_총결제거래액", "지표_노출수", "지표_클릭수",
+            "CTR", "CPC", "CPM", "CPUV", "UV/클릭",
+            "순결제ROAS", "총결제ROAS", "CR(순)", "객단가(순)",
+            "첫구매CPA", "가입CPA", "가입률", "첫구매율",
+            "신규비중", "윈백비중",
+        ]
+
+        def render_camp_table(src_name, sort_label, sort_col):
+            st.markdown(f"##### 캠페인별 실적 상위 50개 ({src_name}) · {sort_label} 정렬")
+            sub = dff[dff["구분_비용출처"] == src_name]
+            if sub.empty:
+                st.info(f"{src_name} 데이터가 없습니다.")
+                return
+            cdf = agg(sub, ["구분_캠페인"])
+            cdf = cdf.sort_values(sort_col, ascending=False, na_position="last").head(50)
+            tbl = cdf[[c for c in disp if c in cdf.columns]].copy()
+            for c, fn in fmt_map.items():
+                if c in tbl.columns:
+                    tbl[c] = tbl[c].apply(fn)
+            tbl.columns = [c.replace("구분_", "").replace("지표_", "") for c in tbl.columns]
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+        render_camp_table("거래액확대", "순결제ROAS", "순결제ROAS")
+        st.divider()
+        render_camp_table("신규고객확대", "가입률", "가입률")
+        st.divider()
+        render_camp_table("인지도제고", "가입률", "가입률")
 
     # ── 효율 사분면 분석 (BCG Matrix 스타일)
     with tab_quad:
@@ -1387,8 +1439,8 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         weekly = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
 
         metric_options = {
-            "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
-            "순결제ROAS": "순결제ROAS", "CTR": "CTR", "CPM": "CPM",
+            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+            "CTR": "CTR", "CPM": "CPM",
             "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
             "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
         }
@@ -1396,13 +1448,15 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         with col_a:
             sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="wk_metric")
         with col_b:
-            use_ma = st.checkbox("4주 이동평균", value=True, key="wk_ma")
+            use_ma = st.checkbox("4주 이동평균", value=True, key="wk_ma",
+                                 help="최근 4주(당주+직전 3주)의 평균을 이어 그린 점선. "
+                                      "주 단위 등락을 완만하게 만들어 추세를 보기 쉽게 합니다.")
         with col_c:
             wk_sameday = st.checkbox("동요일 전년비", value=True, key="wk_sameday")
 
         sel_col = metric_options[sel_label]
 
-        week_labels = {w: f"W{w:02d}" for w in range(1, 54)}
+        week_labels = {w: week_of_month_label(cur_year, w) for w in range(1, 54)}
         fig = yoy_overlay_fig(
             weekly, "주차번호", sel_col,
             f"주차별 {sel_label} (YoY — W01~W53)",
@@ -1421,7 +1475,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
 
         weekly_targets = (report_targets or {}).get("weekly", {})
         wk_tbl = summary_table(weekly_cur, weekly_prev, "주차번호",
-                               lambda w: f"W{int(w):02d}", targets, period_type="주차",
+                               lambda w: week_of_month_label(cur_year, w), targets, period_type="주차",
                                targets_per_period=weekly_targets or None, cur_year=cur_year)
         # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
         st.dataframe(
@@ -1449,7 +1503,8 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
 
         if anomaly_rows:
             anom_df = pd.concat(anomaly_rows)
-            anom_df["주차"] = anom_df["주차번호"].apply(lambda w: f"W{w:02d}")
+            anom_df["주차"] = anom_df.apply(
+                lambda r: week_of_month_label(r["연도"], r["주차번호"]), axis=1)
             anom_df["변화율"] = anom_df["변화율"].apply(lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–")
             fmt_fn = fmt_roas if "ROAS" in sel_label else (
                 fmt_pct if sel_label in ("CTR", "CR(순)") else
@@ -1467,7 +1522,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.markdown("**요일 × 월별 성과 히트맵** — 어느 요일/월에 성과가 집중되는지 파악합니다.")
 
         hm_metric_opts = {
-            "광고비": "지표_광고비", "순결제ROAS": "순결제ROAS",
+            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비",
             "CTR": "CTR", "CPM": "CPM", "CR(순)": "CR(순)",
             "UV": "지표_UV(전체)", "거래액": "지표_총결제거래액",
         }
@@ -1550,8 +1605,8 @@ def page_daily(df: pd.DataFrame, targets: dict):
 
     # 지표 선택
     metric_options = {
-        "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
-        "순결제ROAS": "순결제ROAS", "CTR": "CTR", "CPM": "CPM",
+        "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+        "CTR": "CTR", "CPM": "CPM",
         "UV": "지표_UV(전체)", "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
         "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
     }
@@ -1823,10 +1878,7 @@ def main():
         ], label_visibility="collapsed")
 
     if page == "📊 전체 요약":
-        # 날짜 범위 카드는 전체 요약에서만 노출
-        filtered = date_range_filter(pre_date_filtered)
-        st.sidebar.caption(f"날짜 필터 적용 후: {len(filtered):,}행")
-        page_summary(filtered, targets, report_targets, full_df=pre_date_filtered)
+        page_summary(pre_date_filtered, targets, report_targets)
     elif page == "📆 일별 성과":
         page_daily(pre_date_filtered, targets)
     elif page == "📡 매체별 성과":
