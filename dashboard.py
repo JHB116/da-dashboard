@@ -467,16 +467,22 @@ def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
                 st.session_state["dr_preset"] = label
                 st.rerun()
 
+    d_min = data_min.date()
+    d_max = data_max.date()
+    # clamp session state values to valid data range before passing to date_input
+    clamped_start = max(d_min, min(d_max, st.session_state["dr_start"]))
+    clamped_end   = max(d_min, min(d_max, st.session_state["dr_end"]))
+
     with cols[5]:
-        new_start = st.date_input("시작일", value=st.session_state["dr_start"],
-                                  min_value=data_min.date(), max_value=data_max.date(),
+        new_start = st.date_input("시작일", value=clamped_start,
+                                  min_value=d_min, max_value=d_max,
                                   key="dr_start_input", label_visibility="collapsed")
     with cols[6]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
     with cols[7]:
-        new_end = st.date_input("종료일", value=st.session_state["dr_end"],
-                                min_value=data_min.date(), max_value=data_max.date(),
+        new_end = st.date_input("종료일", value=clamped_end,
+                                min_value=d_min, max_value=d_max,
                                 key="dr_end_input", label_visibility="collapsed")
 
     if new_start != st.session_state["dr_start"] or new_end != st.session_state["dr_end"]:
