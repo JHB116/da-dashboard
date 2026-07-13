@@ -499,53 +499,54 @@ def date_range_filter(df: pd.DataFrame) -> pd.DataFrame:
 # 사이드바 필터
 # ───────────────────────────────────────────────
 def sidebar_filters(df: pd.DataFrame):
-    st.sidebar.header("필터")
+    """호출자가 st.sidebar 컨테이너 컨텍스트 안에서 호출한다고 가정 (st.* 사용)."""
+    st.header("필터")
 
     years = sorted(df["연도"].unique())
-    sel_year = st.sidebar.multiselect("연도", years, default=years)
+    sel_year = st.multiselect("연도", years, default=years)
 
     months = list(range(1, 13))
-    sel_month = st.sidebar.multiselect("월", months, default=months,
-                                       format_func=lambda x: f"{x}월")
-    st.sidebar.divider()
+    sel_month = st.multiselect("월", months, default=months,
+                               format_func=lambda x: f"{x}월")
+    st.divider()
 
-    cost_mode = st.sidebar.radio("비용출처 모드",
-                                 ["TOTAL", "TOTAL(서비스비용제외)", "개별 선택"], index=0)
+    cost_mode = st.radio("비용출처 모드",
+                         ["TOTAL", "TOTAL(서비스비용제외)", "개별 선택"], index=0)
     sel_sources = None
     if cost_mode == "개별 선택":
         all_sources = sorted(df["구분_비용출처"].dropna().unique())
-        sel_sources = st.sidebar.multiselect("비용출처", all_sources, default=all_sources)
+        sel_sources = st.multiselect("비용출처", all_sources, default=all_sources)
 
-    st.sidebar.divider()
+    st.divider()
 
     if df["대상여부"].nunique() > 1:
         target_opts = sorted(df["대상여부"].dropna().unique())
-        sel_target = st.sidebar.multiselect("대상여부", target_opts, default=["대상"])
+        sel_target = st.multiselect("대상여부", target_opts, default=["대상"])
     else:
         sel_target = list(df["대상여부"].dropna().unique())
 
     if df["구분_광고유형"].nunique() > 1:
         ad_types = sorted(df["구분_광고유형"].dropna().unique())
-        sel_adtype = st.sidebar.multiselect("광고유형", ad_types, default=ad_types)
+        sel_adtype = st.multiselect("광고유형", ad_types, default=ad_types)
     else:
         sel_adtype = list(df["구분_광고유형"].dropna().unique())
 
     channels = sorted(df["구분_채널"].dropna().unique())
-    sel_channel = st.sidebar.multiselect("채널", channels, default=channels)
+    sel_channel = st.multiselect("채널", channels, default=channels)
 
     media_list = sorted(df["구분_매체명"].dropna().unique())
-    sel_media = st.sidebar.multiselect("매체명", media_list, default=media_list)
+    sel_media = st.multiselect("매체명", media_list, default=media_list)
 
     devices = sorted(df["구분_디바이스"].dropna().unique())
-    sel_device = st.sidebar.multiselect("디바이스", devices, default=devices)
+    sel_device = st.multiselect("디바이스", devices, default=devices)
 
-    st.sidebar.divider()
+    st.divider()
 
     depts = sorted(df["구분_부서명"].dropna().unique())
-    sel_dept = st.sidebar.multiselect("부서명", depts, default=depts)
+    sel_dept = st.multiselect("부서명", depts, default=depts)
 
     cats = sorted(df["카테고리"].dropna().unique())
-    sel_cat = st.sidebar.multiselect("카테고리", cats, default=cats)
+    sel_cat = st.multiselect("카테고리", cats, default=cats)
 
     return dict(
         years=sel_year, months=sel_month,
@@ -631,15 +632,15 @@ def render_kpi_card(label: str, value: str, sub_label: str = "", sub_value: str 
         </div>"""
     sub_html = ""
     if sub_label:
-        sub_html = f'<div style="margin-top:4px;font-size:12px;color:#64748B;">{sub_label} <b style="color:#334155;">{sub_value}</b></div>'
+        sub_html = f'<div style="margin-top:2px;font-size:11px;color:#64748B;">{sub_label} <b style="color:#334155;">{sub_value}</b></div>'
     elif sub_value:
         # sub_value only (e.g. YoY HTML span)
-        sub_html = f'<div style="margin-top:4px;">{sub_value}</div>'
+        sub_html = f'<div style="margin-top:2px;">{sub_value}</div>'
     st.markdown(f"""
-    <div style="background:white;border:1px solid #E2E8F0;border-radius:12px;padding:16px 18px;
-                box-shadow:0 1px 4px rgba(0,0,0,.06);min-height:90px;">
-      <div style="font-size:12px;color:#64748B;font-weight:500;margin-bottom:4px;">{label}</div>
-      <div style="font-size:22px;font-weight:700;color:#0F172A;line-height:1.2;">{value}</div>
+    <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:9px 12px;
+                box-shadow:0 1px 3px rgba(0,0,0,.05);min-height:62px;">
+      <div style="font-size:11px;color:#64748B;font-weight:500;margin-bottom:2px;">{label}</div>
+      <div style="font-size:17px;font-weight:700;color:#0F172A;line-height:1.15;">{value}</div>
       {sub_html}
       {progress_html}
     </div>""", unsafe_allow_html=True)
@@ -929,16 +930,12 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     kpi_cards(df, targets, full_df=full_df)
     st.divider()
 
-    # ── TOP3 / 개선 우선순위 / 알림
-    render_top3_section(df, targets)
-    st.divider()
-
     # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
     main_tabs = st.tabs(["📋 TOTAL(서비스비용제외)", "📋 TOTAL", "📋 거래액확대", "📋 신규확대/인지도",
                           "💰 예산 페이싱", "🧩 거래액 구성"])
     tab_names = ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"]
 
-    sameday = st.sidebar.checkbox("동요일 기준 전년비", value=True, key="sameday_toggle")
+    sameday = st.checkbox("동요일 기준 전년비", value=True, key="sameday_toggle")
 
     monthly_targets = (report_targets or {}).get("monthly", {})
     for i, tname in enumerate(tab_names):
@@ -1133,57 +1130,79 @@ def page_media(df: pd.DataFrame):
 # ───────────────────────────────────────────────
 # 페이지 3: 캠페인별 성과
 # ───────────────────────────────────────────────
-def page_campaign(df: pd.DataFrame):
+def page_campaign(df: pd.DataFrame, targets: dict = None):
+    if targets is None:
+        targets = {}
     st.header("🎯 캠페인별 성과")
     if df.empty:
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
+    # ── 잘 되는 캠페인 / 개선 우선순위 / 알림 (전체 요약에서 이동)
+    render_top3_section(df, targets)
+    st.divider()
+
     tab_rank, tab_quad = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면"])
 
     with tab_rank:
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            search = st.text_input("캠페인명 검색", placeholder="키워드 입력...")
-        with c2:
-            sort_opt = st.selectbox("정렬 기준",
-                                    ["광고비", "노출수", "클릭수", "CTR", "CPM",
-                                     "순결제ROAS", "CR(순)", "첫구매CPA", "객단가(순)"])
+        # 그래프: 부서별 · 카테고리(상품)별 순결제ROAS
+        g1, g2 = st.columns(2)
+        with g1:
+            by_dept = agg(df, ["구분_부서명"])
+            by_dept = by_dept[(by_dept["지표_광고비"] > 0) & by_dept["순결제ROAS"].notna()]
+            by_dept = by_dept.sort_values("순결제ROAS")
+            fig = px.bar(by_dept, x="순결제ROAS", y="구분_부서명", orientation="h",
+                         color_discrete_sequence=["#2563EB"])
+            fig.update_xaxes(tickformat=".0%")
+            base_layout(fig, "부서별 순결제ROAS", 350)
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        with g2:
+            by_cat = agg(df, ["카테고리"])
+            by_cat = by_cat[(by_cat["지표_광고비"] > 0) & by_cat["순결제ROAS"].notna()]
+            by_cat = by_cat.sort_values("순결제ROAS").tail(15)
+            fig2 = px.bar(by_cat, x="순결제ROAS", y="카테고리", orientation="h",
+                          color_discrete_sequence=["#16A34A"])
+            fig2.update_xaxes(tickformat=".0%")
+            base_layout(fig2, "카테고리(상품)별 순결제ROAS", 350)
+            fig2.update_layout(showlegend=False)
+            st.plotly_chart(fig2, use_container_width=True)
 
+        # 컨트롤: 검색 / 기준(캠페인·매체·상품·비용출처) / 비용출처 / 정렬
+        c1, c2, c3, c4 = st.columns([2, 1.2, 1.2, 1.2])
+        with c1:
+            search = st.text_input("검색", placeholder="키워드 입력...")
+        with c2:
+            dim = st.selectbox("기준", ["캠페인", "매체", "상품(카테고리)", "비용출처"])
+        with c3:
+            src = st.selectbox("비용출처", ["전체", "거래액확대", "신규고객확대", "인지도제고"])
+        with c4:
+            sort_opt = st.selectbox("정렬 기준",
+                                    ["순결제ROAS", "광고비", "거래액", "노출수", "클릭수",
+                                     "CTR", "CPM", "CR(순)", "첫구매CPA", "객단가(순)"])
+
+        dim_map = {"캠페인": "구분_캠페인", "매체": "구분_매체명",
+                   "상품(카테고리)": "카테고리", "비용출처": "구분_비용출처"}
+        dim_col = dim_map[dim]
         sort_map = {
-            "광고비": "지표_광고비", "노출수": "지표_노출수", "클릭수": "지표_클릭수",
-            "CTR": "CTR", "CPM": "CPM", "순결제ROAS": "순결제ROAS",
+            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+            "노출수": "지표_노출수", "클릭수": "지표_클릭수", "CTR": "CTR", "CPM": "CPM",
             "CR(순)": "CR(순)", "첫구매CPA": "첫구매CPA", "객단가(순)": "객단가(순)",
         }
         sort_col = sort_map[sort_opt]
 
-        camp_df = agg(df, ["구분_캠페인", "구분_비용출처", "구분_매체명"])
+        dfx = df if src == "전체" else df[df["구분_비용출처"] == src]
+        camp_df = agg(dfx, [dim_col])
         if search:
-            camp_df = camp_df[camp_df["구분_캠페인"].str.contains(search, na=False)]
-        camp_df = camp_df.sort_values(sort_col, ascending=False, na_position="last").head(50)
+            camp_df = camp_df[camp_df[dim_col].astype(str).str.contains(search, na=False)]
+        asc = sort_opt in ("첫구매CPA",)
+        camp_df = camp_df.sort_values(sort_col, ascending=asc, na_position="last").head(50)
 
-        c3, c4 = st.columns(2)
-        with c3:
-            by_src = agg(df, ["구분_비용출처"]).sort_values("지표_광고비", ascending=False)
-            by_src = by_src[by_src["지표_광고비"] > 0]
-            fig = px.bar(by_src, x="구분_비용출처", y="지표_광고비",
-                         color="구분_비용출처", color_discrete_map=PURPOSE_COLORS)
-            base_layout(fig, "비용출처별 광고비", 350)
-            fig.update_layout(showlegend=False, xaxis_tickangle=-20)
-            st.plotly_chart(fig, use_container_width=True)
-
-        with c4:
-            by_dept = agg(df, ["구분_부서명"]).sort_values("지표_광고비", ascending=False)
-            by_dept = by_dept[by_dept["지표_광고비"] > 0]
-            fig2 = px.bar(by_dept, x="구분_부서명", y="지표_광고비")
-            base_layout(fig2, "부서별 광고비", 350)
-            fig2.update_layout(xaxis_tickangle=-20)
-            st.plotly_chart(fig2, use_container_width=True)
-
-        st.subheader(f"캠페인별 실적 상위 50개 (정렬: {sort_opt})")
+        src_label = "" if src == "전체" else f" · {src}"
+        st.subheader(f"{dim}별 실적 상위 50개 (정렬: {sort_opt}{src_label})")
         disp = [
-            "구분_캠페인", "구분_비용출처", "구분_매체명",
-            "집행일수", "지표_광고비", "지표_노출수", "지표_클릭수",
+            dim_col,
+            "집행일수", "지표_광고비", "지표_총결제거래액", "지표_노출수", "지표_클릭수",
             "CTR", "CPC", "CPM", "CPUV", "UV/클릭",
             "순결제ROAS", "총결제ROAS", "CR(순)", "객단가(순)",
             "첫구매CPA", "가입CPA", "가입률", "첫구매율",
@@ -1191,7 +1210,8 @@ def page_campaign(df: pd.DataFrame):
         ]
         tbl = camp_df[[c for c in disp if c in camp_df.columns]].copy()
         fmt_map = {
-            "지표_광고비": fmt_money, "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
+            "지표_광고비": fmt_money, "지표_총결제거래액": fmt_money,
+            "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
             "CTR": fmt_pct, "CPC": fmt_money, "CPM": fmt_money, "CPUV": fmt_money,
             "UV/클릭": fmt_pct, "순결제ROAS": fmt_roas, "총결제ROAS": fmt_roas,
             "CR(순)": lambda v: fmt_pct(v, 3), "객단가(순)": fmt_money,
@@ -1203,6 +1223,8 @@ def page_campaign(df: pd.DataFrame):
         for c, fn in fmt_map.items():
             if c in tbl_fmt.columns:
                 tbl_fmt[c] = tbl_fmt[c].apply(fn)
+        # 지표명에서 '구분_' '지표_' 접두어 제거
+        tbl_fmt.columns = [c.replace("구분_", "").replace("지표_", "") for c in tbl_fmt.columns]
         st.dataframe(tbl_fmt, use_container_width=True, hide_index=True)
 
     # ── 효율 사분면 분석 (BCG Matrix 스타일)
@@ -1732,13 +1754,28 @@ def page_creative(df: pd.DataFrame):
 def main():
     st.title("📊 DA 광고 실적 대시보드")
 
-    uploaded = st.sidebar.file_uploader(
-        "데이터 파일 업로드", type=["csv", "xlsx", "xlsb"],
-        help="DA 광고 로데이터 파일을 업로드하세요. (CSV / Excel)",
-    )
+    # 사이드바 순서: ① 페이지  ② 필터  ③ 파일 업로드
+    page_box   = st.sidebar.container()
+    filter_box = st.sidebar.container()
+    upload_box = st.sidebar.container()
+
+    # ── ③ 파일 업로드 (맨 아래)
+    with upload_box:
+        st.divider()
+        st.subheader("📁 파일 업로드")
+        uploaded = st.file_uploader(
+            "데이터 파일", type=["csv", "xlsx", "xlsb"],
+            help="DA 광고 로데이터 파일을 업로드하세요. (CSV / Excel)",
+            key="data_uploader",
+        )
+        report_file = st.file_uploader(
+            "목표 파일 (보고서 엑셀)", type=["xlsx"],
+            help="월별/주차별 목표가 있는 보고서 엑셀을 업로드하면 자동으로 목표비를 계산합니다.",
+            key="report_uploader",
+        )
 
     if uploaded is None:
-        st.info("👈 사이드바에서 데이터 파일을 업로드해주세요.")
+        st.info("👈 사이드바 하단 '파일 업로드'에서 데이터 파일을 업로드해주세요.")
         st.markdown("""
         **지원 파일 형식**
         - CSV (UTF-8, UTF-8-BOM, CP949, EUC-KR)
@@ -1751,52 +1788,57 @@ def main():
     with st.spinner("데이터 로딩 중..."):
         df = load_data(uploaded.read(), uploaded.name)
 
-    st.sidebar.caption(
-        f"총 {len(df):,}행 | {df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
-    )
-
-    # 보고서 파일에서 목표 로드
-    report_file = st.sidebar.file_uploader(
-        "목표 파일 업로드 (보고서 엑셀)", type=["xlsx"],
-        help="월별/주차별 목표가 있는 보고서 엑셀을 업로드하면 자동으로 목표비를 계산합니다.",
-        key="report_uploader",
-    )
     report_targets = {}
     if report_file is not None:
         with st.spinner("목표 파일 로딩 중..."):
             report_targets = load_targets_from_report(report_file.read())
-        st.sidebar.success("✅ 목표 파일 로드 완료")
 
-    filters = sidebar_filters(df)
-    pre_date_filtered = filter_df(df, filters)  # 날짜 범위 필터 전 (전년비 계산용)
+    # 업로드 박스 하단에 로드 상태 표시
+    with upload_box:
+        st.caption(
+            f"총 {len(df):,}행 | {df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
+        )
+        if report_file is not None:
+            n_m = sum(len(v) for v in report_targets.get("monthly", {}).values())
+            n_w = len(report_targets.get("weekly", {}))
+            if n_m or n_w:
+                st.success(f"✅ 목표 로드: 월별 {n_m}건 · 주차별 {n_w}건")
+            else:
+                st.warning("⚠️ 목표 파일에서 목표를 찾지 못했습니다. 시트/열 구조를 확인해주세요.")
 
-    # ── 날짜 범위 필터 (페이지 상단)
-    filtered = date_range_filter(pre_date_filtered)
+    # ── ② 필터
+    with filter_box:
+        filters = sidebar_filters(df)
 
-    st.sidebar.caption(f"필터 적용 후: {len(filtered):,}행")
+    pre_date_filtered = filter_df(df, filters)  # 날짜 범위 필터 전 (전년비/타 페이지용)
 
     targets = get_targets()
 
-    st.sidebar.divider()
-    page = st.sidebar.radio("페이지", [
-        "📊 전체 요약", "📆 일별 성과", "📡 매체별 성과", "🎯 캠페인별 성과",
-        "📅 주차별 성과", "🔍 퍼널 & 전환 분석", "🎨 소재 상세",
-    ])
+    # ── ① 페이지 선택 (맨 위)
+    with page_box:
+        st.subheader("📄 페이지")
+        page = st.radio("페이지", [
+            "📊 전체 요약", "📆 일별 성과", "📡 매체별 성과", "🎯 캠페인별 성과",
+            "📅 주차별 성과", "🔍 퍼널 & 전환 분석", "🎨 소재 상세",
+        ], label_visibility="collapsed")
 
     if page == "📊 전체 요약":
+        # 날짜 범위 카드는 전체 요약에서만 노출
+        filtered = date_range_filter(pre_date_filtered)
+        st.sidebar.caption(f"날짜 필터 적용 후: {len(filtered):,}행")
         page_summary(filtered, targets, report_targets, full_df=pre_date_filtered)
     elif page == "📆 일별 성과":
-        page_daily(filtered, targets)
+        page_daily(pre_date_filtered, targets)
     elif page == "📡 매체별 성과":
-        page_media(filtered)
+        page_media(pre_date_filtered)
     elif page == "🎯 캠페인별 성과":
-        page_campaign(filtered)
+        page_campaign(pre_date_filtered, targets)
     elif page == "📅 주차별 성과":
-        page_weekly(filtered, targets, report_targets)
+        page_weekly(pre_date_filtered, targets, report_targets)
     elif page == "🔍 퍼널 & 전환 분석":
-        page_funnel(filtered)
+        page_funnel(pre_date_filtered)
     elif page == "🎨 소재 상세":
-        page_creative(filtered)
+        page_creative(pre_date_filtered)
 
 
 if st.runtime.exists():
