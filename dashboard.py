@@ -128,6 +128,12 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
             + df["주차번호"].astype(str).str.zfill(2)
         )
 
+    # 순결제거래액 = 순결제거래액(첫구매) + 순결제거래액(윈백) (직접 컬럼이 없으면 파생)
+    if "지표_순결제거래액" not in df.columns:
+        df["지표_순결제거래액"] = (
+            df.get("지표_순결제거래액(첫구매)", 0) + df.get("지표_순결제거래액(윈백)", 0)
+        )
+
     return df
 
 
@@ -208,8 +214,8 @@ def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     d["CTR"]        = safe_div(d["지표_클릭수"],                        d["지표_노출수"])
     d["CPC"]        = safe_div(d["지표_광고비"],                        d["지표_클릭수"])
-    d["순결제ROAS"]  = safe_div(d["지표_총결제거래액"],                   d["지표_광고비"])
-    d["총결제ROAS"]  = safe_div(d["지표_순결제거래액(첫구매)"],            d["지표_광고비"])
+    d["순결제ROAS"]  = safe_div(d["지표_순결제거래액"],                   d["지표_광고비"])
+    d["총결제ROAS"]  = safe_div(d["지표_총결제거래액"],                   d["지표_광고비"])
     d["가입CPA"]    = safe_div(d["지표_광고비"],                        d["지표_가입회원"])
     d["첫구매CPA"]  = safe_div(d["지표_광고비"],                        d["지표_순결제고객수(첫구매)"])
     d["가입률"]     = safe_div(d["지표_가입회원"],                       d["지표_UV(전체)"])
@@ -219,7 +225,7 @@ def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
     d["UV/클릭"]    = safe_div(d["지표_UV(전체)"],                      d["지표_클릭수"])
     d["CR(순)"]     = safe_div(d["지표_순결제고객수"],                   d["지표_UV(전체)"])
     d["CR(총)"]     = safe_div(d["지표_총결제고객수"],                   d["지표_UV(전체)"])
-    d["객단가(순)"] = safe_div(d["지표_총결제거래액"],                    d["지표_순결제고객수"])
+    d["객단가(순)"] = safe_div(d["지표_순결제거래액"],                    d["지표_순결제고객수"])
     d["객단가(총)"] = safe_div(d["지표_총결제거래액"],                    d["지표_총결제고객수"])
     d["순결제비중"]  = safe_div(d["지표_순결제고객수"],                   d["지표_총결제고객수"])
     d["신규비중"]   = safe_div(d["지표_당년신규순결제거래액"],              d["지표_총결제거래액"])
@@ -275,7 +281,7 @@ def chg_style(v):
 
 # 전체요약/일별 공통 그래프 지표 (표기 순서)
 SUMMARY_CHART_METRICS = {
-    "광고비": "지표_광고비", "거래액(순결제)": "지표_총결제거래액",
+    "광고비": "지표_광고비", "거래액(순결제)": "지표_순결제거래액",
     "ROAS(순결제)": "순결제ROAS", "UV": "지표_UV(전체)", "CR(총)": "CR(총)",
     "CTR": "CTR", "CPC": "CPC", "가입률": "가입률", "가입CPA": "가입CPA",
     "첫구매CPA": "첫구매CPA", "신규거래액": "지표_당년신규순결제거래액",
@@ -289,9 +295,9 @@ DAILY_DETAIL_SPEC = [
     ("객단가", "객단가(순)", "money"), ("결제고객수", "지표_순결제고객수", "num"),
     ("CPM", "CPM", "money"), ("CPC", "CPC", "money"), ("CPUV", "CPUV", "money"),
     ("UV", "지표_UV(전체)", "num"), ("광고비", "지표_광고비", "money"),
-    ("순결제매출", "지표_총결제거래액", "money"), ("순결제ROAS", "순결제ROAS", "roas"),
+    ("순결제거래액", "지표_순결제거래액", "money"), ("순결제ROAS", "순결제ROAS", "roas"),
     ("순결제비중(%)", "순결제비중", "pct"),
-    ("총결제매출", "지표_순결제거래액(첫구매)", "money"), ("총매출ROAS", "총결제ROAS", "roas"),
+    ("총결제거래액", "지표_총결제거래액", "money"), ("총결제ROAS", "총결제ROAS", "roas"),
     ("UV/클릭(%)", "UV/클릭", "pct"), ("CR(총)", "CR(총)", "pct3"),
     ("객단가(총)", "객단가(총)", "money"), ("총결제고객수", "지표_총결제고객수", "num"),
     ("가입률", "가입률", "pct3"), ("가입수", "지표_가입회원", "num"),
@@ -339,7 +345,7 @@ AGG_COLS = [
     "지표_노출수", "지표_클릭수", "지표_광고비",
     "지표_UV(전체)", "지표_UV(회원)", "지표_PV(회원)", "지표_가입회원",
     "지표_총결제고객수(첫구매)", "지표_순결제고객수",
-    "지표_총결제거래액(첫구매)", "지표_총결제거래액",
+    "지표_총결제거래액(첫구매)", "지표_총결제거래액", "지표_순결제거래액",
     "지표_당년신규순결제고객수", "지표_당년신규순결제거래액",
     "지표_총결제고객수", "지표_순결제고객수(첫구매)", "지표_순결제거래액(첫구매)",
     "지표_순결제고객수(윈백)", "지표_순결제거래액(윈백)",
@@ -466,13 +472,13 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
         gval = r[group_col]
         label = group_label_fn(gval)
         spend = r.get("지표_광고비", np.nan)
-        rev   = r.get("지표_총결제거래액", np.nan)
+        rev   = r.get("지표_순결제거래액", np.nan)
         roas  = r.get("순결제ROAS", np.nan)
 
         if prev_agg is not None and not prev_agg.empty:
             prow = prev_agg[prev_agg[group_col] == gval]
             p_spend = prow["지표_광고비"].values[0] if not prow.empty else np.nan
-            p_rev   = prow["지표_총결제거래액"].values[0] if not prow.empty else np.nan
+            p_rev   = prow["지표_순결제거래액"].values[0] if not prow.empty else np.nan
             p_roas  = prow["순결제ROAS"].values[0] if not prow.empty else np.nan
         else:
             p_spend = p_rev = p_roas = np.nan
@@ -875,7 +881,7 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     tot = calc_kpi(pd.DataFrame([tot_raw])).iloc[0]
 
     spend = tot["지표_광고비"]
-    rev   = tot["지표_총결제거래액"]
+    rev   = tot["지표_순결제거래액"]
     roas  = tot["순결제ROAS"]
 
     # 동요일 전년비 계산
@@ -901,7 +907,7 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     metrics = [
         ("💰 광고비",       fmt_money(spend),                        "지표_광고비",
          targets.get("spend", 0), spend),
-        ("🛒 거래액(순결제)", fmt_money(rev),                         "지표_총결제거래액",
+        ("🛒 거래액(순결제)", fmt_money(rev),                         "지표_순결제거래액",
          targets.get("rev", 0), rev),
         ("📈 ROAS(순결제)",  fmt_roas(roas),                          "순결제ROAS",
          None, None),
@@ -1131,7 +1137,7 @@ def page_media(df: pd.DataFrame):
         return
 
     metric_options = {
-        "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+        "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_순결제거래액",
         "노출수": "지표_노출수", "클릭수": "지표_클릭수",
         "UV": "지표_UV(전체)", "CTR": "CTR", "CPC": "CPC", "CPM": "CPM", "CPUV": "CPUV",
         "총결제ROAS": "총결제ROAS", "CR(순)": "CR(순)", "CR(총)": "CR(총)",
@@ -1143,7 +1149,7 @@ def page_media(df: pd.DataFrame):
 
     # 매체별 광고비 · 순결제ROAS · 거래액 (고정 3종 그래프)
     fixed = [("광고비", "지표_광고비", False), ("순결제ROAS", "순결제ROAS", True),
-             ("거래액", "지표_총결제거래액", False)]
+             ("거래액", "지표_순결제거래액", False)]
     fcols = st.columns(3)
     for (flabel, fcol, is_ratio), fc in zip(fixed, fcols):
         with fc:
@@ -1295,7 +1301,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             dff = dff[dff["카테고리"].isin(sel_cat)]
 
         fmt_map = {
-            "지표_광고비": fmt_money, "지표_총결제거래액": fmt_money,
+            "지표_광고비": fmt_money, "지표_순결제거래액": fmt_money,
             "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
             "CTR": fmt_pct, "CPC": fmt_money, "CPM": fmt_money, "CPUV": fmt_money,
             "UV/클릭": fmt_pct, "순결제ROAS": fmt_roas, "총결제ROAS": fmt_roas,
@@ -1306,7 +1312,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         }
         disp = [
             "구분_캠페인", "구분_매체명", "카테고리",
-            "집행일수", "지표_광고비", "지표_총결제거래액", "지표_노출수", "지표_클릭수",
+            "집행일수", "지표_광고비", "지표_순결제거래액", "지표_노출수", "지표_클릭수",
             "CTR", "CPC", "CPM", "CPUV", "UV/클릭",
             "순결제ROAS", "총결제ROAS", "CR(순)", "객단가(순)",
             "첫구매CPA", "가입CPA", "가입률", "첫구매율",
@@ -1494,7 +1500,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         weekly = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
 
         metric_options = {
-            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_총결제거래액",
+            "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_순결제거래액",
             "CTR": "CTR", "CPM": "CPM",
             "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
             "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
@@ -1575,7 +1581,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         hm_metric_opts = {
             "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비",
             "CTR": "CTR", "CPM": "CPM", "CR(순)": "CR(순)",
-            "UV": "지표_UV(전체)", "거래액": "지표_총결제거래액",
+            "UV": "지표_UV(전체)", "거래액": "지표_순결제거래액",
         }
         col_x, col_y = st.columns([2, 1])
         with col_x:
