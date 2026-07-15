@@ -2001,24 +2001,32 @@ def main():
         rng_note = f"{s.date()} ~ {e.date()}"
 
     # ── ③ 내보내기 (사이드바 필터 + 현재 페이지 날짜 카드 반영)
+    # 매 rerun마다 대용량 파일을 만들지 않도록, 체크했을 때만 생성한다.
     with export_box:
         st.divider()
         st.subheader("📤 내보내기")
         st.caption(f"기간: {rng_note} · {len(export_df):,}행")
-        json_bytes = export_df.to_json(
-            orient="records", force_ascii=False, date_format="iso", indent=2
-        ).encode("utf-8")
-        st.download_button(
-            "🧾 JSON 출력", data=json_bytes,
-            file_name="da_filtered.json", mime="application/json",
-            use_container_width=True, key="export_json",
-        )
-        html_doc = build_html_report(export_df)
-        st.download_button(
-            "🌐 HTML 출력", data=html_doc.encode("utf-8"),
-            file_name="da_filtered.html", mime="text/html",
-            use_container_width=True, key="export_html",
-        )
+        if st.checkbox("내보내기 파일 준비", key="export_prepare"):
+            try:
+                json_bytes = export_df.to_json(
+                    orient="records", force_ascii=False, date_format="iso", indent=2
+                ).encode("utf-8")
+                st.download_button(
+                    "🧾 JSON 출력", data=json_bytes,
+                    file_name="da_filtered.json", mime="application/json",
+                    use_container_width=True, key="export_json",
+                )
+                HTML_MAX = 5000
+                html_doc = build_html_report(export_df.head(HTML_MAX))
+                if len(export_df) > HTML_MAX:
+                    st.caption(f"※ HTML은 상위 {HTML_MAX:,}행만 포함(용량 보호). JSON은 전체 포함.")
+                st.download_button(
+                    "🌐 HTML 출력", data=html_doc.encode("utf-8"),
+                    file_name="da_filtered.html", mime="text/html",
+                    use_container_width=True, key="export_html",
+                )
+            except Exception as e:
+                st.warning(f"내보내기 생성 중 오류: {e}")
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
