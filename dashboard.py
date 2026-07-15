@@ -1100,10 +1100,20 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         use_container_width=True, hide_index=True,
     )
 
-    # 지표별 추이 차트 (선형, 월/주/일 단위 선택 — 지표는 전부 노출)
-    st.markdown("**📈 지표별 추이** <span style='font-size:11px;color:#64748B;'>연도별 오버레이</span>",
-                unsafe_allow_html=True)
-    gran = st.radio("단위", ["월", "주", "일"], horizontal=True, key=f"sum_g_{tab_key}")
+
+def _render_trend_grid(df, targets):
+    """지표별 추이 그리드 — 페이지당 1회만 렌더(메모리 보호). 비용출처는 선택식."""
+    st.markdown("#### 📈 지표별 추이")
+    c1, c2 = st.columns([2, 2])
+    with c1:
+        src = st.radio("비용출처", ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"],
+                       horizontal=True, key="sum_trend_src")
+    with c2:
+        gran = st.radio("단위", ["월", "주", "일"], horizontal=True, key="sum_trend_gran")
+    df_tab = _filter_cost(df, src)
+    if df_tab.empty:
+        st.info("해당 비용출처 데이터가 없습니다.")
+        return
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), 2):
         ccols = st.columns(2)
@@ -1115,7 +1125,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
                     fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
                                   annotation_text="목표")
                 st.plotly_chart(fig, use_container_width=True,
-                                key=f"sum_chart_{tab_key}_{col}_{gran}")
+                                key=f"sum_chart_{col}_{gran}")
 
 
 def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
@@ -1146,6 +1156,10 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
             df_tab = _filter_cost(df, tname)
             _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday,
                                     monthly_targets=monthly_targets, tab_name=tname)
+
+    # 지표별 추이 그리드(1회만 렌더) — 탭 4개 × 11차트(=44)를 11차트로 축소해 메모리 보호
+    st.divider()
+    _render_trend_grid(df, targets)
 
     # ── 예산 페이싱
     with main_tabs[4]:
