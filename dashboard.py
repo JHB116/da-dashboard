@@ -367,7 +367,8 @@ def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
 # ───────────────────────────────────────────────
 def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
                     title: str, ticklabels: dict | None = None,
-                    height: int = 380, ma_window: int = 0) -> go.Figure:
+                    height: int = 380, ma_window: int = 0,
+                    textfmt: str | None = None) -> go.Figure:
     """
     연도별 라인을 동일 x축(period_col)에 겹쳐 그린다.
     period_col: 月(1~12) 또는 주차번호(1~53) 같은 숫자형 기간 컬럼
@@ -381,9 +382,12 @@ def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
         color = YEAR_COLORS[i % len(YEAR_COLORS)]
         fig.add_trace(go.Scatter(
             x=sub[period_col], y=sub[val_col],
-            name=f"{yr}년", mode="lines+markers",
+            name=f"{yr}년",
+            mode="lines+markers+text" if textfmt else "lines+markers",
             line=dict(color=color, width=2),
             marker=dict(size=6),
+            texttemplate=(f"%{{y:{textfmt}}}" if textfmt else None),
+            textposition="top center", textfont=dict(size=9),
         ))
         if ma_window > 1 and len(sub) >= ma_window:
             ma = sub[val_col].rolling(ma_window, min_periods=1).mean()
@@ -404,10 +408,12 @@ def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
 def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
                      height: int = 380, tickfmt: str = None) -> go.Figure:
     """월/주/일 단위 지표 추이 (선형). 월·주는 연도별 YoY 오버레이, 일은 시계열."""
+    # 값 라벨: 월은 항상, 주는 점이 적당하므로 표시, 일은 과밀하여 생략
+    lbl_fmt = tickfmt if tickfmt else ",.0f"
     if gran == "월":
         d = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
         fig = yoy_overlay_fig(d, "월", val_col, title,
-                              ticklabels=MONTH_LABELS, height=height)
+                              ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
     elif gran == "주":
         d = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
         cur_year = int(df["연도"].max())
@@ -531,7 +537,8 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
 # ───────────────────────────────────────────────
 # 날짜 범위 필터 (페이지 상단)
 # ───────────────────────────────────────────────
-def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr") -> pd.DataFrame:
+def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
+                      default_preset: str = "이번주") -> pd.DataFrame:
     """페이지 상단 날짜 범위 선택기. 프리셋 버튼 + 직접 입력.
     key_prefix로 페이지별 독립 상태를 유지한다."""
     k_start, k_end, k_preset = f"{key_prefix}_start", f"{key_prefix}_end", f"{key_prefix}_preset"
@@ -548,12 +555,12 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr") -> pd.DataFrame:
         "올해":   (today.replace(month=1, day=1), today),
     }
 
-    # 초기 상태 — 기본값: 이번주
+    # 초기 상태
     if k_start not in st.session_state:
-        ps_def = max(week_start, data_min)
-        st.session_state[k_start]  = ps_def.date()
-        st.session_state[k_end]    = min(today, data_max).date()
-        st.session_state[k_preset] = "이번주"
+        ps_def, pe_def = presets.get(default_preset, presets["이번주"])
+        st.session_state[k_start]  = max(ps_def, data_min).date()
+        st.session_state[k_end]    = min(pe_def, data_max).date()
+        st.session_state[k_preset] = default_preset
 
     cols = st.columns([1, 1, 1, 1, 0.2, 2, 0.4, 2])
     for i, (label, (ps, pe)) in enumerate(presets.items()):
@@ -594,8 +601,9 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr") -> pd.DataFrame:
 
     start = pd.Timestamp(st.session_state[k_start])
     end   = pd.Timestamp(st.session_state[k_end])
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-    return df[(df["기간_일자"] >= start) & (df["기간_일자"] <= end)]
+    out = df[(df["기간_일자"] >= start) & (df["기간_일자"] <= end)]
+    st.caption(f"📅 적용 기간: **{start.date()} ~ {end.date()}** · {len(out):,}행")
+    return out
 
 
 # 사이드바 필터
@@ -684,6 +692,26 @@ def filter_df(df: pd.DataFrame, f: dict) -> pd.DataFrame:
 # ───────────────────────────────────────────────
 # Plotly 공통 레이아웃
 # ───────────────────────────────────────────────
+def label_traces(fig, fmt=",.0f", size=9):
+    """모든 trace에 데이터값 라벨 표시. fmt은 d3 포맷(예: ',.0f', '.0%')."""
+    for tr in fig.data:
+        ttype = getattr(tr, "type", "")
+        if ttype == "bar":
+            axis = "x" if getattr(tr, "orientation", "v") == "h" else "y"
+            tr.texttemplate = f"%{{{axis}:{fmt}}}"
+            tr.textposition = "outside"
+            tr.textfont = dict(size=size)
+            tr.cliponaxis = False
+        elif ttype == "scatter":
+            m = getattr(tr, "mode", "") or "lines"
+            if "text" not in m:
+                tr.mode = (m + "+text") if "markers" in m else (m + "+markers+text")
+            tr.texttemplate = f"%{{y:{fmt}}}"
+            tr.textposition = "top center"
+            tr.textfont = dict(size=size)
+    return fig
+
+
 def base_layout(fig, title="", height=400):
     fig.update_layout(
         title=dict(text=title, font=dict(size=14, color="#1E293B")),
@@ -778,19 +806,23 @@ def render_goal_bar(targets: dict, cur_spend: float, cur_rev: float, cur_roas: f
 
 
 def render_top3_section(df: pd.DataFrame, targets: dict):
-    """잘 되는 캠페인 TOP3 / 개선 우선순위 TOP3 / 알림"""
-    camp_col = next((c for c in ["구분_캠페인명", "구분_하위캠페인", "구분_매체명"] if c in df.columns), None)
+    """잘 되는 캠페인 TOP5 / 개선 우선순위 TOP5 / 알림 (친구추가 캠페인 제외)"""
+    camp_col = next((c for c in ["구분_캠페인", "구분_캠페인명", "구분_하위캠페인", "구분_매체명"]
+                     if c in df.columns and df[c].astype(str).str.strip().ne("").any()), None)
     if camp_col is None:
         return
-    by_camp = agg(df, [camp_col]).dropna(subset=["순결제ROAS"])
+    # 친구추가 캠페인은 집계 전에 원천 제거
+    base = df[~df[camp_col].astype(str).str.contains("친구추가", na=False)]
+    by_camp = agg(base, [camp_col]).dropna(subset=["순결제ROAS"])
     by_camp = by_camp[by_camp["지표_광고비"] > 0]
-    by_camp = by_camp[~by_camp[camp_col].astype(str).str.contains("친구추가", na=False)]
+    by_camp = by_camp[by_camp[camp_col].astype(str).str.strip().ne("")]
     by_camp = by_camp.rename(columns={camp_col: "구분_캠페인명"})
 
     t_roas = targets.get("roas", 0)
+    N = 5
 
-    top3 = by_camp.nlargest(3, "순결제ROAS")
-    bot3 = by_camp.nsmallest(3, "순결제ROAS")
+    top3 = by_camp.nlargest(N, "순결제ROAS")
+    bot3 = by_camp.nsmallest(N, "순결제ROAS")
 
     # 알림 자동 생성
     alerts = []
@@ -823,12 +855,12 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.markdown("**🏆 잘 되는 캠페인 TOP 3** <span style='font-size:11px;color:#64748B;'>ROAS 기준</span>", unsafe_allow_html=True)
+        st.markdown("**🏆 잘 되는 캠페인 TOP 5** <span style='font-size:11px;color:#64748B;'>ROAS 기준</span>", unsafe_allow_html=True)
         for rank, (_, row) in enumerate(top3.iterrows(), 1):
             name = str(row["구분_캠페인명"])[:35]
             roas = row["순결제ROAS"]
             spend = fmt_money(row["지표_광고비"])
-            badge_color = ["#F59E0B", "#94A3B8", "#CD7F32"][rank - 1]
+            badge_color = ["#F59E0B", "#94A3B8", "#CD7F32", "#64748B", "#94A3B8"][rank - 1]
             st.markdown(f"""
             <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -840,7 +872,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
             </div>""", unsafe_allow_html=True)
 
     with col2:
-        st.markdown("**🔧 개선 우선순위 TOP 3** <span style='font-size:11px;color:#64748B;'>ROAS 낮음</span>", unsafe_allow_html=True)
+        st.markdown("**🔧 개선 우선순위 TOP 5** <span style='font-size:11px;color:#64748B;'>ROAS 낮음</span>", unsafe_allow_html=True)
         for rank, (_, row) in enumerate(bot3.iterrows(), 1):
             name = str(row["구분_캠페인명"])[:35]
             roas = row["순결제ROAS"]
@@ -1136,56 +1168,77 @@ def page_media(df: pd.DataFrame):
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
-    metric_options = {
-        "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액": "지표_순결제거래액",
-        "노출수": "지표_노출수", "클릭수": "지표_클릭수",
-        "UV": "지표_UV(전체)", "CTR": "CTR", "CPC": "CPC", "CPM": "CPM", "CPUV": "CPUV",
-        "총결제ROAS": "총결제ROAS", "CR(순)": "CR(순)", "CR(총)": "CR(총)",
-        "객단가(순)": "객단가(순)", "첫구매CPA": "첫구매CPA", "가입CPA": "가입CPA",
-        "가입률": "가입률", "첫구매율": "첫구매율",
-    }
-
     by_media = agg(df, ["구분_매체명"]).sort_values("지표_광고비", ascending=False)
 
-    # 매체별 광고비 · 순결제ROAS · 거래액 (고정 3종 그래프)
-    fixed = [("광고비", "지표_광고비", False), ("순결제ROAS", "순결제ROAS", True),
-             ("거래액", "지표_순결제거래액", False)]
-    fcols = st.columns(3)
-    for (flabel, fcol, is_ratio), fc in zip(fixed, fcols):
-        with fc:
-            top = by_media.dropna(subset=[fcol]).sort_values(fcol, ascending=True).tail(12)
-            fig = px.bar(top, x=fcol, y="구분_매체명", orientation="h",
-                         color="구분_매체명", color_discrete_map=MEDIA_COLORS)
-            if is_ratio:
-                fig.update_xaxes(tickformat=".0%")
-            base_layout(fig, f"매체별 {flabel}", 380)
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+    # ── 매체별 월별 지표 추이 (맨 위, 지표별 그래프 다수)
+    media_metrics = {
+        "ROAS(순결제)": "순결제ROAS", "광고비": "지표_광고비", "거래액(순결제)": "지표_순결제거래액",
+        "UV": "지표_UV(전체)", "CR(총)": "CR(총)", "CTR": "CTR", "CPC": "CPC",
+        "가입률": "가입률", "가입CPA": "가입CPA", "첫구매CPA": "첫구매CPA",
+        "신규거래액": "지표_당년신규순결제거래액",
+    }
+    all_media = sorted(df["구분_매체명"].dropna().unique())
+    default_media = [m for m in ["카카오 비즈보드", "카카오모먼트", "네이버홈피드",
+                                 "네이버스마트채널", "FB/IG", "버즈빌"] if m in all_media]
+    if not default_media:
+        default_media = list(by_media["구분_매체명"].head(6))
+
+    st.subheader("매체별 월별 지표 추이")
+    sel_media_list = st.multiselect("매체 선택", all_media, default=default_media, key="media_sel")
+    if sel_media_list:
+        cur_year = int(df["연도"].max())
+        mm = agg(df[(df["구분_매체명"].isin(sel_media_list)) & (df["연도"] == cur_year)],
+                 ["구분_매체명", "월"]).sort_values("월")
+        items = list(media_metrics.items())
+        for i in range(0, len(items), 2):
+            ccols = st.columns(2)
+            for (lbl, col), cc in zip(items[i:i + 2], ccols):
+                with cc:
+                    fig = px.line(mm.dropna(subset=[col]), x="월", y=col, color="구분_매체명",
+                                  color_discrete_map=MEDIA_COLORS, markers=True)
+                    fig.update_xaxes(tickvals=list(range(1, 13)),
+                                     ticktext=[f"{m}월" for m in range(1, 13)])
+                    tf = RATIO_TICKFMT.get(col)
+                    if tf:
+                        fig.update_yaxes(tickformat=tf)
+                    base_layout(fig, f"{lbl} ({cur_year}년 월별)", 300)
+                    st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("매체를 1개 이상 선택하세요.")
 
     st.divider()
-    sel_label = st.selectbox("비교 지표 (아래 상세)", list(metric_options.keys()))
-    sel_col   = metric_options[sel_label]
+    # ── 매체별 광고비·거래액·ROAS 통합 비교 (막대+선 콤보)
+    st.subheader("매체별 광고비·거래액·ROAS 비교")
+    st.caption("막대형만 보는 대신 **막대(광고비·거래액, 좌축) + 선(순결제ROAS, 우축) 콤보**로 "
+               "규모와 효율을 한 화면에서 비교합니다.")
+    mc = by_media.dropna(subset=["순결제ROAS"]).head(15)
+    figc = make_subplots(specs=[[{"secondary_y": True}]])
+    figc.add_trace(go.Bar(x=mc["구분_매체명"], y=mc["지표_광고비"], name="광고비",
+                          marker_color="#2563EB",
+                          texttemplate="%{y:,.0f}", textposition="outside",
+                          textfont=dict(size=9)), secondary_y=False)
+    figc.add_trace(go.Bar(x=mc["구분_매체명"], y=mc["지표_순결제거래액"], name="거래액",
+                          marker_color="#93C5FD",
+                          texttemplate="%{y:,.0f}", textposition="outside",
+                          textfont=dict(size=9)), secondary_y=False)
+    figc.add_trace(go.Scatter(x=mc["구분_매체명"], y=mc["순결제ROAS"], name="순결제ROAS",
+                              mode="lines+markers+text", line=dict(color="#16A34A", width=2),
+                              texttemplate="%{y:.0%}", textposition="top center",
+                              textfont=dict(size=9)), secondary_y=True)
+    figc.update_yaxes(tickformat=".0%", secondary_y=True)
+    base_layout(figc, "매체별 광고비·거래액·순결제ROAS", 430)
+    figc.update_layout(barmode="group", xaxis_tickangle=-20)
+    st.plotly_chart(figc, use_container_width=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        top = by_media.dropna(subset=[sel_col]).sort_values(sel_col, ascending=True).tail(12)
-        fig = px.bar(top, x=sel_col, y="구분_매체명", orientation="h",
-                     color="구분_매체명", color_discrete_map=MEDIA_COLORS)
-        if sel_col in ("순결제ROAS", "총결제ROAS", "CTR", "CR(순)", "CR(총)", "가입률", "첫구매율"):
-            fig.update_xaxes(tickformat=".0%")
-        base_layout(fig, f"매체별 {sel_label}", 420)
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        valid = by_media[by_media["지표_광고비"] > 0].dropna(subset=["순결제ROAS"])
-        fig2 = px.scatter(valid, x="지표_광고비", y="순결제ROAS", size="지표_클릭수",
-                          color="구분_매체명", color_discrete_map=MEDIA_COLORS,
-                          hover_name="구분_매체명", text="구분_매체명")
-        fig2.update_traces(textposition="top center")
-        fig2.update_yaxes(tickformat=".0%")
-        base_layout(fig2, "광고비 vs 순결제ROAS (버블=클릭수)", 420)
-        st.plotly_chart(fig2, use_container_width=True)
+    # 광고비 vs ROAS 버블
+    valid = by_media[by_media["지표_광고비"] > 0].dropna(subset=["순결제ROAS"])
+    fig2 = px.scatter(valid, x="지표_광고비", y="순결제ROAS", size="지표_클릭수",
+                      color="구분_매체명", color_discrete_map=MEDIA_COLORS,
+                      hover_name="구분_매체명", text="구분_매체명")
+    fig2.update_traces(textposition="top center")
+    fig2.update_yaxes(tickformat=".0%")
+    base_layout(fig2, "광고비 vs 순결제ROAS (버블=클릭수)", 420)
+    st.plotly_chart(fig2, use_container_width=True)
 
     # 매체별 요약 테이블
     st.subheader("매체별 지표 요약")
@@ -1215,29 +1268,6 @@ def page_media(df: pd.DataFrame):
             tbl_fmt[c] = tbl_fmt[c].apply(fn)
     st.dataframe(tbl_fmt, use_container_width=True, hide_index=True)
 
-    # 매체별 월별 추이 (동기간 YoY 오버레이)
-    st.subheader("매체별 월별 추이 (동기간 YoY)")
-    sel_media_list = st.multiselect("매체 선택", sorted(df["구분_매체명"].unique()),
-                                    default=sorted(df["구분_매체명"].unique())[:5])
-    by_mm = agg(df[df["구분_매체명"].isin(sel_media_list)],
-                ["구분_매체명", "연도", "월"]).sort_values(["연도", "월"])
-
-    fig3 = go.Figure()
-    years = sorted(by_mm["연도"].unique())
-    for med in sel_media_list:
-        for i, yr in enumerate(years):
-            sub = by_mm[(by_mm["구분_매체명"] == med) & (by_mm["연도"] == yr)]
-            fig3.add_trace(go.Scatter(
-                x=sub["월"], y=sub[sel_col],
-                name=f"{med} {yr}년",
-                mode="lines+markers",
-                line=dict(dash="solid" if i == 0 else "dash"),
-            ))
-    fig3.update_xaxes(tickvals=list(range(1, 13)),
-                      ticktext=[f"{m}월" for m in range(1, 13)])
-    base_layout(fig3, f"매체별 월별 {sel_label} (동기간 YoY)", 420)
-    st.plotly_chart(fig3, use_container_width=True)
-
 
 # ───────────────────────────────────────────────
 # 페이지 3: 캠페인별 성과
@@ -1250,8 +1280,8 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
-    # ── 날짜 범위 카드 (이 페이지 전용)
-    df = date_range_filter(df, key_prefix="camp")
+    # ── 날짜 범위 카드 (이 페이지 전용, 기본값: 올해)
+    df = date_range_filter(df, key_prefix="camp", default_preset="올해")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
@@ -1263,28 +1293,25 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     tab_rank, tab_quad = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면"])
 
     with tab_rank:
-        # 그래프: 부서별 · 카테고리(상품)별 순결제ROAS
-        g1, g2 = st.columns(2)
-        with g1:
-            by_dept = agg(df, ["구분_부서명"])
-            by_dept = by_dept[(by_dept["지표_광고비"] > 0) & by_dept["순결제ROAS"].notna()]
-            by_dept = by_dept.sort_values("순결제ROAS")
-            fig = px.bar(by_dept, x="순결제ROAS", y="구분_부서명", orientation="h",
-                         color_discrete_sequence=["#2563EB"])
-            fig.update_xaxes(tickformat=".0%")
-            base_layout(fig, "부서별 순결제ROAS", 350)
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-        with g2:
-            by_cat = agg(df, ["카테고리"])
-            by_cat = by_cat[(by_cat["지표_광고비"] > 0) & by_cat["순결제ROAS"].notna()]
-            by_cat = by_cat.sort_values("순결제ROAS").tail(15)
-            fig2 = px.bar(by_cat, x="순결제ROAS", y="카테고리", orientation="h",
-                          color_discrete_sequence=["#16A34A"])
-            fig2.update_xaxes(tickformat=".0%")
-            base_layout(fig2, "카테고리(상품)별 순결제ROAS", 350)
-            fig2.update_layout(showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True)
+        # 부서별 광고비 · 거래액 · 순결제ROAS (세로형 막대)
+        by_dept = agg(df, ["구분_부서명"])
+        by_dept = by_dept[by_dept["지표_광고비"] > 0].sort_values("지표_광고비", ascending=False)
+        dept_charts = [
+            ("부서별 광고비", "지표_광고비", "#2563EB", ",.0f"),
+            ("부서별 거래액(순결제)", "지표_순결제거래액", "#0EA5E9", ",.0f"),
+            ("부서별 순결제ROAS", "순결제ROAS", "#16A34A", ".0%"),
+        ]
+        gcols = st.columns(3)
+        for (dlabel, dcol, dcolor, dfmt), gc in zip(dept_charts, gcols):
+            with gc:
+                sub = by_dept.dropna(subset=[dcol])
+                fig = px.bar(sub, x="구분_부서명", y=dcol, color_discrete_sequence=[dcolor])
+                if dfmt == ".0%":
+                    fig.update_yaxes(tickformat=".0%")
+                base_layout(fig, dlabel, 350)
+                fig.update_layout(showlegend=False, xaxis_tickangle=-20)
+                label_traces(fig, dfmt)
+                st.plotly_chart(fig, use_container_width=True)
 
         # 필터: 매체 · 상품(카테고리) — 다중 선택
         f1, f2 = st.columns(2)
@@ -1350,11 +1377,14 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         - 🐕 **개** (저ROAS + 저광고비): 효율·규모 모두 낮음, 재검토
         """)
 
-        quad_df = agg(df, ["구분_캠페인", "구분_매체명"]).dropna(subset=["순결제ROAS"])
+        # 효율 사분면은 카카오·네이버 매체만 포함
+        quad_src = df[df["구분_매체명"].astype(str).str.contains("카카오|네이버", na=False)]
+        st.caption("포함 매체: **카카오 · 네이버** 계열만")
+        quad_df = agg(quad_src, ["구분_캠페인", "구분_매체명"]).dropna(subset=["순결제ROAS"])
         quad_df = quad_df[quad_df["지표_광고비"] > 0]
 
         if quad_df.empty:
-            st.info("사분면 분석에 필요한 데이터가 없습니다.")
+            st.info("카카오·네이버 매체 데이터가 없습니다.")
         else:
             med_spend = quad_df["지표_광고비"].median()
             med_roas  = quad_df["순결제ROAS"].median()
@@ -1447,12 +1477,15 @@ def page_funnel(df: pd.DataFrame):
         fig3 = px.bar(by_cat.sort_values("지표_광고비"), x="지표_광고비", y="카테고리",
                       orientation="h")
         base_layout(fig3, "카테고리별 광고비", 420)
+        label_traces(fig3, ",.0f")
         st.plotly_chart(fig3, use_container_width=True)
     with c4:
         cat_r = by_cat[by_cat["순결제ROAS"].notna() & (by_cat["지표_광고비"] > 0)]
         fig4 = px.bar(cat_r.sort_values("순결제ROAS"), x="순결제ROAS", y="카테고리",
                       orientation="h", color_discrete_sequence=["#10B981"])
+        fig4.update_xaxes(tickformat=".0%")
         base_layout(fig4, "카테고리별 순결제ROAS", 420)
+        label_traces(fig4, ".0%")
         st.plotly_chart(fig4, use_container_width=True)
 
     # 월별 CR·객단가 추이 (동기간 YoY)
@@ -1673,10 +1706,13 @@ def page_daily(df: pd.DataFrame, targets: dict):
     # ── 지표별 일자 그래프 (선택 없이 전부 노출)
     def daily_fig(col, label):
         f = go.Figure()
+        tf = RATIO_TICKFMT.get(col)
         f.add_trace(go.Scatter(
             x=daily_cur["일자라벨"], y=daily_cur[col],
-            name=f"{cur_year}년", mode="lines+markers",
+            name=f"{cur_year}년", mode="lines+markers+text",
             line=dict(color=YEAR_COLORS[0], width=2), marker=dict(size=4),
+            texttemplate=f"%{{y:{tf if tf else ',.0f'}}}",
+            textposition="top center", textfont=dict(size=8),
         ))
         if not daily_prev_raw.empty and col in daily_prev_raw.columns:
             f.add_trace(go.Scatter(
@@ -1750,13 +1786,16 @@ def page_creative(df: pd.DataFrame):
         fig.update_xaxes(tickformat=".2%")
         base_layout(fig, "CTR 상위 10 소재 (노출 1,000+)", 380)
         fig.update_layout(showlegend=False)
+        label_traces(fig, ".2%")
         st.plotly_chart(fig, use_container_width=True)
     with cb:
         top_roas = cr_df[cr_df["지표_광고비"] > 0].nlargest(10, "순결제ROAS")
         fig2 = px.bar(top_roas, x="순결제ROAS", y="구분_AF코드이름", orientation="h",
                       color_discrete_sequence=["#10B981"])
+        fig2.update_xaxes(tickformat=".0%")
         base_layout(fig2, "순결제ROAS 상위 10 소재", 380)
         fig2.update_layout(showlegend=False)
+        label_traces(fig2, ".0%")
         st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader(f"소재 테이블 (상위 {top_n}개)")
