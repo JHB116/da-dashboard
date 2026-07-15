@@ -1978,26 +1978,6 @@ def main():
 
     pre_date_filtered = filter_df(df, filters)  # 날짜 범위 필터 전 (전년비/타 페이지용)
 
-    # ── ③ 내보내기 (현재 필터 적용 데이터)
-    with export_box:
-        st.divider()
-        st.subheader("📤 내보내기")
-        st.caption(f"현재 필터 데이터 {len(pre_date_filtered):,}행")
-        json_bytes = pre_date_filtered.to_json(
-            orient="records", force_ascii=False, date_format="iso", indent=2
-        ).encode("utf-8")
-        st.download_button(
-            "🧾 JSON 출력", data=json_bytes,
-            file_name="da_filtered.json", mime="application/json",
-            use_container_width=True, key="export_json",
-        )
-        html_doc = build_html_report(pre_date_filtered)
-        st.download_button(
-            "🌐 HTML 출력", data=html_doc.encode("utf-8"),
-            file_name="da_filtered.html", mime="text/html",
-            use_container_width=True, key="export_html",
-        )
-
     targets = get_targets()
 
     # ── ① 페이지 선택 (맨 위)
@@ -2007,6 +1987,38 @@ def main():
             "📊 전체 요약", "📆 일별 성과", "📡 매체별 성과", "🎯 캠페인별 성과",
             "📅 주차별 성과", "🔍 퍼널 & 전환 분석", "🎨 소재 상세",
         ], label_visibility="collapsed")
+
+    # 현재 페이지의 날짜 카드 범위를 내보내기에 반영
+    DATE_PREFIX = {"📊 전체 요약": "sum", "🎯 캠페인별 성과": "camp", "🎨 소재 상세": "cr"}
+    prefix = DATE_PREFIX.get(page)
+    export_df = pre_date_filtered
+    rng_note = "전체 기간(날짜 카드 없음)"
+    if prefix and f"{prefix}_start" in st.session_state:
+        s = pd.Timestamp(st.session_state[f"{prefix}_start"])
+        e = pd.Timestamp(st.session_state[f"{prefix}_end"])
+        export_df = pre_date_filtered[(pre_date_filtered["기간_일자"] >= s)
+                                      & (pre_date_filtered["기간_일자"] <= e)]
+        rng_note = f"{s.date()} ~ {e.date()}"
+
+    # ── ③ 내보내기 (사이드바 필터 + 현재 페이지 날짜 카드 반영)
+    with export_box:
+        st.divider()
+        st.subheader("📤 내보내기")
+        st.caption(f"기간: {rng_note} · {len(export_df):,}행")
+        json_bytes = export_df.to_json(
+            orient="records", force_ascii=False, date_format="iso", indent=2
+        ).encode("utf-8")
+        st.download_button(
+            "🧾 JSON 출력", data=json_bytes,
+            file_name="da_filtered.json", mime="application/json",
+            use_container_width=True, key="export_json",
+        )
+        html_doc = build_html_report(export_df)
+        st.download_button(
+            "🌐 HTML 출력", data=html_doc.encode("utf-8"),
+            file_name="da_filtered.html", mime="text/html",
+            use_container_width=True, key="export_html",
+        )
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
