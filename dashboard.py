@@ -1888,15 +1888,41 @@ def page_creative(df: pd.DataFrame):
     )
 
 
+def build_html_report(df: pd.DataFrame) -> str:
+    """현재 필터 데이터를 단독 실행 가능한 HTML 문서로 변환."""
+    period = ""
+    if not df.empty and "기간_일자" in df.columns:
+        period = f"{df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
+    table_html = df.to_html(index=False, border=0, na_rep="", justify="center")
+    return f"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>DA 광고 실적 데이터</title>
+<style>
+  body {{ font-family: 'Pretendard','Apple SD Gothic Neo',sans-serif; margin:24px; color:#0F172A; }}
+  h1 {{ font-size:20px; }}
+  .meta {{ color:#64748B; font-size:13px; margin-bottom:16px; }}
+  table {{ border-collapse:collapse; font-size:12px; width:100%; }}
+  th, td {{ border:1px solid #E2E8F0; padding:4px 8px; white-space:nowrap; }}
+  th {{ background:#F1F5F9; position:sticky; top:0; }}
+  tr:nth-child(even) td {{ background:#F8FAFC; }}
+  .wrap {{ overflow-x:auto; }}
+</style></head><body>
+<h1>📊 DA 광고 실적 데이터</h1>
+<div class="meta">기간: {period} · 총 {len(df):,}행 · 생성 {pd.Timestamp.now():%Y-%m-%d %H:%M}</div>
+<div class="wrap">{table_html}</div>
+</body></html>"""
+
+
 # ───────────────────────────────────────────────
 # 메인
 # ───────────────────────────────────────────────
 def main():
     st.title("📊 DA 광고 실적 대시보드")
 
-    # 사이드바 순서: ① 페이지  ② 필터  ③ 파일 업로드
+    # 사이드바 순서: ① 페이지  ② 필터  ③ 내보내기  ④ 파일 업로드
     page_box   = st.sidebar.container()
     filter_box = st.sidebar.container()
+    export_box = st.sidebar.container()
     upload_box = st.sidebar.container()
 
     # ── ③ 파일 업로드 (맨 아래)
@@ -1951,6 +1977,26 @@ def main():
         filters = sidebar_filters(df)
 
     pre_date_filtered = filter_df(df, filters)  # 날짜 범위 필터 전 (전년비/타 페이지용)
+
+    # ── ③ 내보내기 (현재 필터 적용 데이터)
+    with export_box:
+        st.divider()
+        st.subheader("📤 내보내기")
+        st.caption(f"현재 필터 데이터 {len(pre_date_filtered):,}행")
+        json_bytes = pre_date_filtered.to_json(
+            orient="records", force_ascii=False, date_format="iso", indent=2
+        ).encode("utf-8")
+        st.download_button(
+            "🧾 JSON 출력", data=json_bytes,
+            file_name="da_filtered.json", mime="application/json",
+            use_container_width=True, key="export_json",
+        )
+        html_doc = build_html_report(pre_date_filtered)
+        st.download_button(
+            "🌐 HTML 출력", data=html_doc.encode("utf-8"),
+            file_name="da_filtered.html", mime="text/html",
+            use_container_width=True, key="export_html",
+        )
 
     targets = get_targets()
 
