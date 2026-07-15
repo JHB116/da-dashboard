@@ -247,6 +247,11 @@ def fmt_money(v):
     if abs(v) >= 1e6: return f"{v/1e6:.1f}백만원"
     return f"{int(v):,}원"
 
+def fmt_won(v):
+    """항상 원 단위로만 표기 (억/백만 단위 변환 없음)."""
+    if pd.isna(v): return "–"
+    return f"{int(round(v)):,}원"
+
 def fmt_num(v):
     if pd.isna(v): return "–"
     return f"{int(v):,}"
@@ -582,17 +587,19 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     clamped_start = max(d_min, min(d_max, st.session_state[k_start]))
     clamped_end   = max(d_min, min(d_max, st.session_state[k_end]))
 
+    # NOTE: date_input에 key를 주면 위젯 상태가 value=를 덮어써서 프리셋 버튼이
+    # 되돌려지는 버그가 생긴다. key 없이 value=로만 제어한다.
     with cols[5]:
         new_start = st.date_input("시작일", value=clamped_start,
                                   min_value=d_min, max_value=d_max,
-                                  key=f"{key_prefix}_start_input", label_visibility="collapsed")
+                                  label_visibility="collapsed")
     with cols[6]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
     with cols[7]:
         new_end = st.date_input("종료일", value=clamped_end,
                                 min_value=d_min, max_value=d_max,
-                                key=f"{key_prefix}_end_input", label_visibility="collapsed")
+                                label_visibility="collapsed")
 
     if new_start != st.session_state[k_start] or new_end != st.session_state[k_end]:
         st.session_state[k_start]  = new_start
@@ -1313,10 +1320,12 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
                 label_traces(fig, dfmt)
                 st.plotly_chart(fig, use_container_width=True)
 
-        # 필터: 매체 · 상품(카테고리) — 다중 선택
+        # 필터: 매체 · 상품(카테고리) — 다중 선택 (매체 기본값: 카카오·네이버)
+        all_media = sorted(df["구분_매체명"].dropna().unique())
+        default_media = [m for m in all_media if ("카카오" in str(m) or "네이버" in str(m))]
         f1, f2 = st.columns(2)
         with f1:
-            sel_media = st.multiselect("매체 필터", sorted(df["구분_매체명"].dropna().unique()),
+            sel_media = st.multiselect("매체 필터", all_media, default=default_media,
                                        key="camp_media")
         with f2:
             sel_cat = st.multiselect("상품(카테고리) 필터", sorted(df["카테고리"].dropna().unique()),
@@ -1328,12 +1337,12 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             dff = dff[dff["카테고리"].isin(sel_cat)]
 
         fmt_map = {
-            "지표_광고비": fmt_money, "지표_순결제거래액": fmt_money,
+            "지표_광고비": fmt_won, "지표_순결제거래액": fmt_won,
             "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
-            "CTR": fmt_pct, "CPC": fmt_money, "CPM": fmt_money, "CPUV": fmt_money,
+            "CTR": fmt_pct, "CPC": fmt_won, "CPM": fmt_won, "CPUV": fmt_won,
             "UV/클릭": fmt_pct, "순결제ROAS": fmt_roas, "총결제ROAS": fmt_roas,
-            "CR(순)": lambda v: fmt_pct(v, 3), "객단가(순)": fmt_money,
-            "첫구매CPA": fmt_money, "가입CPA": fmt_money,
+            "CR(순)": lambda v: fmt_pct(v, 3), "객단가(순)": fmt_won,
+            "첫구매CPA": fmt_won, "가입CPA": fmt_won,
             "가입률": lambda v: fmt_pct(v, 3), "첫구매율": lambda v: fmt_pct(v, 3),
             "신규비중": fmt_pct, "윈백비중": fmt_pct,
         }
@@ -1538,74 +1547,31 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             "CR(순)": "CR(순)", "객단가(순)": "객단가(순)",
             "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
         }
-        col_a, col_b, col_c = st.columns([3, 1, 1])
-        with col_a:
-            sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="wk_metric")
-        with col_b:
-            use_ma = st.checkbox("4주 이동평균", value=True, key="wk_ma",
-                                 help="최근 4주(당주+직전 3주)의 평균을 이어 그린 점선. "
-                                      "주 단위 등락을 완만하게 만들어 추세를 보기 쉽게 합니다.")
-        with col_c:
-            wk_sameday = st.checkbox("동요일 전년비", value=True, key="wk_sameday")
-
+        sel_label = st.selectbox("비교 지표", list(metric_options.keys()), key="wk_metric")
         sel_col = metric_options[sel_label]
+        st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다.")
 
         week_labels = {w: week_of_month_label(cur_year, w) for w in range(1, 54)}
         fig = yoy_overlay_fig(
             weekly, "주차번호", sel_col,
-            f"주차별 {sel_label} (YoY — W01~W53)",
+            f"주차별 {sel_label} (YoY)",
             ticklabels=week_labels, height=440,
-            ma_window=4 if use_ma else 0,
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 주차별 실적요약 테이블 (전년비 + 목표 + 목표비)
+        # 주차별 실적요약 테이블 (전년비 + 목표 + 목표비, 동요일 기준)
         st.subheader("주차별 실적요약")
         weekly_cur = agg(df[df["연도"] == cur_year], ["주차번호"]).sort_values("주차번호")
-        if wk_sameday:
-            weekly_prev = yoy_sameday_prev(df, cur_year, "주차번호")
-        else:
-            weekly_prev = agg(df[df["연도"] == cur_year - 1], ["주차번호"])
+        weekly_prev = yoy_sameday_prev(df, cur_year, "주차번호")
 
         weekly_targets = (report_targets or {}).get("weekly", {})
         wk_tbl = summary_table(weekly_cur, weekly_prev, "주차번호",
                                lambda w: week_of_month_label(cur_year, w), targets, period_type="주차",
                                targets_per_period=weekly_targets or None, cur_year=cur_year)
-        # 목표/목표비 컬럼은 항상 표시 (미입력 시 –)
         st.dataframe(
             wk_tbl.style.map(chg_style, subset=[c for c in wk_tbl.columns if "전년비" in c]),
             use_container_width=True, hide_index=True,
         )
-
-        # 이상치 감지
-        st.subheader("⚠️ 이상치 감지 (전주 대비 ±30% 이상 변화)")
-        anomaly_rows = []
-        for yr in sorted(weekly["연도"].unique()):
-            sub = weekly[weekly["연도"] == yr].sort_values("주차번호").dropna(subset=[sel_col])
-            if len(sub) < 2:
-                continue
-            sub = sub.copy()
-            sub["전주"] = sub[sel_col].shift(1)
-            sub["변화율"] = (sub[sel_col] - sub["전주"]) / sub["전주"].abs()
-            anomalies = sub[sub["변화율"].abs() >= 0.3].copy()
-            anomalies["연도"] = yr
-            anomaly_rows.append(anomalies[["연도", "주차번호", sel_col, "전주", "변화율"]])
-
-        if anomaly_rows:
-            anom_df = pd.concat(anomaly_rows)
-            anom_df["주차"] = anom_df.apply(
-                lambda r: week_of_month_label(r["연도"], r["주차번호"]), axis=1)
-            anom_df["변화율"] = anom_df["변화율"].apply(lambda v: fmt_pct(v, 1) if not pd.isna(v) else "–")
-            fmt_fn = fmt_roas if "ROAS" in sel_label else (
-                fmt_pct if sel_label in ("CTR", "CR(순)") else
-                fmt_num if "수" in sel_label else fmt_money
-            )
-            anom_df[sel_col] = anom_df[sel_col].apply(fmt_fn)
-            anom_df["전주"] = anom_df["전주"].apply(fmt_fn)
-            st.dataframe(anom_df[["연도", "주차", sel_col, "전주", "변화율"]],
-                         use_container_width=True, hide_index=True)
-        else:
-            st.info("±30% 이상 변화 주차가 없습니다.")
 
     # ── 요일별 히트맵
     with tab_heatmap:
@@ -1755,6 +1721,12 @@ def page_creative(df: pd.DataFrame):
         st.warning("필터 조건에 해당하는 데이터가 없습니다.")
         return
 
+    # ── 날짜 범위 카드 (이 페이지 전용, 기본값: 올해)
+    df = date_range_filter(df, key_prefix="cr", default_preset="올해")
+    if df.empty:
+        st.warning("선택한 날짜 범위에 데이터가 없습니다.")
+        return
+
     c1, c2, c3 = st.columns(3)
     with c1:
         camp_search = st.text_input("캠페인 검색", key="cr_camp")
@@ -1815,11 +1787,19 @@ def page_creative(df: pd.DataFrame):
         "첫구매CPA": fmt_money, "가입CPA": fmt_money,
         "가입률": lambda v: fmt_pct(v, 3), "첫구매율": lambda v: fmt_pct(v, 3),
     }
-    tbl_fmt = tbl.copy()
-    for c, fn in fmt_map.items():
-        if c in tbl_fmt.columns:
-            tbl_fmt[c] = tbl_fmt[c].apply(fn)
-    st.dataframe(tbl_fmt, use_container_width=True, hide_index=True)
+    # 소재 테이블은 첨부파일(Excel)로 제공 — 원본 숫자 그대로 다운로드
+    export_tbl = tbl.copy()
+    export_tbl.columns = [c.replace("구분_", "").replace("지표_", "") for c in export_tbl.columns]
+    xls_buf = io.BytesIO()
+    with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
+        export_tbl.to_excel(writer, index=False, sheet_name="소재")
+    st.info(f"소재 테이블(상위 {top_n}개)은 아래 버튼으로 Excel 첨부파일로 내려받을 수 있습니다.")
+    st.download_button(
+        "📎 소재 테이블 다운로드 (Excel)",
+        data=xls_buf.getvalue(),
+        file_name=f"소재_상위{top_n}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
     st.download_button(
         "📥 현재 필터 데이터 CSV 다운로드",
