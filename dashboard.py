@@ -592,13 +592,13 @@ def summary_table(cur_agg: pd.DataFrame, prev_agg: pd.DataFrame,
             period_type: label,
             "광고비(백만)": _fmt_num(spend / 1e6) if not pd.isna(spend) else "–",
             "거래액(백만)": _fmt_num(rev / 1e6) if not pd.isna(rev) else "–",
-            "ROAS": _fmt_num(roas, 2) if not pd.isna(roas) else "–",
+            "ROAS": fmt_roas(roas) if not pd.isna(roas) else "–",
             "전년비_광고비": _chg_fmt(spend, p_spend),
             "전년비_거래액": _chg_fmt(rev, p_rev),
             "전년비_ROAS": _chg_fmt(roas, p_roas),
             "목표_광고비(백만)": _fmt_num(t_spend / 1e6) if t_spend > 0 else "–",
             "목표_거래액(백만)": _fmt_num(t_rev / 1e6) if t_rev > 0 else "–",
-            "목표_ROAS": _fmt_num(t_roas, 2) if t_roas > 0 else "–",
+            "목표_ROAS": fmt_roas(t_roas) if t_roas > 0 else "–",
             "목표비_광고비": _rate_fmt(spend, t_spend),
             "목표비_거래액": _rate_fmt(rev, t_rev),
             "목표비_ROAS": _rate_fmt(roas, t_roas),
@@ -1114,7 +1114,8 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
                 if col == "지표_광고비" and gran == "월" and targets.get("spend", 0) > 0:
                     fig.add_hline(y=targets["spend"], line_dash="dot", line_color="#EF4444",
                                   annotation_text="목표")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,
+                                key=f"sum_chart_{tab_key}_{col}_{gran}")
 
 
 def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
@@ -1484,16 +1485,17 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
                 quad_df, x="지표_광고비", y="순결제ROAS",
                 color="사분면", color_discrete_map=quad_colors,
                 size="지표_클릭수", hover_name="구분_캠페인",
-                hover_data={"구분_매체명": True, "지표_광고비": True, "순결제ROAS": ":.2f"},
+                hover_data={"구분_매체명": True, "지표_광고비": True, "순결제ROAS": ":.0%"},
                 size_max=40,
             )
             # 사분면 구분선
             fig_q.add_vline(x=med_spend, line_dash="dash", line_color="#CBD5E1")
             fig_q.add_hline(y=med_roas,  line_dash="dash", line_color="#CBD5E1")
             fig_q.add_annotation(x=med_spend * 0.02, y=med_roas * 1.02,
-                                  text=f"중앙값 광고비 {fmt_money(med_spend)}<br>중앙값 ROAS {med_roas:.2f}x",
+                                  text=f"중앙값 광고비 {fmt_money(med_spend)}<br>중앙값 ROAS {fmt_roas(med_roas)}",
                                   showarrow=False, font=dict(size=10, color="#64748B"))
             base_layout(fig_q, "캠페인 효율 사분면 (버블=클릭수)", 520)
+            fig_q.update_yaxes(tickformat=".0%")
             st.plotly_chart(fig_q, use_container_width=True)
 
             # 사분면별 요약
@@ -1803,47 +1805,61 @@ def page_creative(df: pd.DataFrame):
     with c2:
         af_search = st.text_input("AF코드 / 소재명 검색", key="cr_af")
     with c3:
-        top_n = st.selectbox("상위 N개", [30, 50, 100, 200], index=1)
+        top_n = st.selectbox("상위 N개", ["ALL", 30, 50, 100, 200], index=2)
 
     gb = ["구분_AF코드", "구분_AF코드이름", "구분_캠페인",
           "구분_하위캠페인", "구분_매체명", "구분_비용출처", "카테고리"]
     if "구분_상품" in df.columns:
         gb.append("구분_상품")
-    cr_df = agg(df, gb)
+    cr_full = agg(df, gb)
     if camp_search:
-        cr_df = cr_df[cr_df["구분_캠페인"].str.contains(camp_search, na=False)]
+        cr_full = cr_full[cr_full["구분_캠페인"].str.contains(camp_search, na=False)]
     if af_search:
-        mask = (cr_df["구분_AF코드"].str.contains(af_search, na=False) |
-                cr_df["구분_AF코드이름"].str.contains(af_search, na=False))
-        cr_df = cr_df[mask]
+        mask = (cr_full["구분_AF코드"].str.contains(af_search, na=False) |
+                cr_full["구분_AF코드이름"].str.contains(af_search, na=False))
+        cr_full = cr_full[mask]
 
+    # ── 매체별 CTR / 순결제ROAS 상위 10 소재
+    CR_MEDIA = ["카카오 비즈보드", "카카오 모먼트", "네이버 홈피드", "네이버 스마트채널", "네이버 네이티브"]
+
+    def media_top10(metric, tickfmt, color, header, impr_filter=False):
+        st.subheader(header)
+        for r in range(0, len(CR_MEDIA), 2):
+            mcols = st.columns(2)
+            for media, mc in zip(CR_MEDIA[r:r + 2], mcols):
+                with mc:
+                    sub = cr_full[cr_full["구분_매체명"] == media]
+                    if impr_filter:
+                        sub = sub[sub["지표_노출수"] > 1000]
+                    sub = sub.dropna(subset=[metric])
+                    sub = sub[sub["지표_광고비"] > 0] if metric == "순결제ROAS" else sub
+                    sub = sub.nlargest(10, metric)
+                    if sub.empty:
+                        st.caption(f"🔹 {media}: 데이터 없음")
+                        continue
+                    fig = px.bar(sub, x=metric, y="구분_AF코드이름", orientation="h",
+                                 color_discrete_sequence=[color])
+                    fig.update_xaxes(tickformat=tickfmt)
+                    base_layout(fig, media, 320)
+                    fig.update_layout(showlegend=False)
+                    label_traces(fig, tickfmt)
+                    st.plotly_chart(fig, use_container_width=True,
+                                    key=f"cr_{metric}_{media}")
+
+    media_top10("CTR", ".2%", "#3B82F6", "📊 CTR 상위 10 소재 (매체별, 노출 1,000+)", impr_filter=True)
+    media_top10("순결제ROAS", ".0%", "#10B981", "📈 순결제ROAS 상위 10 소재 (매체별)")
+
+    # ── 소재 테이블 (정렬 + 상위 N)
     sort_col = st.selectbox("정렬 기준",
                             ["지표_광고비", "CTR", "CPM", "순결제ROAS", "CR(순)",
                              "객단가(순)", "첫구매CPA", "가입CPA"])
     asc = sort_col in ("첫구매CPA", "가입CPA")
-    cr_df = cr_df.sort_values(sort_col, ascending=asc, na_position="last").head(top_n)
+    cr_df = cr_full.sort_values(sort_col, ascending=asc, na_position="last")
+    if top_n != "ALL":
+        cr_df = cr_df.head(int(top_n))
 
-    ca, cb = st.columns(2)
-    with ca:
-        top_ctr = cr_df[cr_df["지표_노출수"] > 1000].nlargest(10, "CTR")
-        fig = px.bar(top_ctr, x="CTR", y="구분_AF코드이름", orientation="h",
-                     color_discrete_sequence=["#3B82F6"])
-        fig.update_xaxes(tickformat=".2%")
-        base_layout(fig, "CTR 상위 10 소재 (노출 1,000+)", 380)
-        fig.update_layout(showlegend=False)
-        label_traces(fig, ".2%")
-        st.plotly_chart(fig, use_container_width=True)
-    with cb:
-        top_roas = cr_df[cr_df["지표_광고비"] > 0].nlargest(10, "순결제ROAS")
-        fig2 = px.bar(top_roas, x="순결제ROAS", y="구분_AF코드이름", orientation="h",
-                      color_discrete_sequence=["#10B981"])
-        fig2.update_xaxes(tickformat=".0%")
-        base_layout(fig2, "순결제ROAS 상위 10 소재", 380)
-        fig2.update_layout(showlegend=False)
-        label_traces(fig2, ".0%")
-        st.plotly_chart(fig2, use_container_width=True)
-
-    st.subheader(f"소재 테이블 (상위 {top_n}개)")
+    n_label = "전체" if top_n == "ALL" else f"상위 {top_n}개"
+    st.subheader(f"소재 테이블 ({n_label})")
     # 소재 테이블은 첨부파일(Excel)로 제공 — 업로드 예시 파일 양식·순서에 맞춤
     exp = {}
     for label, col in CREATIVE_EXPORT_SPEC:
@@ -1852,11 +1868,11 @@ def page_creative(df: pd.DataFrame):
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
         export_tbl.to_excel(writer, index=False, sheet_name="소재")
-    st.info(f"소재 테이블(상위 {top_n}개)은 업로드해주신 예시 양식으로 Excel 첨부파일 다운로드됩니다.")
+    st.info(f"소재 테이블({n_label})은 업로드해주신 예시 양식으로 Excel 첨부파일 다운로드됩니다.")
     st.download_button(
         "📎 소재 테이블 다운로드 (Excel)",
         data=xls_buf.getvalue(),
-        file_name=f"소재_상위{top_n}.xlsx",
+        file_name=f"소재_{n_label}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
