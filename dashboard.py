@@ -57,6 +57,47 @@ WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
 # ───────────────────────────────────────────────
 # 데이터 로드
 # ───────────────────────────────────────────────
+# 원본('금주누적' 스타일, 접두어 없는) 컬럼 → 대시보드 스키마 매핑
+WEEKLY_COL_MAP = {
+    "노출수": "지표_노출수", "클릭수": "지표_클릭수", "비용": "지표_광고비",
+    "UV": "지표_UV(전체)", "결제고객수": "지표_순결제고객수", "결제고객수(총)": "지표_총결제고객수",
+    "순결제매출": "지표_순결제거래액", "총결제매출": "지표_총결제거래액",
+    "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)", "첫구매": "지표_순결제거래액(첫구매)",
+    "신규고객수": "지표_당년신규순결제고객수", "신규거래액": "지표_당년신규순결제거래액",
+    "윈백고객수": "지표_순결제고객수(윈백)", "윈백거래액": "지표_순결제거래액(윈백)",
+    "비용출처": "구분_비용출처", "캠페인": "구분_캠페인", "하위캠페인": "구분_하위캠페인",
+    "AF코드": "구분_AF코드", "AF코드명": "구분_AF코드이름",
+}
+
+
+def _map_weekly_format(df: pd.DataFrame) -> pd.DataFrame:
+    """접두어 없는 원본 포맷을 대시보드 스키마로 변환."""
+    # 문자열 컬럼 앞뒤 공백 정리 (' 총합계 ', ' - ' 등)
+    for c in df.select_dtypes(include="object").columns:
+        df[c] = df[c].astype(str).str.strip()
+
+    # 매체 = 매체명 + 상품명 (예: '카카오 비즈보드'), 상품명은 별도 보존
+    if "매체명" in df.columns:
+        media = df["매체명"].fillna("").astype(str).str.strip()
+        if "상품명" in df.columns:
+            prod = df["상품명"].fillna("").astype(str).str.strip()
+            df["구분_상품"] = prod
+            # 상품명이 비었거나 매체명과 같으면 매체명만 사용 (예: '구글 구글' 방지)
+            df["구분_매체명"] = [
+                m if (not p or p == m) else f"{m} {p}"
+                for m, p in zip(media, prod)
+            ]
+        else:
+            df["구분_매체명"] = media
+
+    df = df.rename(columns=WEEKLY_COL_MAP)
+
+    # '총합계' 합계행 및 빈 비용출처 제외
+    if "구분_비용출처" in df.columns:
+        df = df[~df["구분_비용출처"].astype(str).str.strip().isin(["총합계", "", "nan"])]
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     ext = filename.rsplit(".", 1)[-1].lower()
@@ -79,6 +120,11 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
         raise ValueError(f"지원하지 않는 파일 형식입니다: {ext}")
 
     df.columns = df.columns.str.strip()
+
+    # 접두어 없는 원본('금주누적') 포맷 자동 감지 → 매핑
+    if "지표_광고비" not in df.columns and ("비용" in df.columns or "순결제매출" in df.columns):
+        df = _map_weekly_format(df)
+
     df["기간_일자"] = pd.to_datetime(df["기간_일자"], errors="coerce")
     df = df.dropna(subset=["기간_일자"])
 
@@ -133,6 +179,11 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
         df["지표_순결제거래액"] = (
             df.get("지표_순결제거래액(첫구매)", 0) + df.get("지표_순결제거래액(윈백)", 0)
         )
+
+    # 집계 대상 지표 중 원본에 없는 컬럼은 0으로 채워 KeyError 방지
+    for c in AGG_COLS:
+        if c not in df.columns:
+            df[c] = 0
 
     return df
 
@@ -318,6 +369,25 @@ _DETAIL_FMT = {
     "money": fmt_money, "num": fmt_num,
     "pct": lambda v: fmt_pct(v, 2), "pct3": lambda v: fmt_pct(v, 3), "roas": fmt_roas,
 }
+
+# 소재 상세 첨부(Excel) 컬럼 양식 (업로드 예시 파일 순서). col=None → 빈 컬럼
+CREATIVE_EXPORT_SPEC = [
+    ("비용출처", "구분_비용출처"), ("카테고리", "카테고리"), ("기획전번호", None),
+    ("AF코드", "구분_AF코드"), ("AF코드명", "구분_AF코드이름"), ("상세내역", None),
+    ("캠페인", "구분_캠페인"), ("하위캠페인", "구분_하위캠페인"),
+    ("매체명", "구분_매체명"), ("상품명", "구분_상품"),
+    ("노출수", "지표_노출수"), ("클릭수", "지표_클릭수"), ("CTR", "CTR"), ("CR", "CR(순)"),
+    ("객단가", "객단가(순)"), ("결제고객수", "지표_순결제고객수"),
+    ("CPM", "CPM"), ("CPC", "CPC"), ("CPUV", "CPUV"), ("UV", "지표_UV(전체)"),
+    ("비용", "지표_광고비"), ("순결제거래액", "지표_순결제거래액"), ("순결제ROAS", "순결제ROAS"),
+    ("순결제비중(%)", "순결제비중"), ("총결제거래액", "지표_총결제거래액"), ("총결제ROAS", "총결제ROAS"),
+    ("UV/클릭(%)", "UV/클릭"), ("CR총", "CR(총)"), ("객단가(총)", "객단가(총)"),
+    ("결제고객수(총)", "지표_총결제고객수"), ("가입률", "가입률"), ("가입수", "지표_가입회원"),
+    ("가입CPA", "가입CPA"), ("첫구매율", "첫구매율"), ("첫구매수", "지표_순결제고객수(첫구매)"),
+    ("첫구매CPA", "첫구매CPA"), ("첫구매", "지표_순결제거래액(첫구매)"), ("첫구매비중", "첫구매비중"),
+    ("신규고객수", "지표_당년신규순결제고객수"), ("신규거래액", "지표_당년신규순결제거래액"),
+    ("신규비중", "신규비중"), ("윈백고객수", "지표_순결제고객수(윈백)"), ("윈백거래액", "지표_순결제거래액(윈백)"),
+]
 
 
 def week_of_month_label(year: int, week: int) -> str:
@@ -1735,8 +1805,11 @@ def page_creative(df: pd.DataFrame):
     with c3:
         top_n = st.selectbox("상위 N개", [30, 50, 100, 200], index=1)
 
-    cr_df = agg(df, ["구분_AF코드", "구분_AF코드이름", "구분_캠페인",
-                     "구분_하위캠페인", "구분_매체명", "구분_비용출처"])
+    gb = ["구분_AF코드", "구분_AF코드이름", "구분_캠페인",
+          "구분_하위캠페인", "구분_매체명", "구분_비용출처", "카테고리"]
+    if "구분_상품" in df.columns:
+        gb.append("구분_상품")
+    cr_df = agg(df, gb)
     if camp_search:
         cr_df = cr_df[cr_df["구분_캠페인"].str.contains(camp_search, na=False)]
     if af_search:
@@ -1771,29 +1844,15 @@ def page_creative(df: pd.DataFrame):
         st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader(f"소재 테이블 (상위 {top_n}개)")
-    disp = [
-        "구분_AF코드", "구분_AF코드이름", "구분_캠페인", "구분_매체명",
-        "집행일수", "지표_광고비", "지표_노출수", "지표_클릭수",
-        "CTR", "CPC", "CPM", "CPUV", "UV/클릭",
-        "순결제ROAS", "CR(순)", "객단가(순)", "순결제비중",
-        "첫구매CPA", "가입CPA", "가입률", "첫구매율",
-    ]
-    tbl = cr_df[[c for c in disp if c in cr_df.columns]].copy()
-    fmt_map = {
-        "지표_광고비": fmt_money, "지표_노출수": fmt_num, "지표_클릭수": fmt_num,
-        "CTR": fmt_pct, "CPC": fmt_money, "CPM": fmt_money, "CPUV": fmt_money,
-        "UV/클릭": fmt_pct, "순결제ROAS": fmt_roas,
-        "CR(순)": lambda v: fmt_pct(v, 3), "객단가(순)": fmt_money, "순결제비중": fmt_pct,
-        "첫구매CPA": fmt_money, "가입CPA": fmt_money,
-        "가입률": lambda v: fmt_pct(v, 3), "첫구매율": lambda v: fmt_pct(v, 3),
-    }
-    # 소재 테이블은 첨부파일(Excel)로 제공 — 원본 숫자 그대로 다운로드
-    export_tbl = tbl.copy()
-    export_tbl.columns = [c.replace("구분_", "").replace("지표_", "") for c in export_tbl.columns]
+    # 소재 테이블은 첨부파일(Excel)로 제공 — 업로드 예시 파일 양식·순서에 맞춤
+    exp = {}
+    for label, col in CREATIVE_EXPORT_SPEC:
+        exp[label] = cr_df[col].values if (col and col in cr_df.columns) else ""
+    export_tbl = pd.DataFrame(exp)
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
         export_tbl.to_excel(writer, index=False, sheet_name="소재")
-    st.info(f"소재 테이블(상위 {top_n}개)은 아래 버튼으로 Excel 첨부파일로 내려받을 수 있습니다.")
+    st.info(f"소재 테이블(상위 {top_n}개)은 업로드해주신 예시 양식으로 Excel 첨부파일 다운로드됩니다.")
     st.download_button(
         "📎 소재 테이블 다운로드 (Excel)",
         data=xls_buf.getvalue(),
