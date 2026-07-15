@@ -429,6 +429,13 @@ AGG_COLS = [
 
 def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
     cols = [c for c in AGG_COLS if c in df.columns]
+    # 방어적: 집계 대상 컬럼에 문자열(' - ' 등)이 섞여 있으면 groupby.sum()이
+    # 'int + str' TypeError를 낸다. 항상 숫자로 강제 변환한다.
+    non_numeric = [c for c in cols if not pd.api.types.is_numeric_dtype(df[c])]
+    if non_numeric:
+        df = df.copy()
+        for c in non_numeric:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     grouped = df.groupby(by, dropna=False)[cols].sum().reset_index()
     if "기간_일자" in df.columns and "집행일수" not in by and "기간_일자" not in by:
         days = df.groupby(by, dropna=False)["기간_일자"].nunique().reset_index()
@@ -1294,7 +1301,7 @@ def page_media(df: pd.DataFrame):
                     if tf:
                         fig.update_yaxes(tickformat=tf)
                     base_layout(fig, f"{lbl} ({cur_year}년 월별)", 300)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"media_trend_{col}")
     else:
         st.info("매체를 1개 이상 선택하세요.")
 
@@ -1403,7 +1410,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
                 base_layout(fig, dlabel, 350)
                 fig.update_layout(showlegend=False, xaxis_tickangle=-20)
                 label_traces(fig, dfmt)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"camp_dept_{dcol}")
 
         # 필터: 매체 · 상품(카테고리) — 다중 선택 (매체 기본값: 카카오·네이버)
         all_media = sorted(df["구분_매체명"].dropna().unique())
