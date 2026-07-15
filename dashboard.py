@@ -1205,7 +1205,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
                             annotation_text=f"목표 {fmt_money(targets['spend'])}", yref="y2")
         fig_p.update_layout(yaxis2=dict(overlaying="y", side="right", title="누적 광고비"))
         base_layout(fig_p, f"{sel_ym} 예산 페이싱", 420)
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(fig_p, use_container_width=True, key="chart_ln1208")
         if not daily.empty:
             cur_cum = daily["누적광고비"].iloc[-1]
             daily_avg = cur_cum / last_day if last_day > 0 else 0
@@ -1236,7 +1236,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
                           color_discrete_sequence=["#3B82F6","#10B981","#F59E0B","#94A3B8"])
             fig4.update_traces(textposition="inside", textinfo="percent+label")
             base_layout(fig4, "거래액 유형별 구성 (전체)", 400)
-            st.plotly_chart(fig4, use_container_width=True)
+            st.plotly_chart(fig4, use_container_width=True, key="chart_ln1239")
         with col2:
             monthly_comp = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
             monthly_comp["연월라벨"] = (monthly_comp["연도"].astype(str) + "-"
@@ -1255,7 +1255,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
                     ))
             fig5.update_layout(barmode="stack")
             base_layout(fig5, "월별 거래액 구성 추이", 400)
-            st.plotly_chart(fig5, use_container_width=True)
+            st.plotly_chart(fig5, use_container_width=True, key="chart_ln1258")
 
 
 # ───────────────────────────────────────────────
@@ -1327,7 +1327,7 @@ def page_media(df: pd.DataFrame):
     figc.update_yaxes(tickformat=".0%", secondary_y=True)
     base_layout(figc, "매체별 광고비·거래액·순결제ROAS", 430)
     figc.update_layout(barmode="group", xaxis_tickangle=-20)
-    st.plotly_chart(figc, use_container_width=True)
+    st.plotly_chart(figc, use_container_width=True, key="chart_ln1330")
 
     # 광고비 vs ROAS 버블
     valid = by_media[by_media["지표_광고비"] > 0].dropna(subset=["순결제ROAS"])
@@ -1337,7 +1337,7 @@ def page_media(df: pd.DataFrame):
     fig2.update_traces(textposition="top center")
     fig2.update_yaxes(tickformat=".0%")
     base_layout(fig2, "광고비 vs 순결제ROAS (버블=클릭수)", 420)
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, key="chart_ln1340")
 
     # 매체별 요약 테이블
     st.subheader("매체별 지표 요약")
@@ -1517,7 +1517,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
                                   showarrow=False, font=dict(size=10, color="#64748B"))
             base_layout(fig_q, "캠페인 효율 사분면 (버블=클릭수)", 520)
             fig_q.update_yaxes(tickformat=".0%")
-            st.plotly_chart(fig_q, use_container_width=True)
+            st.plotly_chart(fig_q, use_container_width=True, key="chart_ln1520")
 
             # 사분면별 요약
             quad_summary = quad_df.groupby("사분면").agg(
@@ -1551,7 +1551,7 @@ def page_funnel(df: pd.DataFrame):
             marker_color=["#1E40AF","#2563EB","#3B82F6","#60A5FA","#93C5FD","#BAE6FD"],
         ))
         base_layout(fig, "광고 퍼널 (전체 합산)", 430)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="chart_ln1554")
 
     with c2:
         bkd = pd.DataFrame({
@@ -1569,7 +1569,7 @@ def page_funnel(df: pd.DataFrame):
                       color_discrete_sequence=["#3B82F6","#10B981","#F59E0B","#94A3B8"])
         fig2.update_traces(textposition="inside", textinfo="percent+label")
         base_layout(fig2, "거래액 유형별 구성", 430)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key="chart_ln1572")
 
     # 카테고리별 성과
     st.subheader("카테고리별 성과")
@@ -1580,7 +1580,7 @@ def page_funnel(df: pd.DataFrame):
                       orientation="h")
         base_layout(fig3, "카테고리별 광고비", 420)
         label_traces(fig3, ",.0f")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, use_container_width=True, key="chart_ln1583")
     with c4:
         cat_r = by_cat[by_cat["순결제ROAS"].notna() & (by_cat["지표_광고비"] > 0)]
         fig4 = px.bar(cat_r.sort_values("순결제ROAS"), x="순결제ROAS", y="카테고리",
@@ -1588,7 +1588,7 @@ def page_funnel(df: pd.DataFrame):
         fig4.update_xaxes(tickformat=".0%")
         base_layout(fig4, "카테고리별 순결제ROAS", 420)
         label_traces(fig4, ".0%")
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(fig4, use_container_width=True, key="chart_ln1591")
 
     # 월별 CR·객단가 추이 (동기간 YoY)
     st.subheader("월별 전환 지표 추이 (동기간 YoY)")
@@ -1609,12 +1609,12 @@ def page_funnel(df: pd.DataFrame):
         fig5.update_xaxes(tickvals=list(range(1, 13)),
                           ticktext=[f"{m}월" for m in range(1, 13)])
         base_layout(fig5, "월별 CR(순) & 가입률 (동기간 YoY)", 380)
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, use_container_width=True, key="chart_ln1612")
     with tab2:
         fig6 = yoy_overlay_fig(monthly, "월", "객단가(순)",
                                "월별 객단가(순) (동기간 YoY)",
                                ticklabels=MONTH_LABELS, height=380)
-        st.plotly_chart(fig6, use_container_width=True)
+        st.plotly_chart(fig6, use_container_width=True, key="chart_ln1617")
 
 
 # ───────────────────────────────────────────────
@@ -1650,7 +1650,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             f"주차별 {sel_label} (YoY)",
             ticklabels=week_labels, height=440,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="chart_ln1653")
 
         # 주차별 실적요약 테이블 (전년비 + 목표 + 목표비, 동요일 기준)
         st.subheader("주차별 실적요약")
@@ -1704,7 +1704,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             hovertemplate="요일: %{y}<br>월: %{x}<br>값: %{z:.3g}<extra></extra>"
         )
         base_layout(fig_hm, f"요일 × 월별 {hm_sel} 히트맵", 420)
-        st.plotly_chart(fig_hm, use_container_width=True)
+        st.plotly_chart(fig_hm, use_container_width=True, key="chart_ln1707")
 
         # 요일별 요약
         st.subheader("요일별 평균 성과")
@@ -1794,7 +1794,7 @@ def page_daily(df: pd.DataFrame, targets: dict):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
-                st.plotly_chart(daily_fig(col, lbl), use_container_width=True)
+                st.plotly_chart(daily_fig(col, lbl), use_container_width=True, key=f"daily_chart_{col}")
 
     # ── 일별 상세 지표 (요청 순서)
     st.subheader("일별 상세 지표")
