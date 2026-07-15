@@ -1820,13 +1820,18 @@ def page_creative(df: pd.DataFrame):
         cr_full = cr_full[mask]
 
     # ── 매체별 CTR / 순결제ROAS 상위 10 소재
-    CR_MEDIA = ["카카오 비즈보드", "카카오 모먼트", "네이버 홈피드", "네이버 스마트채널", "네이버 네이티브"]
+    PREFERRED_MEDIA = ["카카오 비즈보드", "카카오 모먼트", "네이버 홈피드", "네이버 스마트채널", "네이버 네이티브"]
+    avail_media = sorted(cr_full["구분_매체명"].dropna().unique())
+    default_media = [m for m in PREFERRED_MEDIA if m in avail_media] or avail_media[:5]
+    sel_media_cr = st.multiselect("소재 그래프 매체 선택", avail_media,
+                                  default=default_media, key="cr_media_sel")
 
     def media_top10(metric, tickfmt, color, header, impr_filter=False):
         st.subheader(header)
-        for r in range(0, len(CR_MEDIA), 2):
+        media_list = sel_media_cr or default_media
+        for r in range(0, len(media_list), 2):
             mcols = st.columns(2)
-            for media, mc in zip(CR_MEDIA[r:r + 2], mcols):
+            for media, mc in zip(media_list[r:r + 2], mcols):
                 with mc:
                     sub = cr_full[cr_full["구분_매체명"] == media]
                     if impr_filter:
