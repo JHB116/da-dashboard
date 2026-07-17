@@ -35,7 +35,30 @@ hr { margin: 0.8rem 0 !important; border-color: #E2E8F0 !important; }
 # ───────────────────────────────────────────────
 # 상수
 # ───────────────────────────────────────────────
-TOTAL_SOURCES = ["거래액확대", "신규고객확대", "인지도제고", "E영업/광고주직접정산"]
+# 비용출처 버킷 정의 (사용자 지정). 값이 목록에 있으면 해당 탭에 합산된다.
+# 'e영업'/'E영업' 대소문자 변형까지 함께 포함해 매칭 누락을 방지한다.
+COST_BUCKETS = {
+    "TOTAL(서비스비용제외)": [
+        "거래액확대", "신규고객확대", "인지도제고", "E영업/광고주직접정산",
+        "신규고객확대-실적구분", "브랜드비용", "거래액확대-실적구분", "서비스비용-정산제외",
+        "브랜드/정산제외", "인지도제고/브랜딩", "서비스비용-e영업", "서비스비용-E영업",
+        "서비스비용-거래액확대", "서비스비용-인지도제고", "E영업/정산제외",
+    ],
+    "TOTAL": [
+        "거래액확대", "신규고객확대", "인지도제고", "E영업/광고주직접정산",
+        "신규고객확대-실적구분", "브랜드비용", "거래액확대-실적구분",
+        "브랜드/정산제외", "인지도제고/브랜딩", "E영업/정산제외",
+    ],
+    "거래액확대": [
+        "거래액확대", "거래액확대-실적구분", "E영업/광고주직접정산", "E영업/정산제외",
+        "서비스비용-거래액확대", "서비스비용-e영업", "서비스비용-E영업",
+    ],
+    "신규확대/인지도": [
+        "신규고객확대", "인지도제고", "신규고객확대-실적구분",
+        "서비스비용-인지도제고", "인지도제고/브랜딩",
+    ],
+}
+TOTAL_SOURCES = COST_BUCKETS["TOTAL"]  # 사이드바 'TOTAL' 모드용
 
 MEDIA_COLORS = {
     "카카오": "#FFCD00", "네이버": "#03C75A", "버즈빌": "#FF6B35",
@@ -822,10 +845,8 @@ def filter_df(df: pd.DataFrame, f: dict) -> pd.DataFrame:
         df["카테고리"].isin(f["cats"])
     )
     d = df[mask]
-    if f["cost_mode"] == "TOTAL":
-        d = d[d["구분_비용출처"].isin(TOTAL_SOURCES)]
-    elif f["cost_mode"] == "TOTAL(서비스비용제외)":
-        d = d[d["구분_비용출처"].isin(["거래액확대", "신규고객확대", "인지도제고"])]
+    if f["cost_mode"] in ("TOTAL", "TOTAL(서비스비용제외)"):
+        d = d[d["구분_비용출처"].isin(COST_BUCKETS[f["cost_mode"]])]
     elif f["cost_mode"] == "개별 선택" and f["sel_sources"]:
         d = d[d["구분_비용출처"].isin(f["sel_sources"])]
     return d
@@ -1121,18 +1142,11 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
 # ───────────────────────────────────────────────
 
 # 비용출처 탭 정의 (Excel 시트와 동일)
-COST_TABS = {
-    "TOTAL(서비스비용제외)": ["거래액확대", "신규고객확대", "인지도제고"],
-    "TOTAL": None,  # 전체 (필터 그대로)
-    "거래액확대": ["거래액확대"],
-    "신규확대/인지도": ["신규고객확대", "인지도제고"],
-}
+COST_TABS = COST_BUCKETS  # 요약 탭 = 사용자 지정 버킷
 
 
 def _filter_cost(df, tab_name):
     sources = COST_TABS.get(tab_name)
-    if tab_name == "TOTAL":
-        return df
     if sources:
         return df[df["구분_비용출처"].isin(sources)]
     return df
