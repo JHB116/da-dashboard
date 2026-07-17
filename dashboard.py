@@ -240,7 +240,7 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
         sheets = xls.sheet_names
 
         # ── 신규 양식
-        if "월TOTAL요약(누계)" in sheets or "통합_전체" in sheets:
+        if "월TOTAL요약(누계)" in sheets or "통합_전체" in sheets or "누계" in sheets:
             MEDIA = ["SNS", "버즈빌", "포탈"]
             total_monthly, media_monthly = {}, {mm: {} for mm in MEDIA}
 
@@ -268,9 +268,10 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
             result["monthly"]["TOTAL(서비스비용제외)"] = total_monthly
             result["monthly_media"] = media_monthly
 
-            # 주차별 (3매체 합산, 시작일 → ISO 주차)
-            if "통합_전체" in sheets:
-                w = pd.read_excel(xls, sheet_name="통합_전체", header=0)
+            # 주차별 (3매체 합산, 시작일 → ISO 주차). 시트명은 '통합_전체' 또는 '누계'.
+            wk_sheet = next((s for s in ("통합_전체", "누계") if s in sheets), None)
+            if wk_sheet:
+                w = pd.read_excel(xls, sheet_name=wk_sheet, header=0)
                 w.columns = [str(c).strip() for c in w.columns]
                 agg_wk = {}
                 for _, r in w.iterrows():
