@@ -237,7 +237,7 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
     }
     DA 전체 목표는 요약의 'TOTAL' 및 'TOTAL(서비스비용미반영)' 탭에 매핑한다.
     """
-    result = {"monthly": {}, "weekly": {}, "monthly_media": {}}
+    result = {"monthly": {}, "weekly": {}, "monthly_media": {}, "weekly_rows": {}}
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
         sheets = xls.sheet_names
@@ -271,12 +271,15 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
             result["monthly"]["TOTAL(서비스비용미반영)"] = total_monthly
             result["monthly_media"] = media_monthly
 
-            # 주차별 (3매체 합산, 시작일 → ISO 주차). 시트명은 '통합_전체' 또는 '누계'.
+            # 주차별. 시트명은 '통합_전체' 또는 '누계'.
+            # - result["weekly"]: ISO 주차 키(주차별 시트 목표 매칭용)
+            # - result["weekly_rows"]: (연도,월)별 주차 목록[시작일, spend, rev] (월 MTD 목표 계산용)
             wk_sheet = next((s for s in ("통합_전체", "누계") if s in sheets), None)
             if wk_sheet:
                 w = pd.read_excel(xls, sheet_name=wk_sheet, header=0)
                 w.columns = [str(c).strip() for c in w.columns]
-                agg_wk = {}
+                agg_wk = {}          # ISO 주차 키
+                rows_by_ym = {}      # (연,월) -> {시작일: [spend,rev]}
                 for _, r in w.iterrows():
                     lab = str(r.get("기간", ""))
                     if "TOTAL" in lab:
@@ -285,20 +288,26 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
                     if not mt:
                         continue
                     try:
-                        yr = int(r["연도"])
-                        dt = pd.Timestamp(yr, int(mt.group(1)), int(mt.group(2)))
-                        iso = dt.isocalendar()
+                        yr = int(r["연도"]); mo = int(r["월"])
+                        sd = pd.Timestamp(yr, int(mt.group(1)), int(mt.group(2)))
+                        iso = sd.isocalendar()
                         key = (int(iso[0]), int(iso[1]))
                     except Exception:
                         continue
+                    sp = _tnum(r.get("광고비")); rv = _tnum(r.get("거래액"))
                     cur = agg_wk.get(key, dict(spend=0.0, rev=0.0))
-                    cur["spend"] += _tnum(r.get("광고비"))
-                    cur["rev"]   += _tnum(r.get("거래액"))
+                    cur["spend"] += sp; cur["rev"] += rv
                     agg_wk[key] = cur
+                    ym = rows_by_ym.setdefault((yr, mo), {})
+                    acc = ym.setdefault(sd, [0.0, 0.0])
+                    acc[0] += sp; acc[1] += rv
                 for k, v in agg_wk.items():
                     if v["spend"] or v["rev"]:
                         v["roas"] = v["rev"] / v["spend"] if v["spend"] else 0.0
                         result["weekly"][k] = v
+                for ym, wk in rows_by_ym.items():
+                    result["weekly_rows"][ym] = sorted(
+                        [(sd, sv[0], sv[1]) for sd, sv in wk.items()], key=lambda x: x[0])
             return result
 
         # ── 구 양식 (하위 호환)
@@ -839,21 +848,31 @@ def detail_table_yoy(rows, period_label="기간") -> pd.DataFrame:
     return pd.DataFrame(data, columns=[period_label] + DETAIL_COLS)
 
 
-def mtd_target_from_weekly(weekly: dict, year: int, month: int, data_max) -> dict:
-    """당월 MTD 목표: 주차별 목표를 일평균(÷7)으로 환산해 월초~data_max 일수만큼 누적.
-    완결 주는 7/7(전액), 진행 중인 주는 진행일수/7만 반영된다."""
-    if not weekly:
+def mtd_target_from_weekly(weekly_rows: dict, year: int, month: int, data_max) -> dict:
+    """당월 MTD 목표(목표파일 주차 기준):
+    - 완결된 주(다음 주가 이미 시작): 목표 전액
+    - 진행 중인 주(data_max 포함): 목표 × (진행일수 ÷ 7)
+    - 아직 시작 안 한 주: 제외
+    weekly_rows: {(연,월): [(시작일, spend, rev), ...]} (시작일 오름차순)
+    """
+    rows = (weekly_rows or {}).get((int(year), int(month)))
+    if not rows:
         return {}
+    dmax = pd.Timestamp(data_max).normalize()
     spend = rev = 0.0
-    d = pd.Timestamp(year, month, 1)
-    dmax = pd.Timestamp(data_max)
-    while d <= dmax and d.month == month:
-        iso = d.isocalendar()
-        wt = weekly.get((int(iso[0]), int(iso[1])))
-        if wt:
-            spend += (wt.get("spend", 0) or 0) / 7.0
-            rev   += (wt.get("rev", 0) or 0) / 7.0
-        d += pd.Timedelta(days=1)
+    for i, (sd, sp, rv) in enumerate(rows):
+        sd = pd.Timestamp(sd).normalize()
+        if sd > dmax:
+            break
+        nxt = pd.Timestamp(rows[i + 1][0]).normalize() if i + 1 < len(rows) else None
+        if nxt is not None and nxt <= dmax:
+            # 다음 주가 이미 시작 → 이 주는 완결
+            spend += sp; rev += rv
+        else:
+            # 진행 중인 주
+            elapsed = (dmax - sd).days + 1
+            f = min(max(elapsed, 0), 7) / 7.0
+            spend += sp * f; rev += rv * f
     if spend <= 0 and rev <= 0:
         return {}
     return dict(spend=spend, rev=rev, roas=(rev / spend if spend else 0.0))
@@ -863,7 +882,7 @@ def mtd_target_from_weekly(weekly: dict, year: int, month: int, data_max) -> dic
 # 날짜 범위 필터 (페이지 상단)
 # ───────────────────────────────────────────────
 def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
-                      default_preset: str = "이번주") -> pd.DataFrame:
+                      default_preset: str = "이번달") -> pd.DataFrame:
     """페이지 상단 날짜 범위 선택기. 프리셋 버튼 + 직접 입력.
     key_prefix로 페이지별 독립 상태를 유지한다."""
     k_start, k_end, k_preset = f"{key_prefix}_start", f"{key_prefix}_end", f"{key_prefix}_preset"
@@ -1344,11 +1363,26 @@ def _style_summary(tbl, metric_labels, groups):
     return tbl.style
 
 
+def _split_render(rows_new, rows_old, show_fn, key, latest_first=False):
+    """한 표에 26년(기본)만 표시하고, 체크박스로 25년 행을 같은 표에 접었다 폈다.
+    latest_first=True면 최근 기간이 위로 오도록 역순 정렬."""
+    include = False
+    if rows_old:
+        include = st.checkbox(f"📁 {START_YEAR}년 포함", value=False, key=key)
+    rows = (list(rows_old) + list(rows_new)) if include else list(rows_new)
+    if latest_first:
+        rows = rows[::-1]
+    if rows:
+        show_fn(rows)
+    else:
+        st.info("표시할 데이터가 없습니다.")
+
+
 def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None,
-                            tab_name=None, weekly_targets=None):
+                            tab_name=None, weekly_targets=None, weekly_rows=None):
     """비용출처별 탭 내부: 실적요약 테이블 (2줄 헤더).
-    - 25년(START_YEAR) 행은 전년비/목표비 블락 + 접이식(expander)
-    - 당월(부분월)은 MTD 목표(주차별 목표 일평균 누적) 사용"""
+    - 25년(START_YEAR) 행은 전년비/목표비 블락 + 한 표 접이식(체크박스)
+    - 당월(부분월)은 MTD 목표(주차별 목표 기준) 사용"""
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
@@ -1386,8 +1420,8 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         prev = prev_map.get((yr, mo)) if sameday else prev_map.get((yr - 1, mo))
         tgt = dict(tab_monthly.get((yr, mo), {}) or {})
         # 당월 MTD 목표 (TOTAL 탭만 weekly 목표 사용)
-        if partial and yr == cy and mo == cm and weekly_targets:
-            mtd = mtd_target_from_weekly(weekly_targets, yr, mo, data_max)
+        if partial and yr == cy and mo == cm and weekly_rows:
+            mtd = mtd_target_from_weekly(weekly_rows, yr, mo, data_max)
             if mtd:
                 tgt = mtd
         block = (yr <= START_YEAR)  # 25년 전년비/목표비 블락(24년 데이터 혼입 방지)
@@ -1398,11 +1432,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         st.dataframe(_style_summary(tbl, metric_labels, groups),
                      use_container_width=True, hide_index=True)
 
-    if rows_new:
-        _show(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 데이터 보기", expanded=False):
-            _show(rows_old)
+    _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
 
 
 def _render_trend_grid(df, targets):
@@ -1464,45 +1494,24 @@ def summary_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_detail_tables(df):
-    """월별 상세 실적표 + 월별 실적표(MTD 전년비). TOTAL 기준."""
+    """월별 상세 실적표. TOTAL 기준. (MTD 전년비 표는 25년 전년비 산출 불가로 제거)"""
     df_tot = _filter_cost(df, "TOTAL")
     if df_tot.empty:
         return
     cur = agg(df_tot[df_tot["연도"] >= START_YEAR], ["연도", "월"]).sort_values(["연도", "월"])
     if cur.empty:
         return
-    prev_map = _sameday_prev_by_ym(df_tot)
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         yr, mo = int(r["연도"]), int(r["월"])
         label = f"{yr % 100:02d}년 {mo}월"
-        prev = prev_map.get((yr, mo))
-        block = (yr <= START_YEAR)
-        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
+        (rows_old if yr <= START_YEAR else rows_new).append((label, r))
 
     def _actual(rows):
-        st.dataframe(detail_table([(l, s) for l, s, _, _ in rows]),
-                     use_container_width=True, hide_index=True)
-
-    def _yoy(rows):
-        t = detail_table_yoy([(l, s, p, b) for l, s, p, b in rows])
-        st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(detail_table(rows), use_container_width=True, hide_index=True)
 
     st.markdown("##### 📄 월별 상세 실적")
-    if rows_new:
-        _actual(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 상세 실적", expanded=False):
-            _actual(rows_old)
-
-    st.markdown("##### 📄 월별 실적 (MTD 전년비)")
-    st.caption("당월은 전년 동요일(-364일) 기준 MTD로, 그 외 월은 동요일 전년비로 비교합니다.")
-    if rows_new:
-        _yoy(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 전년비", expanded=False):
-            _yoy(rows_old)
+    _split_render(rows_new, rows_old, _actual, key="sum_detA")
 
 
 def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
@@ -1537,17 +1546,17 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     sameday = True
 
     monthly_targets = (report_targets or {}).get("monthly", {})
-    weekly_targets = (report_targets or {}).get("weekly", {})
+    weekly_rows = (report_targets or {}).get("weekly_rows", {})
     for i, tname in enumerate(tab_names):
         with main_tabs[i]:
             st.caption(f"비용출처: {tname}  |  {'동요일 기준' if sameday else '동월 기준'} 전년비")
             df_tab = _filter_cost(df, tname)
-            wk = weekly_targets if tname in ("TOTAL", "TOTAL(서비스비용미반영)") else None
+            wr = weekly_rows if tname in ("TOTAL", "TOTAL(서비스비용미반영)") else None
             _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday,
                                     monthly_targets=monthly_targets, tab_name=tname,
-                                    weekly_targets=wk)
+                                    weekly_rows=wr)
 
-    # ── 실적요약표(탭) → 그래프 → 상세표 → 상세표(전년비) 순
+    # ── 실적요약표(탭) → 그래프 → 상세표 순
     st.divider()
     _render_trend_grid(df, targets)
     st.divider()
@@ -1617,7 +1626,7 @@ def mtd_target_week(weekly, year, iso_week, data_max) -> dict:
                 roas=wt.get("roas", 0) or 0)
 
 
-def _period_target(gran, tab_name, tab_monthly, weekly, key, data_max):
+def _period_target(gran, tab_name, tab_monthly, weekly, key, data_max, weekly_rows=None):
     if tab_name not in ("TOTAL", "TOTAL(서비스비용미반영)"):
         return {}
     if gran == "월":
@@ -1625,8 +1634,8 @@ def _period_target(gran, tab_name, tab_monthly, weekly, key, data_max):
         base = dict(tab_monthly.get((yr, mo), {}) or {})
         last = calendar.monthrange(yr, mo)[1]
         if (yr == data_max.year and mo == data_max.month
-                and data_max.day < last and weekly):
-            m = mtd_target_from_weekly(weekly, yr, mo, data_max)
+                and data_max.day < last and weekly_rows):
+            m = mtd_target_from_weekly(weekly_rows, yr, mo, data_max)
             if m:
                 return m
         return base
@@ -1646,8 +1655,10 @@ def _period_target(gran, tab_name, tab_monthly, weekly, key, data_max):
     return {}
 
 
-def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_targets=None):
-    """기간별 실적요약표(2줄 헤더) — 주/일 공용. 25년 접이식 + 당기간 MTD 목표."""
+def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_targets=None,
+                           weekly_rows=None, key="", prev_tab=None):
+    """기간별 실적요약표(2줄 헤더) — 주/일 공용. 25년 접이식(한 표) + 당기간 MTD 목표.
+    주=최신 주차가 위, 일=최근 날짜가 아래. prev_tab=전년비 계산용(기간 미필터) 소스."""
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
@@ -1658,7 +1669,7 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     if cur.empty:
         st.info("해당 기간 데이터가 없습니다.")
         return
-    prev_map = _sameday_prev(df_tab, gran)
+    prev_map = _sameday_prev(prev_tab if prev_tab is not None else df_tab, gran)
 
     if tab_name in ("신규고객확대", "인지도제고"):
         metric_labels, groups = ACQ_METRICS, ("실적", "전년비")
@@ -1674,11 +1685,12 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
 
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
-        key = _period_key(gran, r)
+        pk = _period_key(gran, r)
         label = _period_label(gran, r)
         yr = _row_year(gran, r)
-        prev = prev_map.get(key)
-        tgt = _period_target(gran, tab_name, tab_monthly, weekly_targets, key, data_max)
+        prev = prev_map.get(pk)
+        tgt = _period_target(gran, tab_name, tab_monthly, weekly_targets, pk, data_max,
+                             weekly_rows=weekly_rows)
         block = (yr <= START_YEAR)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
 
@@ -1687,75 +1699,74 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
         st.dataframe(_style_summary(tbl, metric_labels, groups),
                      use_container_width=True, hide_index=True)
 
-    # 일별은 최신이 위로 오도록 역순
-    if gran == "일":
-        rows_new = rows_new[::-1]
-        rows_old = rows_old[::-1]
-    if rows_new:
-        _show(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 데이터 보기", expanded=False):
-            _show(rows_old)
+    _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=(gran == "주"))
 
 
-def _render_period_tabs(df, gran, report_targets, targets):
+def _render_period_tabs(df, gran, report_targets, targets, prev_df=None):
     tab_names = ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"]
     tabs = st.tabs(["📋 " + t for t in tab_names])
     monthly_targets = (report_targets or {}).get("monthly", {})
     weekly_targets = (report_targets or {}).get("weekly", {})
+    weekly_rows = (report_targets or {}).get("weekly_rows", {})
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다.")
     for i, tname in enumerate(tab_names):
         with tabs[i]:
             st.caption(f"비용출처: {tname}")
             df_tab = _filter_cost(df, tname)
-            wk = weekly_targets if tname in ("TOTAL", "TOTAL(서비스비용미반영)") else None
-            _render_period_section(df_tab, gran, tname, weekly_targets=wk,
-                                   monthly_targets=monthly_targets)
+            prev_tab = _filter_cost(prev_df, tname) if prev_df is not None else None
+            is_total = tname in ("TOTAL", "TOTAL(서비스비용미반영)")
+            _render_period_section(df_tab, gran, tname,
+                                   weekly_targets=(weekly_targets if is_total else None),
+                                   monthly_targets=monthly_targets,
+                                   weekly_rows=(weekly_rows if is_total else None),
+                                   key=f"{gran}_{i}", prev_tab=prev_tab)
 
 
 def _render_period_graph(df, gran, key_prefix):
-    """기간별 지표 추이 그리드(전 지표 노출, 일평균). 당기간은 전년 MTD 비교."""
-    st.markdown(f"#### 📈 지표별 추이 ({gran} · 일평균)")
+    """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값. 당기간은 전년 MTD 비교."""
+    avg_note = "" if gran == "일" else " · 일평균"
+    st.markdown(f"#### 📈 지표별 추이 ({gran}{avg_note})")
     src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
                    horizontal=True, key=f"{key_prefix}_gsrc")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
+    suffix = "" if gran == "일" else f" ({gran} 일평균)"
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), 2):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
-                fig = metric_trend_fig(df_tab, col, gran, f"{lbl} ({gran} 일평균)",
+                fig = metric_trend_fig(df_tab, col, gran, f"{lbl}{suffix}",
                                        height=300, tickfmt=RATIO_TICKFMT.get(col))
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
 
-def _render_period_detail(df, gran):
-    """기간별 상세 실적표 + 상세 실적표(전년비). TOTAL 기준, 25년 접이식."""
+def _render_period_detail(df, gran, key_prefix="", prev_df=None):
+    """기간별 상세 실적표 + 상세 실적표(전년비). TOTAL 기준, 25년 한 표 접이식."""
     df_tot = _filter_cost(df, "TOTAL")
     if df_tot.empty:
         return
+    prev_tot = _filter_cost(prev_df, "TOTAL") if prev_df is not None else df_tot
     cols = PERIOD_COLS[gran]
     d_all = agg(df_tot, cols)
     yr_ser = (d_all["기간_일자"].dt.year if gran == "일" else d_all["연도"])
     cur = d_all[yr_ser >= START_YEAR].sort_values(cols)
     if cur.empty:
         return
-    prev_map = _sameday_prev(df_tot, gran)
+    prev_map = _sameday_prev(prev_tot, gran)
     ptype = PERIOD_TYPE[gran]
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
-        key = _period_key(gran, r)
+        pk = _period_key(gran, r)
         label = _period_label(gran, r)
         yr = _row_year(gran, r)
-        prev = prev_map.get(key)
+        prev = prev_map.get(pk)
         block = (yr <= START_YEAR)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
-    if gran == "일":
-        rows_new = rows_new[::-1]
-        rows_old = rows_old[::-1]
+
+    lf = (gran == "주")  # 주=최신 위, 일=최근 아래
 
     def _actual(rows):
         st.dataframe(detail_table([(l, s) for l, s, _, _ in rows], period_label=ptype),
@@ -1767,51 +1778,61 @@ def _render_period_detail(df, gran):
                      use_container_width=True, hide_index=True)
 
     st.markdown(f"##### 📄 {gran}별 상세 실적")
-    if rows_new:
-        _actual(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 상세 실적", expanded=False):
-            _actual(rows_old)
+    _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
     st.markdown(f"##### 📄 {gran}별 실적 (전년비)")
-    if rows_new:
-        _yoy(rows_new)
-    if rows_old:
-        with st.expander(f"📁 {START_YEAR}년 전년비", expanded=False):
-            _yoy(rows_old)
+    _split_render(rows_new, rows_old, _yoy, key=f"{key_prefix}_detB", latest_first=lf)
 
 
 def render_period_sheet(df, gran, header, report_targets=None, targets=None,
-                        key_prefix=None):
-    """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비)."""
+                        key_prefix=None, month_picker=False):
+    """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
+    month_picker=True(일별): 기본은 최신 연월만 표시, 더 긴 기간은 선택."""
     st.header(header)
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
     key_prefix = key_prefix or gran
-    df = page_filters(df, f"{key_prefix}f", expanded=False)
-    _render_period_tabs(df, gran, report_targets, targets or {})
+    base = page_filters(df, f"{key_prefix}f", expanded=False)
+    df = base
+    prev_df = None
+    if month_picker and "연월" in base.columns and not base.empty:
+        months = sorted(base["연월"].dropna().unique(), reverse=True)
+        opts = ["전체 기간"] + months
+        sel = st.selectbox("조회 기간", opts, index=(1 if len(opts) > 1 else 0),
+                           key=f"{key_prefix}_month")
+        if sel != "전체 기간":
+            df = base[base["연월"] == sel]
+            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
+        if df.empty:
+            st.info("해당 기간 데이터가 없습니다.")
+            return
+    _render_period_tabs(df, gran, report_targets, targets or {}, prev_df=prev_df)
     st.divider()
     _render_period_graph(df, gran, key_prefix)
     st.divider()
-    _render_period_detail(df, gran)
+    _render_period_detail(df, gran, key_prefix=key_prefix, prev_df=prev_df)
 
 
 # ───────────────────────────────────────────────
 # 그룹(매체/BPU)별 실적 공용 렌더
 # ───────────────────────────────────────────────
-def _sameday_prev_window(df, col):
-    """동요일(-364일) 창의 전년 집계를 그룹값 기준으로 매핑. {그룹값: Series}"""
-    cur_dates = df["기간_일자"].drop_duplicates()
-    prev = df[df["기간_일자"].isin(cur_dates - pd.Timedelta(days=364))]
+def _sameday_prev_window(prev_source, col, cur_dates):
+    """동요일(-364일) 창의 전년 집계를 그룹값 기준으로 매핑. {그룹값: Series}
+    prev_source: 전년 데이터를 포함한(날짜 미필터) 소스 df."""
+    prev = prev_source[prev_source["기간_일자"].isin(
+        pd.Series(cur_dates.unique()) - pd.Timedelta(days=364))]
     if prev.empty:
         return {}
     pa = agg(prev, [col])
     return {r[col]: r for _, r in pa.iterrows()}
 
 
-def render_group_sheet_body(df, group_col, order=None, ptype=None):
-    """그룹(매체/BPU)별 실적요약표 + 상세표 + 상세표(전년비)."""
+def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=None):
+    """그룹(매체/BPU)별 실적요약표 + 상세표 + 상세표(전년비).
+    prev_source: 전년비 계산용(날짜 미필터, 동일 필터) 소스. 없으면 df 사용."""
     ptype = ptype or group_col.replace("구분_", "")
+    if prev_source is None:
+        prev_source = df
     cur = agg(df, [group_col])
     cur = cur[cur["지표_광고비"].fillna(0) > 0]
     if cur.empty:
@@ -1822,7 +1843,7 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None):
         cur = cur.sort_values(["_ord", "지표_광고비"], ascending=[True, False])
     else:
         cur = cur.sort_values("지표_광고비", ascending=False)
-    prev_map = _sameday_prev_window(df, group_col)
+    prev_map = _sameday_prev_window(prev_source, group_col, df["기간_일자"])
 
     rows = [(str(r[group_col]), r, prev_map.get(r[group_col]), {}, False)
             for _, r in cur.iterrows()]
@@ -1871,15 +1892,19 @@ BPU_ORDER = ["e-영업1 BPU", "e-영업2 BPU", "e-영업3 BPU", "e-영업4 BPU",
 
 
 def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
-                         ascending=False, top_n=50, id_cols=None):
-    """비용출처(src_name)별 상위 N 랭킹 표. CAMP_METRIC_SPEC 순서로 표기."""
+                         ascending=False, top_n=50, id_cols=None, group_cols=None):
+    """비용출처(src_name)별 상위 N 랭킹 표. CAMP_METRIC_SPEC 순서로 표기.
+    group_cols: 집계 기준(예: [캠페인, 매체명]). 없으면 [group_col]."""
     label = group_col.replace("구분_", "")
-    st.markdown(f"##### {label}별 실적 상위 {top_n}개 ({src_name}) · {sort_label} 정렬")
+    group_cols = group_cols or [group_col]
+    st.markdown(f"##### {label}×매체별 실적 상위 {top_n}개 ({src_name}) · {sort_label} 정렬"
+                if len(group_cols) > 1 else
+                f"##### {label}별 실적 상위 {top_n}개 ({src_name}) · {sort_label} 정렬")
     sub = df[df["구분_비용출처"] == src_name]
     if sub.empty:
         st.info(f"{src_name} 데이터가 없습니다.")
         return
-    cdf = agg(sub, [group_col])
+    cdf = agg(sub, group_cols)
     cdf = cdf[cdf["지표_광고비"].fillna(0) > 0]
     if sort_col in cdf.columns:
         cdf = cdf.sort_values(sort_col, ascending=ascending, na_position="last")
@@ -1910,19 +1935,16 @@ RANK_SORT = {
 # 페이지 2: 매체별 성과
 # ───────────────────────────────────────────────
 def page_media(df: pd.DataFrame):
-    st.header("📡 매체별 성과")
+    st.header("📡 매체별 실적")
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
 
-    # 날짜 카드 + 접이식 필터
-    df = date_range_filter(df, key_prefix="med", default_preset="올해")
+    # 접이식 필터(날짜 미적용, 전년비 소스) → 날짜 카드
+    base = page_filters(df, "medf", expanded=False)
+    df = date_range_filter(base, key_prefix="med", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
-        return
-    df = page_filters(df, "medf", expanded=False)
-    if df.empty:
-        st.info("필터 결과 데이터가 없습니다.")
         return
 
     # ── 상단: 매체별 광고비·거래액·순결제ROAS 비교 (유지)
@@ -1945,8 +1967,8 @@ def page_media(df: pd.DataFrame):
     st.plotly_chart(figc, use_container_width=True, key="media_compare")
 
     st.divider()
-    # ── 주차별/일별과 통일된 매체별 실적요약·상세표
-    render_group_sheet_body(df, "구분_매체명")
+    # ── 주차별/일별과 통일된 매체별 실적요약·상세표 (전년비는 base에서 동요일 비교)
+    render_group_sheet_body(df, "구분_매체명", prev_source=base)
 
 
 # ───────────────────────────────────────────────
@@ -1965,7 +1987,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         df = df[~df["구분_캠페인"].astype(str).str.contains("친구추가", na=False)]
 
     # 날짜 카드 (지난주 포함) + 접이식 필터 (매체명 기본: 네이버·카카오)
-    df = date_range_filter(df, key_prefix="camp", default_preset="올해")
+    df = date_range_filter(df, key_prefix="camp", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
@@ -1979,44 +2001,20 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     tab_rank, tab_quad = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면"])
 
     with tab_rank:
-        # 부서(BPU)별 광고비·거래액·순결제ROAS — 고정 순서
-        by_dept = agg(df, ["구분_부서명"])
-        by_dept = by_dept[by_dept["지표_광고비"].fillna(0) > 0].copy()
-        by_dept["_ord"] = by_dept["구분_부서명"].apply(
-            lambda v: BPU_ORDER.index(v) if v in BPU_ORDER else 999)
-        by_dept = by_dept.sort_values("_ord")
-        dept_charts = [
-            ("부서별 광고비", "지표_광고비", "#2563EB", ",.0f"),
-            ("부서별 거래액(순결제)", "지표_순결제거래액", "#0EA5E9", ",.0f"),
-            ("부서별 순결제ROAS", "순결제ROAS", "#16A34A", ".0%"),
-        ]
-        gcols = st.columns(3)
-        for (dlabel, dcol, dcolor, dfmt), gc in zip(dept_charts, gcols):
-            with gc:
-                sub = by_dept.dropna(subset=[dcol])
-                fig = px.bar(sub, x="구분_부서명", y=dcol, color_discrete_sequence=[dcolor])
-                fig.update_xaxes(categoryorder="array",
-                                 categoryarray=[b for b in BPU_ORDER if b in set(sub["구분_부서명"])])
-                if dfmt == ".0%":
-                    fig.update_yaxes(tickformat=".0%")
-                base_layout(fig, dlabel, 350)
-                fig.update_layout(showlegend=False, xaxis_tickangle=-20)
-                label_traces(fig, dfmt)
-                st.plotly_chart(fig, use_container_width=True, key=f"camp_dept_{dcol}")
-
-        st.divider()
-        # 캠페인별 실적 상위 50개 (비용출처별 정렬 규칙)
+        # 캠페인×매체별 실적 상위 50개 (비용출처별 정렬 규칙)
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_캠페인", src, slabel, scol, ascending=asc,
+                                 group_cols=["구분_캠페인", "구분_매체명"],
                                  id_cols=["구분_캠페인", "구분_매체명"])
             st.divider()
 
-        # 하위캠페인별 실적 상위 50개
+        # 하위캠페인×매체별 실적 상위 50개
         st.markdown("### 하위캠페인별 실적")
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_하위캠페인", src, slabel, scol, ascending=asc,
+                                 group_cols=["구분_하위캠페인", "구분_매체명"],
                                  id_cols=["구분_하위캠페인", "구분_매체명"])
             st.divider()
 
@@ -2028,9 +2026,13 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         - ❓ **물음표** (저ROAS + 고광고비) / 🐕 **개** (저ROAS + 저광고비)
         """)
         quad_src = df[df["구분_매체명"].astype(str).str.contains("카카오|네이버", na=False)]
-        st.caption("포함 매체: **카카오 · 네이버** 계열만")
+        st.caption("포함 매체: **카카오 · 네이버** 계열만 · 광고비 하위 5% 소액 캠페인 제외(ROAS 왜곡 방지)")
         quad_df = agg(quad_src, ["구분_캠페인", "구분_매체명"]).dropna(subset=["순결제ROAS"])
         quad_df = quad_df[quad_df["지표_광고비"] > 0]
+        # 소액·극단 ROAS 아웃라이어 제거(원이 일렬로 서는 현상 방지)
+        if len(quad_df) >= 5:
+            spend_floor = quad_df["지표_광고비"].quantile(0.05)
+            quad_df = quad_df[quad_df["지표_광고비"] >= spend_floor]
         if quad_df.empty:
             st.info("카카오·네이버 매체 데이터가 없습니다.")
         else:
@@ -2054,8 +2056,39 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             fig_q.add_vline(x=med_spend, line_dash="dash", line_color="#CBD5E1")
             fig_q.add_hline(y=med_roas, line_dash="dash", line_color="#CBD5E1")
             base_layout(fig_q, "캠페인 효율 사분면 (버블=클릭수)", 520)
-            fig_q.update_yaxes(tickformat=".0%")
+            # y축을 합리적 범위로 고정(극단 ROAS로 원이 일렬로 서는 현상 방지)
+            y_hi = float(quad_df["순결제ROAS"].quantile(0.95))
+            fig_q.update_yaxes(tickformat=".0%", range=[0, max(y_hi * 1.15, med_roas * 1.5, 0.01)])
             st.plotly_chart(fig_q, use_container_width=True, key="camp_quad")
+
+
+def _render_bpu_charts(df):
+    """부서(BPU)별 광고비·거래액·순결제ROAS — 고정 순서 막대 그래프."""
+    by_dept = agg(df, ["구분_부서명"])
+    by_dept = by_dept[by_dept["지표_광고비"].fillna(0) > 0].copy()
+    if by_dept.empty:
+        return
+    by_dept["_ord"] = by_dept["구분_부서명"].apply(
+        lambda v: BPU_ORDER.index(v) if v in BPU_ORDER else 999)
+    by_dept = by_dept.sort_values("_ord")
+    order_present = [b for b in BPU_ORDER if b in set(by_dept["구분_부서명"])]
+    dept_charts = [
+        ("BPU별 광고비", "지표_광고비", "#2563EB", ",.0f"),
+        ("BPU별 거래액(순결제)", "지표_순결제거래액", "#0EA5E9", ",.0f"),
+        ("BPU별 순결제ROAS", "순결제ROAS", "#16A34A", ".0%"),
+    ]
+    gcols = st.columns(3)
+    for (dlabel, dcol, dcolor, dfmt), gc in zip(dept_charts, gcols):
+        with gc:
+            sub = by_dept.dropna(subset=[dcol])
+            fig = px.bar(sub, x="구분_부서명", y=dcol, color_discrete_sequence=[dcolor])
+            fig.update_xaxes(categoryorder="array", categoryarray=order_present)
+            if dfmt == ".0%":
+                fig.update_yaxes(tickformat=".0%")
+            base_layout(fig, dlabel, 350)
+            fig.update_layout(showlegend=False, xaxis_tickangle=-20)
+            label_traces(fig, dfmt)
+            st.plotly_chart(fig, use_container_width=True, key=f"bpu_dept_{dcol}")
 
 
 def page_bpu(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
@@ -2063,15 +2096,14 @@ def page_bpu(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
-    df = date_range_filter(df, key_prefix="bpu", default_preset="올해")
+    base = page_filters(df, "bpuf", expanded=False)
+    df = date_range_filter(base, key_prefix="bpu", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
-    df = page_filters(df, "bpuf", expanded=False)
-    if df.empty:
-        st.info("필터 결과 데이터가 없습니다.")
-        return
-    render_group_sheet_body(df, "구분_부서명", order=BPU_ORDER, ptype="BPU")
+    _render_bpu_charts(df)
+    st.divider()
+    render_group_sheet_body(df, "구분_부서명", order=BPU_ORDER, ptype="BPU", prev_source=base)
 
 
 # 페이지: 주차별 실적 / 일별 실적 (공용 프레임워크)
@@ -2083,7 +2115,7 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
 
 def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     render_period_sheet(df, "일", "📆 일별 실적", report_targets=report_targets,
-                        targets=targets or {}, key_prefix="dy")
+                        targets=targets or {}, key_prefix="dy", month_picker=True)
 
 
 # ───────────────────────────────────────────────
@@ -2096,7 +2128,7 @@ def page_creative(df: pd.DataFrame):
         return
 
     # ── 날짜 범위 카드 (이 페이지 전용, 기본값: 올해)
-    df = date_range_filter(df, key_prefix="cr", default_preset="올해")
+    df = date_range_filter(df, key_prefix="cr", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
@@ -2113,6 +2145,18 @@ def page_creative(df: pd.DataFrame):
           "구분_하위캠페인", "구분_매체명", "구분_비용출처", "카테고리"]
     if "구분_상품" in df.columns:
         gb.append("구분_상품")
+    # 기획전번호·상세내역 등 빈칸으로 나오던 식별 컬럼을 실제 데이터에서 찾아 포함
+    CR_ID_CANDIDATES = {
+        "기획전번호": ["구분_기획전번호", "기획전번호", "구분_기획전", "기획전"],
+        "상세내역": ["구분_상세내역", "상세내역", "구분_소재상세", "소재상세", "구분_상세"],
+    }
+    cr_id_resolved = {}
+    for label, cands in CR_ID_CANDIDATES.items():
+        found = next((c for c in cands if c in df.columns), None)
+        if found:
+            cr_id_resolved[label] = found
+            if found not in gb:
+                gb.append(found)
     cr_full = agg(df, gb)
     if camp_search:
         cr_full = cr_full[cr_full["구분_캠페인"].str.contains(camp_search, na=False)]
@@ -2123,8 +2167,9 @@ def page_creative(df: pd.DataFrame):
 
     # ── 매체별 CTR / 순결제ROAS 상위 10 소재
     avail_media = sorted(cr_full["구분_매체명"].dropna().unique())
-    # 디폴트 선택 매체: 네이버·카카오 계열
-    default_media = [m for m in avail_media if ("네이버" in str(m) or "카카오" in str(m))] \
+    # 디폴트 선택 매체: 네이버·카카오 계열 (단, 카카오페이지 제외)
+    default_media = [m for m in avail_media
+                     if ("네이버" in str(m) or "카카오" in str(m)) and "카카오페이지" not in str(m)] \
         or avail_media[:5]
     sel_media_cr = st.multiselect("소재 그래프 매체 선택", avail_media,
                                   default=default_media, key="cr_media_sel")
@@ -2157,10 +2202,10 @@ def page_creative(df: pd.DataFrame):
     media_top10("CTR", ".2%", "#3B82F6", "📊 CTR 상위 10 소재 (매체별, 노출 1,000+)", impr_filter=True)
     media_top10("순결제ROAS", ".0%", "#10B981", "📈 순결제ROAS 상위 10 소재 (매체별)")
 
-    # ── 소재 테이블 (정렬 + 상위 N)
-    sort_col = st.selectbox("정렬 기준",
-                            ["지표_광고비", "CTR", "CPM", "순결제ROAS", "CR(순)",
-                             "객단가(순)", "첫구매CPA", "가입CPA"])
+    # ── 소재 테이블 (정렬 + 상위 N). 기본 정렬: 순결제ROAS
+    sort_opts = ["순결제ROAS", "지표_광고비", "CTR", "CPM", "CR(순)",
+                 "객단가(순)", "첫구매CPA", "가입CPA"]
+    sort_col = st.selectbox("정렬 기준", sort_opts, index=0)
     asc = sort_col in ("첫구매CPA", "가입CPA")
     cr_df = cr_full.sort_values(sort_col, ascending=asc, na_position="last")
     if top_n != "ALL":
@@ -2174,7 +2219,8 @@ def page_creative(df: pd.DataFrame):
     # 정렬 기준에 따른 소재 표를 화면에 직접 표시 (다운로드 버튼 제거)
     exp = {}
     for label, col in CREATIVE_EXPORT_SPEC:
-        exp[label] = cr_df[col].values if (col and col in cr_df.columns) else ""
+        c = cr_id_resolved.get(label, col)  # 기획전번호/상세내역 등 실제 컬럼 해석
+        exp[label] = cr_df[c].values if (c and c in cr_df.columns) else ""
     export_tbl = pd.DataFrame(exp)
     st.dataframe(export_tbl, use_container_width=True, hide_index=True)
 
@@ -2271,8 +2317,8 @@ def main():
     with page_box:
         st.subheader("📄 페이지")
         page = st.radio("페이지", [
-            "📊 전체 요약", "📅 주차별 실적", "📆 일별 실적", "🎯 캠페인별 실적",
-            "🏢 BPU별 실적", "📡 매체별 성과", "🎨 소재 상세",
+            "📊 전체 요약", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
+            "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적",
         ], label_visibility="collapsed")
 
     # 현재 페이지의 날짜 카드 범위를 내보내기에 반영
@@ -2325,7 +2371,7 @@ def main():
         page_campaign(pre_date_filtered, targets)
     elif page == "🏢 BPU별 실적":
         page_bpu(pre_date_filtered, targets, report_targets)
-    elif page == "📡 매체별 성과":
+    elif page == "📡 매체별 실적":
         page_media(pre_date_filtered)
     elif page == "🎨 소재 상세":
         page_creative(pre_date_filtered)
