@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
+import re
 
 st.set_page_config(
     page_title="DA 광고 실적 대시보드",
@@ -188,27 +189,100 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return df
 
 
+def _tnum(v):
+    """엑셀 셀 → 숫자 (실패 시 0)."""
+    try:
+        f = float(v)
+        return 0.0 if pd.isna(f) else f
+    except Exception:
+        return 0.0
+
+
 @st.cache_data(show_spinner=False)
 def load_targets_from_report(file_bytes: bytes) -> dict:
-    """보고서 엑셀에서 월별/주차별 목표를 파싱.
+    """목표 엑셀 파싱.
+    신규 양식: 'SNS/버즈빌/포탈' 3매체 목표를 합산한 값이 DA 전체 목표.
+      - 월별: 시트 '월TOTAL요약(누계)'  (연도,월, {매체}_광고비/거래액/ROAS)
+      - 주차별: 시트 '통합_전체'         (연도,월,기간,광고유형,UV,광고비,거래액,ROAS)
     Returns: {
       "monthly": {tab_name: {(year, month): {spend, rev, roas}}},
       "weekly":  {(year, iso_week): {spend, rev, roas}},
+      "monthly_media": {media: {(year, month): {...}}},   # 매체별(SNS/버즈빌/포탈)
     }
+    DA 전체 목표는 요약의 'TOTAL' 및 'TOTAL(서비스비용제외)' 탭에 매핑한다.
     """
-    SHEET_MAP = {
-        "월별_TOTAL(서비스비용제외)": "TOTAL(서비스비용제외)",
-        "월별_TOTAL": "TOTAL",
-        "월별_거래액": "거래액확대",
-        "월별_신규확대": "신규확대/인지도",
-    }
-    result = {"monthly": {}, "weekly": {}}
+    result = {"monthly": {}, "weekly": {}, "monthly_media": {}}
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+        sheets = xls.sheet_names
 
-        # 월별 목표 파싱
+        # ── 신규 양식
+        if "월TOTAL요약(누계)" in sheets or "통합_전체" in sheets:
+            MEDIA = ["SNS", "버즈빌", "포탈"]
+            total_monthly, media_monthly = {}, {mm: {} for mm in MEDIA}
+
+            if "월TOTAL요약(누계)" in sheets:
+                d = pd.read_excel(xls, sheet_name="월TOTAL요약(누계)", header=0)
+                d.columns = [str(c).strip() for c in d.columns]
+                for _, r in d.iterrows():
+                    try:
+                        y, mo = int(r["연도"]), int(r["월"])
+                    except Exception:
+                        continue
+                    tspend = trev = 0.0
+                    for mm in MEDIA:
+                        s = _tnum(r.get(f"{mm}_광고비")); rv = _tnum(r.get(f"{mm}_거래액"))
+                        if s or rv:
+                            media_monthly[mm][(y, mo)] = dict(
+                                spend=s, rev=rv, roas=(rv / s if s else 0.0))
+                        tspend += s; trev += rv
+                    if tspend or trev:
+                        total_monthly[(y, mo)] = dict(
+                            spend=tspend, rev=trev, roas=(trev / tspend if tspend else 0.0))
+
+            # DA 전체 목표를 전체 요약 탭에 매핑
+            result["monthly"]["TOTAL"] = total_monthly
+            result["monthly"]["TOTAL(서비스비용제외)"] = total_monthly
+            result["monthly_media"] = media_monthly
+
+            # 주차별 (3매체 합산, 시작일 → ISO 주차)
+            if "통합_전체" in sheets:
+                w = pd.read_excel(xls, sheet_name="통합_전체", header=0)
+                w.columns = [str(c).strip() for c in w.columns]
+                agg_wk = {}
+                for _, r in w.iterrows():
+                    lab = str(r.get("기간", ""))
+                    if "TOTAL" in lab:
+                        continue
+                    mt = re.search(r"\((\d{1,2})/(\d{1,2})", lab)
+                    if not mt:
+                        continue
+                    try:
+                        yr = int(r["연도"])
+                        dt = pd.Timestamp(yr, int(mt.group(1)), int(mt.group(2)))
+                        iso = dt.isocalendar()
+                        key = (int(iso[0]), int(iso[1]))
+                    except Exception:
+                        continue
+                    cur = agg_wk.get(key, dict(spend=0.0, rev=0.0))
+                    cur["spend"] += _tnum(r.get("광고비"))
+                    cur["rev"]   += _tnum(r.get("거래액"))
+                    agg_wk[key] = cur
+                for k, v in agg_wk.items():
+                    if v["spend"] or v["rev"]:
+                        v["roas"] = v["rev"] / v["spend"] if v["spend"] else 0.0
+                        result["weekly"][k] = v
+            return result
+
+        # ── 구 양식 (하위 호환)
+        SHEET_MAP = {
+            "월별_TOTAL(서비스비용제외)": "TOTAL(서비스비용제외)",
+            "월별_TOTAL": "TOTAL",
+            "월별_거래액": "거래액확대",
+            "월별_신규확대": "신규확대/인지도",
+        }
         for sheet, tab in SHEET_MAP.items():
-            if sheet not in xls.sheet_names:
+            if sheet not in sheets:
                 continue
             df = pd.read_excel(xls, sheet_name=sheet, header=None)
             tab_targets = {}
@@ -217,22 +291,13 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
                 if "년" not in label or "주차" in label:
                     continue
                 try:
-                    year = int(label[:4])
-                    month = int(label[5:7])
+                    year = int(label[:4]); month = int(label[5:7])
                 except Exception:
                     continue
-                spend = row.iloc[41] if pd.notna(row.iloc[41]) else 0
-                rev   = row.iloc[42] if pd.notna(row.iloc[42]) else 0
-                roas  = row.iloc[43] if pd.notna(row.iloc[43]) else 0
                 tab_targets[(year, month)] = dict(
-                    spend=float(spend or 0),
-                    rev=float(rev or 0),
-                    roas=float(roas or 0),
-                )
+                    spend=_tnum(row.iloc[41]), rev=_tnum(row.iloc[42]), roas=_tnum(row.iloc[43]))
             result["monthly"][tab] = tab_targets
-
-        # 주차별 목표 파싱
-        if "주차별" in xls.sheet_names:
+        if "주차별" in sheets:
             df = pd.read_excel(xls, sheet_name="주차별", header=None)
             for _, row in df.iterrows():
                 label = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
@@ -240,19 +305,12 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
                     continue
                 try:
                     date = pd.to_datetime(label[:8], format="%Y%m%d")
-                    year = date.isocalendar().year
-                    week = date.isocalendar().week
+                    year = date.isocalendar().year; week = date.isocalendar().week
                 except Exception:
                     continue
-                spend = row.iloc[38] if pd.notna(row.iloc[38]) else 0
-                rev   = row.iloc[39] if pd.notna(row.iloc[39]) else 0
-                roas  = row.iloc[40] if pd.notna(row.iloc[40]) else 0
-                if float(spend or 0) > 0 or float(rev or 0) > 0:
-                    result["weekly"][(int(year), int(week))] = dict(
-                        spend=float(spend or 0),
-                        rev=float(rev or 0),
-                        roas=float(roas or 0),
-                    )
+                spend, rev, roas = _tnum(row.iloc[38]), _tnum(row.iloc[39]), _tnum(row.iloc[40])
+                if spend > 0 or rev > 0:
+                    result["weekly"][(int(year), int(week))] = dict(spend=spend, rev=rev, roas=roas)
     except Exception as e:
         st.warning(f"목표 파일 파싱 오류: {e}")
     return result
