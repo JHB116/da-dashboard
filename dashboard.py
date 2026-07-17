@@ -38,13 +38,13 @@ hr { margin: 0.8rem 0 !important; border-color: #E2E8F0 !important; }
 # 비용출처 버킷 정의 (사용자 지정). 값이 목록에 있으면 해당 탭에 합산된다.
 # 'e영업'/'E영업' 대소문자 변형까지 함께 포함해 매칭 누락을 방지한다.
 COST_BUCKETS = {
-    "TOTAL(서비스비용제외)": [
+    "TOTAL": [
         "거래액확대", "신규고객확대", "인지도제고", "E영업/광고주직접정산",
         "신규고객확대-실적구분", "브랜드비용", "거래액확대-실적구분", "서비스비용-정산제외",
         "브랜드/정산제외", "인지도제고/브랜딩", "서비스비용-e영업", "서비스비용-E영업",
         "서비스비용-거래액확대", "서비스비용-인지도제고", "E영업/정산제외",
     ],
-    "TOTAL": [
+    "TOTAL(서비스비용미반영)": [
         "거래액확대", "신규고객확대", "인지도제고", "E영업/광고주직접정산",
         "신규고객확대-실적구분", "브랜드비용", "거래액확대-실적구분",
         "브랜드/정산제외", "인지도제고/브랜딩", "E영업/정산제외",
@@ -53,9 +53,11 @@ COST_BUCKETS = {
         "거래액확대", "거래액확대-실적구분", "E영업/광고주직접정산", "E영업/정산제외",
         "서비스비용-거래액확대", "서비스비용-e영업", "서비스비용-E영업",
     ],
-    "신규확대/인지도": [
-        "신규고객확대", "인지도제고", "신규고객확대-실적구분",
-        "서비스비용-인지도제고", "인지도제고/브랜딩",
+    "신규고객확대": [
+        "신규고객확대", "신규고객확대-실적구분",
+    ],
+    "인지도제고": [
+        "인지도제고", "서비스비용-인지도제고", "인지도제고/브랜딩",
     ],
 }
 TOTAL_SOURCES = COST_BUCKETS["TOTAL"]  # 사이드바 'TOTAL' 모드용
@@ -232,7 +234,7 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
       "weekly":  {(year, iso_week): {spend, rev, roas}},
       "monthly_media": {media: {(year, month): {...}}},   # 매체별(SNS/버즈빌/포탈)
     }
-    DA 전체 목표는 요약의 'TOTAL' 및 'TOTAL(서비스비용제외)' 탭에 매핑한다.
+    DA 전체 목표는 요약의 'TOTAL' 및 'TOTAL(서비스비용미반영)' 탭에 매핑한다.
     """
     result = {"monthly": {}, "weekly": {}, "monthly_media": {}}
     try:
@@ -265,7 +267,7 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
 
             # DA 전체 목표를 전체 요약 탭에 매핑
             result["monthly"]["TOTAL"] = total_monthly
-            result["monthly"]["TOTAL(서비스비용제외)"] = total_monthly
+            result["monthly"]["TOTAL(서비스비용미반영)"] = total_monthly
             result["monthly_media"] = media_monthly
 
             # 주차별 (3매체 합산, 시작일 → ISO 주차). 시트명은 '통합_전체' 또는 '누계'.
@@ -300,10 +302,10 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
 
         # ── 구 양식 (하위 호환)
         SHEET_MAP = {
-            "월별_TOTAL(서비스비용제외)": "TOTAL(서비스비용제외)",
-            "월별_TOTAL": "TOTAL",
+            "월별_TOTAL(서비스비용제외)": "TOTAL",
+            "월별_TOTAL": "TOTAL(서비스비용미반영)",
             "월별_거래액": "거래액확대",
-            "월별_신규확대": "신규확대/인지도",
+            "월별_신규확대": "신규고객확대",
         }
         for sheet, tab in SHEET_MAP.items():
             if sheet not in sheets:
@@ -787,7 +789,7 @@ def sidebar_filters(df: pd.DataFrame):
     st.divider()
 
     cost_mode = st.radio("비용출처 모드",
-                         ["TOTAL(서비스비용제외)", "TOTAL", "개별 선택"], index=0)
+                         ["TOTAL", "TOTAL(서비스비용미반영)", "개별 선택"], index=0)
     sel_sources = None
     if cost_mode == "개별 선택":
         all_sources = sorted(df["구분_비용출처"].dropna().unique())
@@ -846,7 +848,7 @@ def filter_df(df: pd.DataFrame, f: dict) -> pd.DataFrame:
         df["카테고리"].isin(f["cats"])
     )
     d = df[mask]
-    if f["cost_mode"] in ("TOTAL", "TOTAL(서비스비용제외)"):
+    if f["cost_mode"] in ("TOTAL", "TOTAL(서비스비용미반영)"):
         d = d[d["구분_비용출처"].isin(COST_BUCKETS[f["cost_mode"]])]
     elif f["cost_mode"] == "개별 선택" and f["sel_sources"]:
         d = d[d["구분_비용출처"].isin(f["sel_sources"])]
@@ -1186,7 +1188,7 @@ def _render_trend_grid(df, targets):
     st.markdown("#### 📈 지표별 추이")
     c1, c2 = st.columns([2, 2])
     with c1:
-        src = st.radio("비용출처", ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"],
+        src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
                        horizontal=True, key="sum_trend_src")
     with c2:
         gran = st.radio("단위", ["월", "주", "일"], horizontal=True, key="sum_trend_gran")
@@ -1222,9 +1224,9 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     st.caption("아래 표·그래프는 날짜 카드와 무관하게 전체 기간(사이드바 필터 적용) 데이터를 표시합니다.")
 
     # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
-    main_tabs = st.tabs(["📋 TOTAL(서비스비용제외)", "📋 TOTAL", "📋 거래액확대", "📋 신규확대/인지도",
+    main_tabs = st.tabs(["📋 TOTAL", "📋 TOTAL(서비스비용미반영)", "📋 거래액확대", "📋 신규고객확대", "📋 인지도제고",
                           "💰 예산 페이싱", "🧩 거래액 구성"])
-    tab_names = ["TOTAL(서비스비용제외)", "TOTAL", "거래액확대", "신규확대/인지도"]
+    tab_names = ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"]
 
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다.")
     sameday = True
@@ -1242,7 +1244,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     _render_trend_grid(df, targets)
 
     # ── 예산 페이싱
-    with main_tabs[4]:
+    with main_tabs[5]:
         import calendar
         st.markdown("**당월 일별 광고비 소진 추이 & 월말 예측**")
         avail_months = sorted(df["연월"].unique(), reverse=True)
@@ -1292,7 +1294,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
                           delta=f"목표 대비 {fmt_delta(proj, targets['spend'])}")
 
     # ── 거래액 구성
-    with main_tabs[5]:
+    with main_tabs[6]:
         col1, col2 = st.columns(2)
         tot = df[AGG_COLS].sum()
         with col1:
