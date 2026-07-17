@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
 import re
+import calendar
 
 st.set_page_config(
     page_title="DA 광고 실적 대시보드",
@@ -589,6 +590,25 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         d = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
         if is_vol and "집행일수" in d.columns:
             d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
+        # 당월(부분월)은 전년도 동일월 포인트를 MTD(동요일 -364일 창)로 맞춤.
+        data_max = df["기간_일자"].max()
+        cy, cm = int(data_max.year), int(data_max.month)
+        if data_max.day < calendar.monthrange(cy, cm)[1]:
+            cur_dates = df[(df["연도"] == cy) & (df["월"] == cm)]["기간_일자"].drop_duplicates()
+            prev_dates = cur_dates - pd.Timedelta(days=364)
+            sub = df[df["기간_일자"].isin(prev_dates)]
+            if not sub.empty:
+                pa = agg(sub, ["연도"])
+                v = pa[val_col].iloc[0]
+                if is_vol:
+                    ndays = sub["기간_일자"].nunique()
+                    v = v / ndays if ndays else np.nan
+                mask = (d["연도"] == cy - 1) & (d["월"] == cm)
+                if mask.any():
+                    d.loc[mask, val_col] = v
+                elif not pd.isna(v):
+                    d = pd.concat([d, pd.DataFrame([{"연도": cy - 1, "월": cm, val_col: v}])],
+                                  ignore_index=True).sort_values(["연도", "월"])
         fig = yoy_overlay_fig(d, "월", val_col, title,
                               ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
     else:
@@ -686,7 +706,10 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월") -> pd.D
             tuples.append((g, m))
 
     data = []
-    for label, cur, prev, tgt in rows:
+    for row in rows:
+        # row: (라벨, cur, prev, tgt[, block]) — block=True면 전년비/목표비 차단
+        label, cur, prev, tgt = row[0], row[1], row[2], row[3]
+        block = row[4] if len(row) > 4 else False
         tgt = tgt or {}
         rec = {(period_type, ""): label}
         for m in metric_labels:
@@ -698,18 +721,110 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월") -> pd.D
             if "실적" in groups:
                 rec[("실적", m)] = fmt(cval) if not pd.isna(cval) else "–"
             if "전년비" in groups:
-                rec[("전년비", m)] = signed_pct(_chg(cval, pval))
+                rec[("전년비", m)] = "–" if block else signed_pct(_chg(cval, pval))
             if "목표" in groups:
                 rec[("목표", m)] = fmt(tv) if tv > 0 else "–"
             if "목표비" in groups:
-                rec[("목표비", m)] = (f"{cval / tv * 100:.1f}%"
-                                     if (tk and tv > 0 and not pd.isna(cval)) else "–")
+                # 목표비도 증감률 형식(+초록/△빨강)으로 통일: 실적/목표 - 1
+                rec[("목표비", m)] = ("–" if (block or not tk or tv <= 0 or pd.isna(cval))
+                                     else signed_pct(cval / tv - 1))
         data.append(rec)
 
     return pd.DataFrame(data, columns=pd.MultiIndex.from_tuples(tuples))
 
 
 # ───────────────────────────────────────────────
+# 상세 실적 표 (기간별 전지표) — 전체요약/주차별/일별 공용
+# ───────────────────────────────────────────────
+def _fmt_kind(v, kind):
+    if pd.isna(v): return "–"
+    if kind == "money": return fmt_money(v)
+    if kind == "won":   return fmt_won(v)
+    if kind == "roas":  return fmt_roas(v)
+    if kind == "num":   return fmt_num(v)
+    if kind == "pct1":  return fmt_pct(v, 1)
+    if kind == "pct2":  return fmt_pct(v, 2)
+    return str(v)
+
+# (표기명, 원본컬럼, 종류)
+DETAIL_SPEC = [
+    ("광고비",        "지표_광고비",              "money"),
+    ("순결제매출",     "지표_순결제거래액",         "money"),
+    ("순결제ROAS",    "순결제ROAS",              "roas"),
+    ("순결제비중(%)",  "순결제비중",              "pct1"),
+    ("총결제매출",     "지표_총결제거래액",         "money"),
+    ("총매출ROAS",    "총결제ROAS",              "roas"),
+    ("UV/클릭(%)",    "UV/클릭",                "pct2"),
+    ("CR(총)",       "CR(총)",                 "pct2"),
+    ("객단가(총)",     "객단가(총)",              "won"),
+    ("총결제고객수",   "지표_총결제고객수",         "num"),
+    ("가입률",        "가입률",                  "pct2"),
+    ("가입수",        "지표_가입회원",            "num"),
+    ("가입CPA",       "가입CPA",                "won"),
+    ("첫구매율",       "첫구매율",                "pct2"),
+    ("첫구매수",       "지표_순결제고객수(첫구매)",   "num"),
+    ("첫구매CPA",      "첫구매CPA",              "won"),
+    ("첫구매거래액",    "지표_순결제거래액(첫구매)",   "money"),
+    ("첫구매비중",     "첫구매비중",              "pct1"),
+    ("신규고객수",     "지표_당년신규순결제고객수",   "num"),
+    ("신규거래액",     "지표_당년신규순결제거래액",   "money"),
+    ("신규비중",       "신규비중",                "pct1"),
+    ("윈백고객수",     "지표_순결제고객수(윈백)",     "num"),
+    ("윈백거래액",     "지표_순결제거래액(윈백)",     "money"),
+]
+DETAIL_COLS = [d[0] for d in DETAIL_SPEC]
+
+
+def detail_table(rows, period_label="기간") -> pd.DataFrame:
+    """실적 상세표. rows: [(라벨, cur_series)]"""
+    data = []
+    for label, s in rows:
+        rec = {period_label: label}
+        for disp, col, kind in DETAIL_SPEC:
+            v = (s.get(col, np.nan) if s is not None else np.nan)
+            rec[disp] = _fmt_kind(v, kind)
+        data.append(rec)
+    return pd.DataFrame(data, columns=[period_label] + DETAIL_COLS)
+
+
+def detail_table_yoy(rows, period_label="기간") -> pd.DataFrame:
+    """전년비 상세표(모든 셀이 증감률). rows: [(라벨, cur_series, prev_series[, block])]"""
+    data = []
+    for row in rows:
+        label, cur, prev = row[0], row[1], row[2]
+        block = row[3] if len(row) > 3 else False
+        rec = {period_label: label}
+        for disp, col, kind in DETAIL_SPEC:
+            c = (cur.get(col, np.nan) if cur is not None else np.nan)
+            p = (prev.get(col, np.nan) if prev is not None else np.nan)
+            if block or pd.isna(c) or pd.isna(p) or p == 0:
+                rec[disp] = "–"
+            else:
+                rec[disp] = signed_pct((c - p) / abs(p))
+        data.append(rec)
+    return pd.DataFrame(data, columns=[period_label] + DETAIL_COLS)
+
+
+def mtd_target_from_weekly(weekly: dict, year: int, month: int, data_max) -> dict:
+    """당월 MTD 목표: 주차별 목표를 일평균(÷7)으로 환산해 월초~data_max 일수만큼 누적.
+    완결 주는 7/7(전액), 진행 중인 주는 진행일수/7만 반영된다."""
+    if not weekly:
+        return {}
+    spend = rev = 0.0
+    d = pd.Timestamp(year, month, 1)
+    dmax = pd.Timestamp(data_max)
+    while d <= dmax and d.month == month:
+        iso = d.isocalendar()
+        wt = weekly.get((int(iso[0]), int(iso[1])))
+        if wt:
+            spend += (wt.get("spend", 0) or 0) / 7.0
+            rev   += (wt.get("rev", 0) or 0) / 7.0
+        d += pd.Timedelta(days=1)
+    if spend <= 0 and rev <= 0:
+        return {}
+    return dict(spend=spend, rev=rev, roas=(rev / spend if spend else 0.0))
+
+
 # ───────────────────────────────────────────────
 # 날짜 범위 필터 (페이지 상단)
 # ───────────────────────────────────────────────
@@ -724,9 +839,11 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     data_min = df["기간_일자"].min()
 
     week_start = today - pd.Timedelta(days=today.dayofweek)
+    last_week_start = week_start - pd.Timedelta(days=7)
     presets = {
         "전일":   (today - pd.Timedelta(days=1), today - pd.Timedelta(days=1)),
         "이번주": (week_start, today),
+        "지난주": (last_week_start, week_start - pd.Timedelta(days=1)),
         "이번달": (today.replace(day=1), today),
         "올해":   (today.replace(month=1, day=1), today),
     }
@@ -738,7 +855,7 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
         st.session_state[k_end]    = min(pe_def, data_max).date()
         st.session_state[k_preset] = default_preset
 
-    cols = st.columns([1, 1, 1, 1, 0.2, 2, 0.4, 2])
+    cols = st.columns([1, 1, 1, 1, 1, 0.2, 2, 0.4, 2])
     for i, (label, (ps, pe)) in enumerate(presets.items()):
         with cols[i]:
             ps_clamped = max(ps, data_min).date()
@@ -760,14 +877,14 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
 
     # NOTE: date_input에 key를 주면 위젯 상태가 value=를 덮어써서 프리셋 버튼이
     # 되돌려지는 버그가 생긴다. key 없이 value=로만 제어한다.
-    with cols[5]:
+    with cols[6]:
         new_start = st.date_input("시작일", value=clamped_start,
                                   min_value=d_min, max_value=d_max,
                                   label_visibility="collapsed")
-    with cols[6]:
+    with cols[7]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
-    with cols[7]:
+    with cols[8]:
         new_end = st.date_input("종료일", value=clamped_end,
                                 min_value=d_min, max_value=d_max,
                                 label_visibility="collapsed")
@@ -1185,13 +1302,23 @@ def _sameday_prev_by_ym(df_tab: pd.DataFrame) -> dict:
     return {(int(r["_cy"]), int(r["_cm"])): r for _, r in pa.iterrows()}
 
 
-def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None, tab_name=None):
-    """비용출처별 탭 내부: 실적요약 테이블 (2줄 헤더)"""
+def _style_summary(tbl, metric_labels, groups):
+    """전년비·목표비 컬럼에 +초록/△빨강 색상 적용."""
+    subset = [(g, m) for g in ("전년비", "목표비") if g in groups for m in metric_labels]
+    if subset:
+        return tbl.style.map(chg_style, subset=subset)
+    return tbl.style
+
+
+def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None,
+                            tab_name=None, weekly_targets=None):
+    """비용출처별 탭 내부: 실적요약 테이블 (2줄 헤더).
+    - 25년(START_YEAR) 행은 전년비/목표비 블락 + 접이식(expander)
+    - 당월(부분월)은 MTD 목표(주차별 목표 일평균 누적) 사용"""
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
 
-    # 25년 1월부터 노출 (모든 연도)
     cur = agg(df_tab[df_tab["연도"] >= START_YEAR], ["연도", "월"]).sort_values(["연도", "월"])
     if cur.empty:
         st.info("해당 기간 데이터가 없습니다.")
@@ -1203,7 +1330,6 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         pa = agg(df_tab, ["연도", "월"])
         prev_map = {(int(r["연도"]), int(r["월"])): r for _, r in pa.iterrows()}
 
-    # 탭별 지표/그룹 구성
     if tab_name in ("신규고객확대", "인지도제고"):
         metric_labels, groups = ACQ_METRICS, ("실적", "전년비")
     elif tab_name == "거래액확대":
@@ -1213,33 +1339,44 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
 
     tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
 
-    rows = []
+    # 당월(부분월) 판정
+    data_max = df_tab["기간_일자"].max()
+    cy, cm = int(data_max.year), int(data_max.month)
+    last_day = calendar.monthrange(cy, cm)[1]
+    partial = data_max.day < last_day
+
+    rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         yr, mo = int(r["연도"]), int(r["월"])
         label = f"{yr % 100:02d}년 {mo}월"
-        # sameday: prev_map은 '현재' (연도,월)로 키가 잡혀있음. 아니면 (연도-1,월)로 조회.
         prev = prev_map.get((yr, mo)) if sameday else prev_map.get((yr - 1, mo))
-        tgt = tab_monthly.get((yr, mo), {})
-        rows.append((label, r, prev, tgt))
+        tgt = dict(tab_monthly.get((yr, mo), {}) or {})
+        # 당월 MTD 목표 (TOTAL 탭만 weekly 목표 사용)
+        if partial and yr == cy and mo == cm and weekly_targets:
+            mtd = mtd_target_from_weekly(weekly_targets, yr, mo, data_max)
+            if mtd:
+                tgt = mtd
+        block = (yr <= START_YEAR)  # 25년 전년비/목표비 블락(24년 데이터 혼입 방지)
+        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
 
-    tbl = summary_table(rows, metric_labels, groups, period_type="월")
-    subset = [("전년비", m) for m in metric_labels]
-    st.dataframe(
-        tbl.style.map(chg_style, subset=subset),
-        use_container_width=True, hide_index=True,
-    )
+    def _show(rows):
+        tbl = summary_table(rows, metric_labels, groups, period_type="월")
+        st.dataframe(_style_summary(tbl, metric_labels, groups),
+                     use_container_width=True, hide_index=True)
+
+    if rows_new:
+        _show(rows_new)
+    if rows_old:
+        with st.expander(f"📁 {START_YEAR}년 데이터 보기", expanded=False):
+            _show(rows_old)
 
 
 def _render_trend_grid(df, targets):
-    """지표별 추이 그리드 — 페이지당 1회만 렌더(메모리 보호). 비용출처는 선택식."""
-    st.markdown("#### 📈 지표별 추이")
-    c1, c2 = st.columns([2, 2])
-    with c1:
-        src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
-                       horizontal=True, key="sum_trend_src")
-    with c2:
-        gran = st.radio("단위", ["월", "주", "주(최근10주)"], horizontal=True, key="sum_trend_gran")
-    st.caption("그래프 값은 해당 기간의 **일평균**(합계 지표 ÷ 집행일수)입니다. 비율지표는 기간 값 그대로 표시합니다.")
+    """지표별 추이 그리드 — 월 단위 일평균만 표시. 비용출처는 선택식."""
+    st.markdown("#### 📈 지표별 추이 (월 · 일평균)")
+    src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
+                   horizontal=True, key="sum_trend_src")
+    st.caption("월별 **일평균**(합계 지표 ÷ 집행일수). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
@@ -1249,34 +1386,85 @@ def _render_trend_grid(df, targets):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
-                fig = metric_trend_fig(df_tab, col, gran, f"{lbl} ({gran} 일평균)",
+                fig = metric_trend_fig(df_tab, col, "월", f"{lbl} (월 일평균)",
                                        height=300, tickfmt=RATIO_TICKFMT.get(col))
-                st.plotly_chart(fig, use_container_width=True,
-                                key=f"sum_chart_{col}_{gran}")
+                st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
+
+
+# 전체요약/주차별/일별 공용 필터 스펙
+_PAGE_FILTER_SPECS = [
+    ("비용출처", "구분_비용출처"), ("채널명", "구분_채널"), ("매체명", "구분_매체명"),
+    ("상품명", "구분_상품"), ("부서명", "구분_부서명"), ("디바이스명", "구분_디바이스"),
+]
+
+
+def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
+                 media_default=None) -> pd.DataFrame:
+    """접이식 필터 행(비용출처/채널명/매체명/상품명/부서명/디바이스명). 선택값을 df에 적용해 반환.
+    media_default: 매체명 기본 선택값(list) — 없으면 전체."""
+    with st.expander("🔎 필터", expanded=expanded):
+        cols = st.columns(len(_PAGE_FILTER_SPECS))
+        out = df
+        for (label, col), c in zip(_PAGE_FILTER_SPECS, cols):
+            if col not in df.columns:
+                continue
+            opts = sorted(df[col].dropna().unique().tolist())
+            default = opts
+            if label == "매체명" and media_default:
+                d = [m for m in opts if m in media_default]
+                if d:
+                    default = d
+            with c:
+                sel = st.multiselect(label, opts, default=default, key=f"{key_prefix}_{col}")
+            if sel and set(sel) != set(opts):
+                out = out[out[col].isin(sel)]
+        return out
 
 
 def summary_filters(df: pd.DataFrame) -> pd.DataFrame:
-    """전체요약 페이지 전용 필터 행 (날짜 카드 하단).
-    비용출처 / 채널명 / 매체명 / 상품명 / 부서명 / 디바이스명 다중선택."""
-    specs = [
-        ("비용출처", "구분_비용출처"),
-        ("채널명", "구분_채널"),
-        ("매체명", "구분_매체명"),
-        ("상품명", "구분_상품"),
-        ("부서명", "구분_부서명"),
-        ("디바이스명", "구분_디바이스"),
-    ]
-    cols = st.columns(len(specs))
-    out = df
-    for (label, col), c in zip(specs, cols):
-        if col not in df.columns:
-            continue
-        opts = sorted(df[col].dropna().unique().tolist())
-        with c:
-            sel = st.multiselect(label, opts, default=opts, key=f"sumf_{col}")
-        if sel and len(sel) < len(opts):
-            out = out[out[col].isin(sel)]
-    return out
+    return page_filters(df, "sumf", expanded=False)
+
+
+def _render_detail_tables(df):
+    """월별 상세 실적표 + 월별 실적표(MTD 전년비). TOTAL 기준."""
+    df_tot = _filter_cost(df, "TOTAL")
+    if df_tot.empty:
+        return
+    cur = agg(df_tot[df_tot["연도"] >= START_YEAR], ["연도", "월"]).sort_values(["연도", "월"])
+    if cur.empty:
+        return
+    prev_map = _sameday_prev_by_ym(df_tot)
+    rows_new, rows_old = [], []
+    for _, r in cur.iterrows():
+        yr, mo = int(r["연도"]), int(r["월"])
+        label = f"{yr % 100:02d}년 {mo}월"
+        prev = prev_map.get((yr, mo))
+        block = (yr <= START_YEAR)
+        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
+
+    def _actual(rows):
+        st.dataframe(detail_table([(l, s) for l, s, _, _ in rows]),
+                     use_container_width=True, hide_index=True)
+
+    def _yoy(rows):
+        t = detail_table_yoy([(l, s, p, b) for l, s, p, b in rows])
+        st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS),
+                     use_container_width=True, hide_index=True)
+
+    st.markdown("##### 📄 월별 상세 실적")
+    if rows_new:
+        _actual(rows_new)
+    if rows_old:
+        with st.expander(f"📁 {START_YEAR}년 상세 실적", expanded=False):
+            _actual(rows_old)
+
+    st.markdown("##### 📄 월별 실적 (MTD 전년비)")
+    st.caption("당월은 전년 동요일(-364일) 기준 MTD로, 그 외 월은 동요일 전년비로 비교합니다.")
+    if rows_new:
+        _yoy(rows_new)
+    if rows_old:
+        with st.expander(f"📁 {START_YEAR}년 전년비", expanded=False):
+            _yoy(rows_old)
 
 
 def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, full_df: pd.DataFrame = None):
@@ -1311,16 +1499,21 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     sameday = True
 
     monthly_targets = (report_targets or {}).get("monthly", {})
+    weekly_targets = (report_targets or {}).get("weekly", {})
     for i, tname in enumerate(tab_names):
         with main_tabs[i]:
             st.caption(f"비용출처: {tname}  |  {'동요일 기준' if sameday else '동월 기준'} 전년비")
             df_tab = _filter_cost(df, tname)
+            wk = weekly_targets if tname in ("TOTAL", "TOTAL(서비스비용미반영)") else None
             _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday,
-                                    monthly_targets=monthly_targets, tab_name=tname)
+                                    monthly_targets=monthly_targets, tab_name=tname,
+                                    weekly_targets=wk)
 
-    # 지표별 추이 그리드(1회만 렌더)
+    # ── 실적요약표(탭) → 그래프 → 상세표 → 상세표(전년비) 순
     st.divider()
     _render_trend_grid(df, targets)
+    st.divider()
+    _render_detail_tables(df)
 
 
 # ───────────────────────────────────────────────
