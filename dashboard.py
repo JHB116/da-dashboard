@@ -1379,6 +1379,12 @@ def _style_summary(tbl, metric_labels, groups):
     return tbl.style
 
 
+def _fit_height(n_rows, header_rows=1, cap=4000):
+    """행 수에 맞춰 내부 스크롤 없이 표 전체가 보이도록 픽셀 높이 계산."""
+    h = int(35 * (max(n_rows, 1) + header_rows) + 8)
+    return min(h, cap)
+
+
 def _split_render(rows_new, rows_old, show_fn, key, latest_first=False):
     """한 표에 26년(기본)만 표시하고, 체크박스로 25년 행을 같은 표에 접었다 폈다.
     latest_first=True면 최근 기간이 위로 오도록 역순 정렬."""
@@ -1446,7 +1452,8 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
     def _show(rows):
         tbl = summary_table(rows, metric_labels, groups, period_type="월")
         st.dataframe(_style_summary(tbl, metric_labels, groups),
-                     use_container_width=True, hide_index=True)
+                     use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows), header_rows=2))
 
     _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
 
@@ -1524,7 +1531,8 @@ def _render_detail_tables(df):
         (rows_old if yr <= START_YEAR else rows_new).append((label, r))
 
     def _actual(rows):
-        st.dataframe(detail_table(rows), use_container_width=True, hide_index=True)
+        st.dataframe(detail_table(rows), use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows)))
 
     st.markdown("##### 📄 월별 상세 실적")
     _split_render(rows_new, rows_old, _actual, key="sum_detA")
@@ -1713,7 +1721,8 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     def _show(rows):
         tbl = summary_table(rows, metric_labels, groups, period_type=ptype)
         st.dataframe(_style_summary(tbl, metric_labels, groups),
-                     use_container_width=True, hide_index=True)
+                     use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows), header_rows=2))
 
     # 최근 기간이 맨 아래(오름차순)로 표시
     _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=False)
@@ -1787,12 +1796,14 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None):
 
     def _actual(rows):
         st.dataframe(detail_table([(l, s) for l, s, _, _ in rows], period_label=ptype),
-                     use_container_width=True, hide_index=True)
+                     use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows)))
 
     def _yoy(rows):
         t = detail_table_yoy([(l, s, p, b) for l, s, p, b in rows], period_label=ptype)
         st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS),
-                     use_container_width=True, hide_index=True)
+                     use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows)))
 
     st.markdown(f"##### 📄 {gran}별 상세 실적")
     _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
@@ -1876,22 +1887,24 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
 
     rows = [(str(r[group_col]), r, prev_map.get(r[group_col]), {}, False)
             for _, r in cur.iterrows()]
+    nrow = len(cur)
     st.markdown("##### 📇 실적 요약")
     tbl = summary_table(rows, DEFAULT_METRICS, ("실적", "전년비"), period_type=ptype)
     st.dataframe(_style_summary(tbl, DEFAULT_METRICS, ("실적", "전년비")),
-                 use_container_width=True, hide_index=True)
+                 use_container_width=True, hide_index=True,
+                 height=_fit_height(nrow, header_rows=2))
     st.caption("ℹ️ 전년비는 동요일 기준(-364일) 동기간 비교입니다.")
 
     st.markdown("##### 📄 상세 실적")
     st.dataframe(detail_table([(str(r[group_col]), r) for _, r in cur.iterrows()],
                               period_label=ptype),
-                 use_container_width=True, hide_index=True)
+                 use_container_width=True, hide_index=True, height=_fit_height(nrow))
 
     st.markdown("##### 📄 상세 실적 (전년비)")
     dyt = detail_table_yoy([(str(r[group_col]), r, prev_map.get(r[group_col]), False)
                             for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dyt.style.map(chg_style, subset=DETAIL_COLS),
-                 use_container_width=True, hide_index=True)
+                 use_container_width=True, hide_index=True, height=_fit_height(nrow))
 
 
 # 캠페인/하위캠페인 랭킹 표 지표 순서 (표기명, 원본컬럼, 종류)
@@ -1976,8 +1989,33 @@ def page_media(df: pd.DataFrame):
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
 
-    # ── 상단: 매체별 광고비·거래액·순결제ROAS 비교 (유지)
+    # ── 상단: 매체별 광고비·거래액 도넛 + 순결제ROAS 막대
     by_media = agg(df, ["구분_매체명"]).sort_values("지표_광고비", ascending=False)
+    d1, d2, d3 = st.columns(3)
+    donut_specs = [
+        (d1, "지표_광고비", "매체별 광고비 비중", ".3s"),
+        (d2, "지표_순결제거래액", "매체별 거래액 비중", ".3s"),
+    ]
+    for dc, col, dtitle, texttmpl in donut_specs:
+        with dc:
+            sub = by_media[by_media[col].fillna(0) > 0].copy()
+            figd = px.pie(sub, names="구분_매체명", values=col, hole=0.55,
+                          color="구분_매체명", color_discrete_map=MEDIA_COLORS)
+            figd.update_traces(textposition="inside", textinfo="percent+label",
+                               textfont_size=10)
+            base_layout(figd, dtitle, 340)
+            figd.update_layout(showlegend=False)
+            st.plotly_chart(figd, use_container_width=True, key=f"media_donut_{col}")
+    with d3:
+        sub = by_media.dropna(subset=["순결제ROAS"]).head(12)
+        figr = px.bar(sub.sort_values("순결제ROAS"), x="순결제ROAS", y="구분_매체명",
+                      orientation="h", color_discrete_sequence=["#16A34A"])
+        figr.update_xaxes(tickformat=".0%")
+        base_layout(figr, "매체별 순결제ROAS", 340)
+        figr.update_layout(showlegend=False)
+        label_traces(figr, ".0%")
+        st.plotly_chart(figr, use_container_width=True, key="media_roas_bar")
+
     mc = by_media.dropna(subset=["순결제ROAS"]).head(15)
     figc = make_subplots(specs=[[{"secondary_y": True}]])
     figc.add_trace(go.Bar(x=mc["구분_매체명"], y=mc["지표_광고비"], name="광고비",
@@ -2059,10 +2097,16 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         - 🌟 **스타** (고ROAS + 고광고비) / 💰 **캐시카우** (고ROAS + 저광고비)
         - ❓ **물음표** (저ROAS + 고광고비) / 🐕 **개** (저ROAS + 저광고비)
         """)
+        merge_camp = st.checkbox("매체 합쳐 캠페인 단위로 보기", value=True, key="quad_merge",
+                                 help="끄면 캠페인×매체명 단위로 집계되어, 같은 캠페인이 "
+                                      "카카오·네이버 등 여러 매체에 있으면 원이 매체 수만큼 나뉩니다.")
         quad_src = df[df["구분_매체명"].astype(str).str.contains("카카오|네이버", na=False)]
         st.caption("포함 매체: **카카오 · 네이버** 계열만 · 광고비 하위 5% 소액 캠페인 제외(ROAS 왜곡 방지)")
-        quad_df = agg(quad_src, ["구분_캠페인", "구분_매체명"]).dropna(subset=["순결제ROAS"])
+        gcols = ["구분_캠페인"] if merge_camp else ["구분_캠페인", "구분_매체명"]
+        quad_df = agg(quad_src, gcols).dropna(subset=["순결제ROAS"])
         quad_df = quad_df[quad_df["지표_광고비"] > 0]
+        if "구분_매체명" not in quad_df.columns:
+            quad_df["구분_매체명"] = "전체"
         # 소액·극단 ROAS 아웃라이어 제거(원이 일렬로 서는 현상 방지)
         if len(quad_df) >= 5:
             spend_floor = quad_df["지표_광고비"].quantile(0.05)
