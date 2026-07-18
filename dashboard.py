@@ -1801,9 +1801,10 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None):
 
 
 def render_period_sheet(df, gran, header, report_targets=None, targets=None,
-                        key_prefix=None, month_picker=False):
+                        key_prefix=None, month_picker=False, recent_default=None):
     """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
-    month_picker=True(일별): 기본은 최신 연월만 표시, 더 긴 기간은 선택."""
+    month_picker=True(일별): 기본은 최신 연월만 표시.
+    recent_default=N(주차별): 기본은 최근 N주만, '전체 기간 보기'로 전체 표시."""
     st.header(header)
     if df.empty:
         st.warning("데이터가 없습니다.")
@@ -1823,6 +1824,17 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
         if df.empty:
             st.info("해당 기간 데이터가 없습니다.")
             return
+    elif recent_default and not base.empty:
+        full = st.checkbox(f"전체 기간 보기 (기본: 최근 {recent_default}주)",
+                           value=False, key=f"{key_prefix}_full")
+        if not full:
+            ordv = base["연도"].astype(int) * 100 + base["주차번호"].astype(int)
+            recent = sorted(ordv.unique())[-recent_default:]
+            df = base[ordv.isin(recent)]
+            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
+            if df.empty:
+                st.info("최근 데이터가 없습니다.")
+                return
     _render_period_tabs(df, gran, report_targets, targets or {}, prev_df=prev_df)
     st.divider()
     _render_period_graph(df, gran, key_prefix)
@@ -2132,7 +2144,7 @@ def page_bpu(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 # ───────────────────────────────────────────────
 def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     render_period_sheet(df, "주", "📅 주차별 실적", report_targets=report_targets,
-                        targets=targets or {}, key_prefix="wk")
+                        targets=targets or {}, key_prefix="wk", recent_default=12)
 
 
 def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
