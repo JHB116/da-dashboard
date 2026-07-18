@@ -194,6 +194,14 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = val
 
+    # 상품명 컬럼 정규화: 로데이터가 '구분_상품명'이면 '구분_상품'으로도 사용(필터/소재 공용)
+    if "구분_상품명" in df.columns:
+        prod = df["구분_상품명"].astype(str)
+        if "구분_상품" not in df.columns or df["구분_상품"].astype(str).str.strip().eq("").all():
+            df["구분_상품"] = prod
+    if "구분_상품" not in df.columns:
+        df["구분_상품"] = ""
+
     if df["기간_주"].isna().all():
         df["기간_주"] = (
             df["기간_일자"].dt.strftime("%Y")
@@ -432,11 +440,13 @@ def chg_style(v):
 # 전체요약/일별 공통 그래프 지표 (표기 순서)
 SUMMARY_CHART_METRICS = {
     "광고비": "지표_광고비", "거래액(순결제)": "지표_순결제거래액",
-    "ROAS(순결제)": "순결제ROAS", "UV": "지표_UV(전체)", "CR(총)": "CR(총)",
+    "ROAS(순결제)": "순결제ROAS", "순결제비중": "순결제비중",
+    "UV": "지표_UV(전체)", "CR(총)": "CR(총)",
     "CTR": "CTR", "CPC": "CPC", "가입률": "가입률", "가입CPA": "가입CPA",
     "첫구매CPA": "첫구매CPA", "신규거래액": "지표_당년신규순결제거래액",
 }
-RATIO_TICKFMT = {"순결제ROAS": ".0%", "CR(총)": ".2%", "CTR": ".2%", "가입률": ".2%"}
+RATIO_TICKFMT = {"순결제ROAS": ".0%", "순결제비중": ".1%",
+                 "CR(총)": ".2%", "CTR": ".2%", "가입률": ".2%"}
 
 # 일별 상세 지표 표 (요청 순서): (표기명, 원본컬럼, 종류)
 DAILY_DETAIL_SPEC = [
@@ -621,15 +631,21 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         fig = yoy_overlay_fig(d, "월", val_col, title,
                               ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
     elif gran == "일":
-        # 일 단위: 실제 날짜 시계열 (연도별 색상)
+        # 일 단위: 실제 날짜 시계열 (연도별 색상) + 데이터값 라벨
         d = agg(df, ["기간_일자"]).sort_values("기간_일자").dropna(subset=[val_col])
         d["_yr"] = d["기간_일자"].dt.year
         fig = go.Figure()
+        # 점이 너무 많으면 라벨이 겹치므로 40개 이하일 때만 값 표시
+        show_text = d["기간_일자"].nunique() <= 40
         for i, yr in enumerate(sorted(d["_yr"].unique())):
             sub = d[d["_yr"] == yr]
             fig.add_trace(go.Scatter(
                 x=sub["기간_일자"], y=sub[val_col], name=f"{yr}년",
-                mode="lines", line=dict(color=YEAR_COLORS[i % len(YEAR_COLORS)], width=1.8),
+                mode="lines+markers+text" if show_text else "lines+markers",
+                line=dict(color=YEAR_COLORS[i % len(YEAR_COLORS)], width=1.8),
+                marker=dict(size=4),
+                texttemplate=(f"%{{y:{lbl_fmt}}}" if show_text else None),
+                textposition="top center", textfont=dict(size=8),
             ))
         base_layout(fig, title, height)
     else:
@@ -1699,7 +1715,8 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
         st.dataframe(_style_summary(tbl, metric_labels, groups),
                      use_container_width=True, hide_index=True)
 
-    _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=(gran == "주"))
+    # 최근 기간이 맨 아래(오름차순)로 표시
+    _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=False)
 
 
 def _render_period_tabs(df, gran, report_targets, targets, prev_df=None):
@@ -1766,7 +1783,7 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None):
         block = (yr <= START_YEAR)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
 
-    lf = (gran == "주")  # 주=최신 위, 일=최근 아래
+    lf = False  # 최근 기간이 맨 아래(오름차순)
 
     def _actual(rows):
         st.dataframe(detail_table([(l, s) for l, s, _, _ in rows], period_label=ptype),
@@ -2001,21 +2018,26 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     tab_rank, tab_quad = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면"])
 
     with tab_rank:
-        # 캠페인×매체별 실적 상위 50개 (비용출처별 정렬 규칙)
+        split_media = st.checkbox("매체명·상품명 분리 보기", value=False, key="camp_split",
+                                  help="켜면 캠페인을 매체명·상품명 단위로 나눠서 표시합니다.")
+        extra_cols = ["구분_매체명", "구분_상품"] if split_media else []
+        extra_ids = ["구분_매체명", "구분_상품"] if split_media else []
+
+        # 캠페인별 실적 상위 50개 (비용출처별 정렬 규칙)
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_캠페인", src, slabel, scol, ascending=asc,
-                                 group_cols=["구분_캠페인", "구분_매체명"],
-                                 id_cols=["구분_캠페인", "구분_매체명"])
+                                 group_cols=["구분_캠페인"] + extra_cols,
+                                 id_cols=["구분_캠페인"] + extra_ids)
             st.divider()
 
-        # 하위캠페인×매체별 실적 상위 50개
+        # 하위캠페인별 실적 상위 50개
         st.markdown("### 하위캠페인별 실적")
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_하위캠페인", src, slabel, scol, ascending=asc,
-                                 group_cols=["구분_하위캠페인", "구분_매체명"],
-                                 id_cols=["구분_하위캠페인", "구분_매체명"])
+                                 group_cols=["구분_하위캠페인"] + extra_cols,
+                                 id_cols=["구분_하위캠페인"] + extra_ids)
             st.divider()
 
     # ── 효율 사분면
@@ -2147,8 +2169,9 @@ def page_creative(df: pd.DataFrame):
         gb.append("구분_상품")
     # 기획전번호·상세내역 등 빈칸으로 나오던 식별 컬럼을 실제 데이터에서 찾아 포함
     CR_ID_CANDIDATES = {
-        "기획전번호": ["구분_기획전번호", "기획전번호", "구분_기획전", "기획전"],
-        "상세내역": ["구분_상세내역", "상세내역", "구분_소재상세", "소재상세", "구분_상세"],
+        "기획전번호": ["구분_기획전 번호", "구분_기획전번호", "기획전번호", "구분_기획전"],
+        "상세내역": ["구분_키워드(소재)", "구분_상세내역", "상세내역", "구분_소재상세"],
+        "상품명": ["구분_상품명", "구분_상품"],
     }
     cr_id_resolved = {}
     for label, cands in CR_ID_CANDIDATES.items():
@@ -2341,6 +2364,13 @@ def main():
         st.caption(f"기간: {rng_note} · {len(export_df):,}행")
         if st.checkbox("내보내기 파일 준비", key="export_prepare"):
             try:
+                # CSV (Excel/클로드 분석용) — 한글 깨짐 방지 utf-8-sig
+                csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "📄 CSV 출력 (분석용)", data=csv_bytes,
+                    file_name="da_filtered.csv", mime="text/csv",
+                    use_container_width=True, key="export_csv",
+                )
                 json_bytes = export_df.to_json(
                     orient="records", force_ascii=False, date_format="iso", indent=2
                 ).encode("utf-8")
