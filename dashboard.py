@@ -2162,36 +2162,31 @@ HEATMAP_METRICS = {
 
 
 def _render_weekday_heatmap(df, key_prefix="hm"):
-    """요일 × 월 히트맵. (로데이터가 일자 단위라 시간(0~23시)축은 제공 불가)"""
+    """요일별 히트맵(한 줄). 로데이터가 일자 단위라 시간(0~23시)축은 제공 불가."""
     if df.empty:
         st.info("데이터가 없습니다.")
         return
-    st.caption("⚠️ 로데이터가 **일자 단위**(시간 정보 없음)라 캡처의 '시간대(0~23시)' 축은 만들 수 없어 "
-               "**요일 × 월** 히트맵으로 제공합니다.")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        sel = st.selectbox("지표", list(HEATMAP_METRICS.keys()), key=f"{key_prefix}_hm_metric")
-    with c2:
-        norm = st.radio("정규화", ["없음", "요일 내 상대값"], horizontal=True,
-                        key=f"{key_prefix}_hm_norm")
+    st.caption("⚠️ 로데이터가 **일자 단위**(시간 정보 없음)라 시간대(0~23시) 축은 만들 수 없어 "
+               "**요일별** 히트맵으로 제공합니다.")
+    sel = st.selectbox("지표", list(HEATMAP_METRICS.keys()), key=f"{key_prefix}_hm_metric")
     col = HEATMAP_METRICS[sel]
     d = df.copy()
     d["_요일"] = d["기간_일자"].dt.dayofweek
-    hm = agg(d, ["_요일", "월"])[["_요일", "월", col]].dropna()
+    hm = agg(d, ["_요일"])[["_요일", col]].dropna()
     if hm.empty:
         st.info("표시할 데이터가 없습니다.")
         return
-    pivot = hm.pivot_table(index="_요일", columns="월", values=col, aggfunc="mean")
-    pivot = pivot.reindex(index=list(range(7)))
-    if norm == "요일 내 상대값":
-        pivot = pivot.div(pivot.max(axis=1), axis=0)
-    y_labels = [WEEKDAY_LABELS[i] for i in pivot.index]
-    x_labels = [f"{int(m)}월" for m in pivot.columns]
-    tf = RATIO_TICKFMT.get(col)
-    fig = px.imshow(pivot.values, x=x_labels, y=y_labels,
+    hm = hm.set_index("_요일").reindex(range(7))
+    x_labels = [WEEKDAY_LABELS[i] for i in range(7)]
+    vals = hm[col].values.reshape(1, -1)
+    tf = RATIO_TICKFMT.get(col, ",.0f")
+    fig = px.imshow(vals, x=x_labels, y=[sel],
                     color_continuous_scale="Blues", aspect="auto")
-    fig.update_traces(hovertemplate="요일 %{y} · %{x}<br>값 %{z:.3g}<extra></extra>")
-    base_layout(fig, f"요일 × 월별 {sel} 히트맵", 430)
+    fig.update_traces(text=[[(f"{v:{tf}}" if pd.notna(v) else "") for v in vals[0]]],
+                      texttemplate="%{text}", textfont_size=12,
+                      hovertemplate="%{x}<br>값 %{z:.4g}<extra></extra>")
+    base_layout(fig, f"요일별 {sel}", 220)
+    fig.update_yaxes(showticklabels=False)
     st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_heatmap")
 
 
