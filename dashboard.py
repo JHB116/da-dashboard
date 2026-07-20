@@ -2283,10 +2283,11 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         dims = st.multiselect("행 차원", list(CUSTOM_DIMS.keys()),
                               default=["매체명"], key="cu_dims")
     with c3:
-        met_opts = [m[0] for m in CAMP_METRIC_SPEC]
-        default_mets = [m for m in ["광고비", "순결제매출", "순결제ROAS", "순결제비중(%)"]
-                        if m in met_opts]
-        mets = st.multiselect("지표", met_opts, default=default_mets, key="cu_mets")
+        # 주별 상세 실적표(DETAIL_SPEC)와 동일한 순서를 앞에, 그 외 지표는 뒤에.
+        detail_labels = [d[0] for d in DETAIL_SPEC]
+        all_labels = [m[0] for m in CAMP_METRIC_SPEC]
+        met_opts = detail_labels + [x for x in all_labels if x not in detail_labels]
+        mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체 선택
 
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
 
