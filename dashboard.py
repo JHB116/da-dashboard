@@ -912,7 +912,7 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     data_max = df["기간_일자"].max()
     data_min = df["기간_일자"].min()
 
-    week_start = today - pd.Timedelta(days=today.dayofweek)
+    week_start = today - pd.Timedelta(days=today.dayofweek)   # 월요일 시작
     last_week_start = week_start - pd.Timedelta(days=7)
     presets = {
         "전일":   (today - pd.Timedelta(days=1), today - pd.Timedelta(days=1)),
@@ -922,45 +922,48 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
         "올해":   (today.replace(month=1, day=1), today),
     }
 
-    # 초기 상태
+    # 위젯 선택 가능 범위: 데이터 최소일 ~ (데이터 최대일과 오늘 중 늦은 날)
+    # → '이번주'처럼 데이터가 아직 없는 기간도 데이터 없음을 정직하게 보여주기 위함
+    lo = data_min.date()
+    hi = max(data_max, today).date()
+
+    def _clamp(d):
+        return min(max(d, lo), hi)
+
+    # 초기 상태 (프리셋 범위를 데이터로 축소하지 않음)
     if k_start not in st.session_state:
         ps_def, pe_def = presets.get(default_preset, presets["이번주"])
-        st.session_state[k_start]  = max(ps_def, data_min).date()
-        st.session_state[k_end]    = min(pe_def, data_max).date()
+        st.session_state[k_start]  = _clamp(ps_def.date())
+        st.session_state[k_end]    = _clamp(pe_def.date())
         st.session_state[k_preset] = default_preset
 
     cols = st.columns([1, 1, 1, 1, 1, 0.2, 2, 0.4, 2])
     for i, (label, (ps, pe)) in enumerate(presets.items()):
         with cols[i]:
-            ps_clamped = max(ps, data_min).date()
-            pe_clamped = min(pe, data_max).date()
             is_active = st.session_state.get(k_preset) == label
             if st.button(label, key=f"{key_prefix}_btn_{label}",
                          type="primary" if is_active else "secondary",
                          use_container_width=True):
-                st.session_state[k_start]  = ps_clamped
-                st.session_state[k_end]    = pe_clamped
+                st.session_state[k_start]  = _clamp(ps.date())
+                st.session_state[k_end]    = _clamp(pe.date())
                 st.session_state[k_preset] = label
                 st.rerun()
 
-    d_min = data_min.date()
-    d_max = data_max.date()
-    # clamp session state values to valid data range before passing to date_input
-    clamped_start = max(d_min, min(d_max, st.session_state[k_start]))
-    clamped_end   = max(d_min, min(d_max, st.session_state[k_end]))
+    clamped_start = _clamp(st.session_state[k_start])
+    clamped_end   = _clamp(st.session_state[k_end])
 
     # NOTE: date_input에 key를 주면 위젯 상태가 value=를 덮어써서 프리셋 버튼이
     # 되돌려지는 버그가 생긴다. key 없이 value=로만 제어한다.
     with cols[6]:
         new_start = st.date_input("시작일", value=clamped_start,
-                                  min_value=d_min, max_value=d_max,
+                                  min_value=lo, max_value=hi,
                                   label_visibility="collapsed")
     with cols[7]:
         st.markdown("<div style='padding-top:8px;text-align:center;color:#64748B'>~</div>",
                     unsafe_allow_html=True)
     with cols[8]:
         new_end = st.date_input("종료일", value=clamped_end,
-                                min_value=d_min, max_value=d_max,
+                                min_value=lo, max_value=hi,
                                 label_visibility="collapsed")
 
     if new_start != st.session_state[k_start] or new_end != st.session_state[k_end]:
@@ -972,6 +975,8 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     end   = pd.Timestamp(st.session_state[k_end])
     out = df[(df["기간_일자"] >= start) & (df["기간_일자"] <= end)]
     st.caption(f"📅 적용 기간: **{start.date()} ~ {end.date()}** · {len(out):,}행")
+    if out.empty:
+        st.info("해당 기간에 데이터가 없습니다. (예: 이번주 데이터가 아직 집계되지 않음)")
     return out
 
 
