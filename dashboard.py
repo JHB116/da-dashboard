@@ -2075,7 +2075,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         st.info("필터 결과 데이터가 없습니다.")
         return
 
-    tab_rank, tab_quad = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면"])
+    tab_rank, tab_quad, tab_heat = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면", "🗓️ 요일별 히트맵"])
 
     with tab_rank:
         split_media = st.checkbox("매체명·상품명 분리 보기", value=False, key="camp_split",
@@ -2149,6 +2149,51 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             fig_q.update_yaxes(tickformat=".0%", range=[0, max(y_hi * 1.15, med_roas * 1.5, 0.01)])
             st.plotly_chart(fig_q, use_container_width=True, key="camp_quad")
 
+    # ── 요일별 히트맵
+    with tab_heat:
+        _render_weekday_heatmap(df, key_prefix="camp")
+
+
+HEATMAP_METRICS = {
+    "순결제ROAS": "순결제ROAS", "광고비": "지표_광고비", "거래액(순결제)": "지표_순결제거래액",
+    "총결제ROAS": "총결제ROAS", "CTR": "CTR", "CPC": "CPC", "CPM": "CPM",
+    "UV": "지표_UV(전체)", "가입수": "지표_가입회원", "첫구매수": "지표_순결제고객수(첫구매)",
+}
+
+
+def _render_weekday_heatmap(df, key_prefix="hm"):
+    """요일 × 월 히트맵. (로데이터가 일자 단위라 시간(0~23시)축은 제공 불가)"""
+    if df.empty:
+        st.info("데이터가 없습니다.")
+        return
+    st.caption("⚠️ 로데이터가 **일자 단위**(시간 정보 없음)라 캡처의 '시간대(0~23시)' 축은 만들 수 없어 "
+               "**요일 × 월** 히트맵으로 제공합니다.")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        sel = st.selectbox("지표", list(HEATMAP_METRICS.keys()), key=f"{key_prefix}_hm_metric")
+    with c2:
+        norm = st.radio("정규화", ["없음", "요일 내 상대값"], horizontal=True,
+                        key=f"{key_prefix}_hm_norm")
+    col = HEATMAP_METRICS[sel]
+    d = df.copy()
+    d["_요일"] = d["기간_일자"].dt.dayofweek
+    hm = agg(d, ["_요일", "월"])[["_요일", "월", col]].dropna()
+    if hm.empty:
+        st.info("표시할 데이터가 없습니다.")
+        return
+    pivot = hm.pivot_table(index="_요일", columns="월", values=col, aggfunc="mean")
+    pivot = pivot.reindex(index=list(range(7)))
+    if norm == "요일 내 상대값":
+        pivot = pivot.div(pivot.max(axis=1), axis=0)
+    y_labels = [WEEKDAY_LABELS[i] for i in pivot.index]
+    x_labels = [f"{int(m)}월" for m in pivot.columns]
+    tf = RATIO_TICKFMT.get(col)
+    fig = px.imshow(pivot.values, x=x_labels, y=y_labels,
+                    color_continuous_scale="Blues", aspect="auto")
+    fig.update_traces(hovertemplate="요일 %{y} · %{x}<br>값 %{z:.3g}<extra></extra>")
+    base_layout(fig, f"요일 × 월별 {sel} 히트맵", 430)
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_heatmap")
+
 
 def _render_bpu_charts(df):
     """부서(BPU)별 광고비·거래액·순결제ROAS — 고정 순서 막대 그래프."""
@@ -2201,9 +2246,91 @@ def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
                         targets=targets or {}, key_prefix="wk", recent_default=12)
 
 
+def page_monthly(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
+    render_period_sheet(df, "월", "🗓️ 월별 실적", report_targets=report_targets,
+                        targets=targets or {}, key_prefix="mo")
+
+
 def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     render_period_sheet(df, "일", "📆 일별 실적", report_targets=report_targets,
                         targets=targets or {}, key_prefix="dy", month_picker=True)
+
+
+# ───────────────────────────────────────────────
+# 커스텀 실적 (피벗형: 차원/지표/필터를 자유 조합)
+# ───────────────────────────────────────────────
+CUSTOM_DIMS = {
+    "비용출처": "구분_비용출처", "채널명": "구분_채널", "매체명": "구분_매체명",
+    "상품명": "구분_상품", "부서명(BPU)": "구분_부서명", "디바이스": "구분_디바이스",
+    "카테고리": "카테고리", "광고유형": "구분_광고유형",
+    "캠페인명": "구분_캠페인", "하위캠페인명": "구분_하위캠페인",
+    "AF코드": "구분_AF코드", "소재명": "구분_AF코드이름",
+}
+
+
+def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
+    st.header("🧩 커스텀 실적")
+    st.caption("엑셀 피벗처럼 **기간 단위·행 차원·지표·필터**를 자유롭게 넣었다 뺐다 하며 표를 구성합니다.")
+    if df.empty:
+        st.warning("데이터가 없습니다.")
+        return
+
+    base = page_filters(df, "cuf", expanded=True)
+    d = date_range_filter(base, key_prefix="cu", default_preset="이번달")
+    if d.empty:
+        return
+
+    st.markdown("##### 🧷 피벗 설정")
+    c1, c2, c3 = st.columns([1, 2, 3])
+    with c1:
+        gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
+    with c2:
+        dims = st.multiselect("행 차원", list(CUSTOM_DIMS.keys()),
+                              default=["매체명"], key="cu_dims")
+    with c3:
+        met_opts = [m[0] for m in CAMP_METRIC_SPEC]
+        default_mets = [m for m in ["광고비", "순결제매출", "순결제ROAS", "순결제비중(%)"]
+                        if m in met_opts]
+        mets = st.multiselect("지표", met_opts, default=default_mets, key="cu_mets")
+
+    group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
+
+    if group_cols:
+        g = agg(d, group_cols)
+    else:
+        g = calc_kpi(pd.DataFrame([d[AGG_COLS].sum()]))
+        g["집행일수"] = d["기간_일자"].nunique()
+
+    if g.empty:
+        st.info("조건에 맞는 데이터가 없습니다.")
+        return
+
+    # 정렬: 첫 지표(있으면) 기준 내림차순, 없으면 광고비
+    spec_by_label = {m[0]: m for m in CAMP_METRIC_SPEC}
+    sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
+    if sort_src in g.columns:
+        g = g.sort_values(sort_src, ascending=False, na_position="last")
+
+    out = {}
+    if gran != "없음":
+        out["기간"] = [_period_label(gran, r) for _, r in g.iterrows()]
+    for x in dims:
+        col = CUSTOM_DIMS[x]
+        if col in g.columns:
+            out[x] = g[col].astype(str).values
+    for m in mets:
+        _, col, kind = spec_by_label[m]
+        if col == "집행일수":
+            out[m] = g["집행일수"].apply(lambda v: _fmt_kind(v, "num")).values if "집행일수" in g.columns else "–"
+        elif col in g.columns:
+            out[m] = g[col].apply(lambda v, k=kind: _fmt_kind(v, k)).values
+
+    table = pd.DataFrame(out)
+    st.markdown(f"##### 📊 결과 ({len(table):,}행)")
+    st.dataframe(table, use_container_width=True, hide_index=True,
+                 height=_fit_height(min(len(table), 30)))
+    st.download_button("📄 CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="custom_report.csv", mime="text/csv", key="cu_csv")
 
 
 # ───────────────────────────────────────────────
@@ -2406,12 +2533,13 @@ def main():
     with page_box:
         st.subheader("📄 페이지")
         page = st.radio("페이지", [
-            "📊 전체 요약", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
-            "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적",
+            "📊 전체 요약", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
+            "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
         ], label_visibility="collapsed")
 
     # 현재 페이지의 날짜 카드 범위를 내보내기에 반영
-    DATE_PREFIX = {"📊 전체 요약": "sum", "🎯 캠페인별 실적": "camp", "🎨 소재 상세": "cr"}
+    DATE_PREFIX = {"📊 전체 요약": "sum", "🎯 캠페인별 실적": "camp", "🎨 소재 상세": "cr",
+                   "🧩 커스텀 실적": "cu"}
     prefix = DATE_PREFIX.get(page)
     export_df = pre_date_filtered
     rng_note = "전체 기간(날짜 카드 없음)"
@@ -2459,6 +2587,8 @@ def main():
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
+    elif page == "🗓️ 월별 실적":
+        page_monthly(pre_date_filtered, targets, report_targets)
     elif page == "📅 주차별 실적":
         page_weekly(pre_date_filtered, targets, report_targets)
     elif page == "📆 일별 실적":
@@ -2471,6 +2601,8 @@ def main():
         page_media(pre_date_filtered)
     elif page == "🎨 소재 상세":
         page_creative(pre_date_filtered)
+    elif page == "🧩 커스텀 실적":
+        page_custom(pre_date_filtered, targets, report_targets)
 
 
 if st.runtime.exists():
