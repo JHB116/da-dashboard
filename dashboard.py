@@ -163,6 +163,9 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
         "지표_총결제고객수", "지표_순결제고객수(첫구매)", "지표_순결제거래액(첫구매)",
         "지표_순결제고객수(윈백)", "지표_순결제거래액(윈백)",
         "지표_총결제고객수(윈백)", "지표_총결제거래액(윈백)", "지표_영상조회수",
+        "지표_순결제거래액(RD)", "지표_순결제거래액(PP)", "지표_순결제거래액(BK)",
+        "지표_순결제거래액(SV)", "지표_순결제거래액(GD)", "지표_순결제거래액(PT)",
+        "지표_순결제거래액(SP)",
     ]
     for c in num_cols:
         if c in df.columns:
@@ -534,6 +537,10 @@ AGG_COLS = [
     "지표_총결제고객수", "지표_순결제고객수(첫구매)", "지표_순결제거래액(첫구매)",
     "지표_순결제고객수(윈백)", "지표_순결제거래액(윈백)",
     "지표_총결제고객수(윈백)", "지표_총결제거래액(윈백)", "지표_영상조회수",
+    # 채널별 순결제거래액 (커스텀 시트 전용 지표)
+    "지표_순결제거래액(RD)", "지표_순결제거래액(PP)", "지표_순결제거래액(BK)",
+    "지표_순결제거래액(SV)", "지표_순결제거래액(GD)", "지표_순결제거래액(PT)",
+    "지표_순결제거래액(SP)",
 ]
 
 def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
@@ -1491,7 +1498,8 @@ def _render_trend_grid(df, targets):
 # 전체요약/주차별/일별 공용 필터 스펙
 _PAGE_FILTER_SPECS = [
     ("비용출처", "구분_비용출처"), ("채널명", "구분_채널"), ("매체명", "구분_매체명"),
-    ("상품명", "구분_상품"), ("부서명", "구분_부서명"), ("디바이스명", "구분_디바이스"),
+    ("상품명", "구분_상품"), ("브랜드/기획전", "구분_브랜드/기획전"),
+    ("부서명", "구분_부서명"), ("디바이스명", "구분_디바이스"),
 ]
 
 
@@ -2254,6 +2262,17 @@ def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = No
 # ───────────────────────────────────────────────
 # 커스텀 실적 (피벗형: 차원/지표/필터를 자유 조합)
 # ───────────────────────────────────────────────
+# 커스텀 시트에서만 노출하는 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
+CUSTOM_EXTRA_METRIC_SPEC = [
+    ("순결제거래액(RD)", "지표_순결제거래액(RD)", "money"),
+    ("순결제거래액(PP)", "지표_순결제거래액(PP)", "money"),
+    ("순결제거래액(BK)", "지표_순결제거래액(BK)", "money"),
+    ("순결제거래액(SV)", "지표_순결제거래액(SV)", "money"),
+    ("순결제거래액(GD)", "지표_순결제거래액(GD)", "money"),
+    ("순결제거래액(PT)", "지표_순결제거래액(PT)", "money"),
+    ("순결제거래액(SP)", "지표_순결제거래액(SP)", "money"),
+]
+
 CUSTOM_DIMS = {
     "비용출처": "구분_비용출처", "채널명": "구분_채널", "매체명": "구분_매체명",
     "상품명": "구분_상품", "부서명(BPU)": "구분_부서명", "디바이스": "구분_디바이스",
@@ -2283,10 +2302,13 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         dims = st.multiselect("행 차원", list(CUSTOM_DIMS.keys()),
                               default=["매체명"], key="cu_dims")
     with c3:
-        # 주별 상세 실적표(DETAIL_SPEC)와 동일한 순서를 앞에, 그 외 지표는 뒤에.
+        # 주별 상세 실적표(DETAIL_SPEC) 순서 → 그 외 지표 → 채널별 순결제거래액(RD~SP) 순.
         detail_labels = [d[0] for d in DETAIL_SPEC]
         all_labels = [m[0] for m in CAMP_METRIC_SPEC]
-        met_opts = detail_labels + [x for x in all_labels if x not in detail_labels]
+        extra_labels = [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC]
+        met_opts = (detail_labels
+                    + [x for x in all_labels if x not in detail_labels]
+                    + extra_labels)
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체 선택
 
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
@@ -2302,7 +2324,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         return
 
     # 정렬: 첫 지표(있으면) 기준 내림차순, 없으면 광고비
-    spec_by_label = {m[0]: m for m in CAMP_METRIC_SPEC}
+    spec_by_label = {m[0]: m for m in CAMP_METRIC_SPEC + CUSTOM_EXTRA_METRIC_SPEC}
     sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
     if sort_src in g.columns:
         g = g.sort_values(sort_src, ascending=False, na_position="last")
