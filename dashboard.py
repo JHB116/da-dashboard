@@ -1373,10 +1373,22 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
 COST_TABS = COST_BUCKETS  # 요약 탭 = 사용자 지정 버킷
 
 
+def _norm_cost(s):
+    """비용출처 매칭 정규화: 공백(일반/전각)·대소문자·전각슬래시 차이를 무시."""
+    return (str(s).replace(" ", "").replace("　", "")
+            .replace("／", "/").lower())
+
+
+def _cost_mask(series, sources):
+    """정규화 기준으로 series가 sources(list) 중 하나와 일치하는지 boolean mask."""
+    norm = {_norm_cost(x) for x in sources}
+    return series.map(lambda v: _norm_cost(v) in norm)
+
+
 def _filter_cost(df, tab_name):
     sources = COST_TABS.get(tab_name)
     if sources:
-        return df[df["구분_비용출처"].isin(sources)]
+        return df[_cost_mask(df["구분_비용출처"], sources)]
     return df
 
 
@@ -1981,7 +1993,7 @@ def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
     # 랭킹 전용 비용출처 그룹으로 합산(RANK_BUCKETS). 예: 거래액확대 =
     # 거래액확대 + E영업/광고주직접정산 + E영업/정산제외 + 서비스비용-거래액확대
     _sources = RANK_BUCKETS.get(src_name)
-    sub = df[df["구분_비용출처"].isin(_sources)] if _sources else _filter_cost(df, src_name)
+    sub = df[_cost_mask(df["구분_비용출처"], _sources)] if _sources else _filter_cost(df, src_name)
     if sub.empty:
         st.info(f"{src_name} 데이터가 없습니다.")
         return
