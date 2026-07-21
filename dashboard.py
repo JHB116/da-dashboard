@@ -817,18 +817,28 @@ def _fmt_kind(v, kind):
     if kind == "pct2":  return fmt_pct(v, 2)
     return str(v)
 
-# (표기명, 원본컬럼, 종류)
+# (표기명, 원본컬럼, 종류) — 상세 실적 표 지표/순서
 DETAIL_SPEC = [
+    ("노출수",        "지표_노출수",              "num"),
+    ("클릭수",        "지표_클릭수",              "num"),
+    ("CTR",          "CTR",                    "pct2"),
+    ("CR",           "CR(순)",                 "pct2"),
+    ("객단가",        "객단가(순)",              "won"),
+    ("결제고객수",     "지표_순결제고객수",         "num"),
+    ("CPM",          "CPM",                    "won"),
+    ("CPC",          "CPC",                    "won"),
+    ("CPUV",         "CPUV",                   "won"),
+    ("UV",           "지표_UV(전체)",           "num"),
     ("광고비",        "지표_광고비",              "money"),
-    ("순결제매출",     "지표_순결제거래액",         "money"),
-    ("순결제ROAS",    "순결제ROAS",              "roas"),
-    ("순결제비중(%)",  "순결제비중",              "pct1"),
-    ("총결제매출",     "지표_총결제거래액",         "money"),
-    ("총매출ROAS",    "총결제ROAS",              "roas"),
-    ("UV/클릭(%)",    "UV/클릭",                "pct2"),
+    ("거래액",        "지표_순결제거래액",         "money"),
+    ("ROAS",         "순결제ROAS",              "roas"),
+    ("순결제비중",     "순결제비중",              "pct1"),
+    ("거래액(총)",     "지표_총결제거래액",         "money"),
+    ("ROAS(총)",     "총결제ROAS",              "roas"),
+    ("UV/클릭",       "UV/클릭",                "pct2"),
     ("CR(총)",       "CR(총)",                 "pct2"),
     ("객단가(총)",     "객단가(총)",              "won"),
-    ("총결제고객수",   "지표_총결제고객수",         "num"),
+    ("결제고객수(총)",  "지표_총결제고객수",         "num"),
     ("가입률",        "가입률",                  "pct2"),
     ("가입수",        "지표_가입회원",            "num"),
     ("가입CPA",       "가입CPA",                "won"),
@@ -2305,13 +2315,9 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         dims = st.multiselect("행 차원", list(CUSTOM_DIMS.keys()),
                               default=["매체명"], key="cu_dims")
     with c3:
-        # 주별 상세 실적표(DETAIL_SPEC) 순서 → 그 외 지표 → 채널별 순결제거래액(RD~SP) 순.
-        detail_labels = [d[0] for d in DETAIL_SPEC]
-        all_labels = [m[0] for m in CAMP_METRIC_SPEC]
-        extra_labels = [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC]
-        met_opts = (detail_labels
-                    + [x for x in all_labels if x not in detail_labels]
-                    + extra_labels)
+        # 상세 실적표(DETAIL_SPEC) 순서 → 집행일수 → 채널별 순결제거래액(RD~SP) 순.
+        met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
+                    + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체 선택
 
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
@@ -2327,7 +2333,9 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         return
 
     # 정렬: 첫 지표(있으면) 기준 내림차순, 없으면 광고비
-    spec_by_label = {m[0]: m for m in CAMP_METRIC_SPEC + CUSTOM_EXTRA_METRIC_SPEC}
+    spec_by_label = {d[0]: d for d in DETAIL_SPEC}
+    spec_by_label["집행일수"] = ("집행일수", "집행일수", "num")
+    spec_by_label.update({m[0]: m for m in CUSTOM_EXTRA_METRIC_SPEC})
     sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
     if sort_src in g.columns:
         g = g.sort_values(sort_src, ascending=False, na_position="last")
