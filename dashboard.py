@@ -1961,6 +1961,13 @@ CAMP_METRIC_SPEC = [
 BPU_ORDER = ["e-영업1 BPU", "e-영업2 BPU", "e-영업3 BPU", "e-영업4 BPU",
              "편성 BSU", "e-마케팅 BSU"]
 
+# 캠페인/하위캠페인 랭킹 표 전용 비용출처 그룹(전역 COST_BUCKETS와 별개)
+RANK_BUCKETS = {
+    "거래액확대": ["거래액확대", "E영업/광고주직접정산", "E영업/정산제외", "서비스비용-거래액확대"],
+    "신규고객확대": ["신규고객확대", "신규고객확대-실적구분", "서비스비용-신규고객확대"],
+    "인지도제고": ["인지도제고", "인지도제고/브랜딩"],
+}
+
 
 def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
                          ascending=False, top_n=50, id_cols=None, group_cols=None):
@@ -1971,9 +1978,10 @@ def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
     st.markdown(f"##### {label}×매체별 실적 상위 {top_n}개 ({src_name}) · {sort_label} 정렬"
                 if len(group_cols) > 1 else
                 f"##### {label}별 실적 상위 {top_n}개 ({src_name}) · {sort_label} 정렬")
-    # 비용출처 '버킷' 기준으로 필터(예: 거래액확대 = 거래액확대 + E영업/광고주직접정산 +
-    # E영업/정산제외 + 거래액확대-실적구분 + 서비스비용-* 등 합산)
-    sub = _filter_cost(df, src_name)
+    # 랭킹 전용 비용출처 그룹으로 합산(RANK_BUCKETS). 예: 거래액확대 =
+    # 거래액확대 + E영업/광고주직접정산 + E영업/정산제외 + 서비스비용-거래액확대
+    _sources = RANK_BUCKETS.get(src_name)
+    sub = df[df["구분_비용출처"].isin(_sources)] if _sources else _filter_cost(df, src_name)
     if sub.empty:
         st.info(f"{src_name} 데이터가 없습니다.")
         return
