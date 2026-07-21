@@ -2013,7 +2013,34 @@ def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
                          if "집행일수" in cdf.columns else "–")
         elif col in cdf.columns:
             out[disp] = cdf[col].apply(lambda v, k=kind: _fmt_kind(v, k)).values
-    st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
+
+    table = pd.DataFrame(out)
+
+    # 누적 총계 행: 해당 비용출처(버킷) 전체 기준(비율지표는 합계 기준 재계산)
+    tot = calc_kpi(pd.DataFrame([sub[AGG_COLS].sum()])).iloc[0]
+    tot_days = sub["기간_일자"].nunique()
+    trow = {k: "" for k in out.keys()}
+    if out:
+        trow[list(out.keys())[0]] = "🔢 총계"
+    for disp, col, kind in CAMP_METRIC_SPEC:
+        if disp not in out:
+            continue
+        if col == "집행일수":
+            trow[disp] = _fmt_kind(tot_days, "num")
+        elif col in tot.index:
+            trow[disp] = _fmt_kind(tot[col], kind)
+        else:
+            trow[disp] = "–"
+    table = pd.concat([table, pd.DataFrame([trow])], ignore_index=True)
+
+    last_i = len(table) - 1
+
+    def _hl(row):
+        return (["font-weight:700;background-color:#EEF2FF"] * len(row)
+                if row.name == last_i else [""] * len(row))
+
+    st.dataframe(table.style.apply(_hl, axis=1),
+                 use_container_width=True, hide_index=True)
 
 
 # 비용출처별 정렬 규칙: (정렬라벨, 정렬컬럼, 오름차순)
