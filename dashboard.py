@@ -2082,16 +2082,27 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     if "구분_캠페인" in df.columns:
         df = df[~df["구분_캠페인"].astype(str).str.contains("친구추가", na=False)]
 
-    # 날짜 카드 (지난주 포함) + 접이식 필터 (매체명 기본: 네이버·카카오)
+    # 날짜 카드 (지난주 포함)
     df = date_range_filter(df, key_prefix="camp", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
-    extra = [("캠페인명", "구분_캠페인"), ("하위캠페인명", "구분_하위캠페인")]
-    df = page_filters(df, "campf", expanded=False,
-                      media_default=["네이버", "카카오"], extra_specs=extra)
+    # 캠페인명 / 하위캠페인명 검색 (소재 상세와 동일 방식, 부분일치)
+    s1, s2 = st.columns(2)
+    with s1:
+        camp_q = st.text_input("캠페인명 검색", key="camp_search",
+                               placeholder="캠페인명 일부 입력")
+    with s2:
+        sub_q = st.text_input("하위캠페인명 검색", key="subcamp_search",
+                              placeholder="하위캠페인명 일부 입력")
+    if camp_q:
+        df = df[df["구분_캠페인"].astype(str).str.contains(camp_q, case=False, na=False)]
+    if sub_q:
+        df = df[df["구분_하위캠페인"].astype(str).str.contains(sub_q, case=False, na=False)]
+    # 접이식 필터 (매체명 기본: 네이버·카카오)
+    df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"])
     if df.empty:
-        st.info("필터 결과 데이터가 없습니다.")
+        st.info("검색·필터 결과 데이터가 없습니다.")
         return
 
     tab_rank, tab_quad, tab_heat = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면", "🗓️ 요일별 히트맵"])
