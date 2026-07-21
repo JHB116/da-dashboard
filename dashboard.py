@@ -2289,7 +2289,9 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.warning("데이터가 없습니다.")
         return
 
-    base = page_filters(df, "cuf", expanded=True)
+    cu_extra = [("캠페인명", "구분_캠페인"), ("하위캠페인명", "구분_하위캠페인"),
+                ("기획전번호", "구분_기획전 번호")]
+    base = page_filters(df, "cuf", expanded=True, extra_specs=cu_extra)
     d = date_range_filter(base, key_prefix="cu", default_preset="이번달")
     if d.empty:
         return
@@ -2344,9 +2346,34 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             out[m] = g[col].apply(lambda v, k=kind: _fmt_kind(v, k)).values
 
     table = pd.DataFrame(out)
-    st.markdown(f"##### 📊 결과 ({len(table):,}행)")
-    st.dataframe(table, use_container_width=True, hide_index=True,
-                 height=_fit_height(min(len(table), 30)))
+
+    # 총계 행: 선택 기간·필터 전체 누적(비율지표는 합계 기준 재계산)
+    if group_cols and not table.empty:
+        tot = calc_kpi(pd.DataFrame([d[AGG_COLS].sum()])).iloc[0]
+        tot_days = d["기간_일자"].nunique()
+        trow = {k: "" for k in out.keys()}
+        trow[list(out.keys())[0]] = "🔢 총계"
+        for m in mets:
+            _, col, kind = spec_by_label[m]
+            if col == "집행일수":
+                trow[m] = _fmt_kind(tot_days, "num")
+            elif col in tot.index:
+                trow[m] = _fmt_kind(tot[col], kind)
+            else:
+                trow[m] = "–"
+        table = pd.concat([table, pd.DataFrame([trow])], ignore_index=True)
+
+    last_i = len(table) - 1
+
+    def _hl_total(row):
+        if group_cols and row.name == last_i:
+            return ["font-weight:700;background-color:#EEF2FF"] * len(row)
+        return [""] * len(row)
+
+    st.markdown(f"##### 📊 결과 ({max(len(table) - (1 if group_cols else 0), 0):,}행 + 총계)")
+    st.dataframe(table.style.apply(_hl_total, axis=1),
+                 use_container_width=True, hide_index=True,
+                 height=_fit_height(min(len(table), 31)))
     st.download_button("📄 CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="custom_report.csv", mime="text/csv", key="cu_csv")
 
