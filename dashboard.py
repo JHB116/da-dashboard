@@ -2099,8 +2099,10 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         df = df[df["구분_캠페인"].astype(str).str.contains(camp_q, case=False, na=False)]
     if sub_q:
         df = df[df["구분_하위캠페인"].astype(str).str.contains(sub_q, case=False, na=False)]
-    # 접이식 필터 (매체명 기본: 네이버·카카오)
-    df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"])
+    # 접이식 필터 (매체명 기본: 네이버·카카오) + 캠페인/하위캠페인 다중선택 유지
+    extra = [("캠페인명", "구분_캠페인"), ("하위캠페인명", "구분_하위캠페인")]
+    df = page_filters(df, "campf", expanded=False,
+                      media_default=["네이버", "카카오"], extra_specs=extra)
     if df.empty:
         st.info("검색·필터 결과 데이터가 없습니다.")
         return
