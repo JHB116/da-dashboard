@@ -1517,7 +1517,8 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
             for (label, col), c in zip(chunk, cols):
                 if col not in df.columns:
                     continue
-                opts = sorted(df[col].dropna().unique().tolist())
+                # key=str: 숫자·문자가 섞인 컬럼(예: 기획전번호)에서 정렬 TypeError 방지
+                opts = sorted(df[col].dropna().unique().tolist(), key=str)
                 default = opts
                 if label == "매체명" and media_default:
                     d = [m for m in opts if any(x in str(m) for x in media_default)]
@@ -2427,7 +2428,7 @@ def page_creative(df: pd.DataFrame):
         cr_full = cr_full[mask]
 
     # ── 매체별 CTR / 순결제ROAS 상위 10 소재
-    avail_media = sorted(cr_full["구분_매체명"].dropna().unique())
+    avail_media = sorted(cr_full["구분_매체명"].dropna().unique(), key=str)
     # 디폴트 선택 매체: 네이버·카카오 계열 (단, 카카오페이지 제외)
     default_media = [m for m in avail_media
                      if ("네이버" in str(m) or "카카오" in str(m)) and "카카오페이지" not in str(m)] \
