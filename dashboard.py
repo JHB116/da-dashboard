@@ -944,14 +944,20 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     lo = data_min.date()
     hi = max(data_max, today).date()
 
+    dmax_d = data_max.date()
+
     def _clamp(d):
         return min(max(d, lo), hi)
 
-    # 초기 상태 (프리셋 범위를 데이터로 축소하지 않음)
+    def _clamp_end(d):
+        # 종료일은 데이터 최대일을 넘지 않도록 자른다(오늘>데이터최대일이어도 data_max까지만)
+        return _clamp(min(d, dmax_d))
+
+    # 초기 상태 (시작일은 프리셋 그대로, 종료일만 데이터 최대일로 캡)
     if k_start not in st.session_state:
         ps_def, pe_def = presets.get(default_preset, presets["이번주"])
         st.session_state[k_start]  = _clamp(ps_def.date())
-        st.session_state[k_end]    = _clamp(pe_def.date())
+        st.session_state[k_end]    = _clamp_end(pe_def.date())
         st.session_state[k_preset] = default_preset
 
     cols = st.columns([1, 1, 1, 1, 1, 0.2, 2, 0.4, 2])
@@ -962,7 +968,7 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
                          type="primary" if is_active else "secondary",
                          use_container_width=True):
                 st.session_state[k_start]  = _clamp(ps.date())
-                st.session_state[k_end]    = _clamp(pe.date())
+                st.session_state[k_end]    = _clamp_end(pe.date())
                 st.session_state[k_preset] = label
                 st.rerun()
 
