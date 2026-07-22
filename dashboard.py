@@ -2680,29 +2680,12 @@ def main():
         st.caption(f"기간: {rng_note} · {len(export_df):,}행")
         if st.checkbox("내보내기 파일 준비", key="export_prepare"):
             try:
-                # CSV (Excel/클로드 분석용) — 한글 깨짐 방지 utf-8-sig
+                # CSV — 한글 깨짐 방지 utf-8-sig
                 csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
-                    "📄 CSV 출력 (분석용)", data=csv_bytes,
+                    "📄 CSV 출력", data=csv_bytes,
                     file_name="da_filtered.csv", mime="text/csv",
                     use_container_width=True, key="export_csv",
-                )
-                json_bytes = export_df.to_json(
-                    orient="records", force_ascii=False, date_format="iso", indent=2
-                ).encode("utf-8")
-                st.download_button(
-                    "🧾 JSON 출력", data=json_bytes,
-                    file_name="da_filtered.json", mime="application/json",
-                    use_container_width=True, key="export_json",
-                )
-                HTML_MAX = 5000
-                html_doc = build_html_report(export_df.head(HTML_MAX))
-                if len(export_df) > HTML_MAX:
-                    st.caption(f"※ HTML은 상위 {HTML_MAX:,}행만 포함(용량 보호). JSON은 전체 포함.")
-                st.download_button(
-                    "🌐 HTML 출력", data=html_doc.encode("utf-8"),
-                    file_name="da_filtered.html", mime="text/html",
-                    use_container_width=True, key="export_html",
                 )
             except Exception as e:
                 st.warning(f"내보내기 생성 중 오류: {e}")
