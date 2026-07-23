@@ -2352,12 +2352,20 @@ CUSTOM_EXTRA_METRIC_SPEC = [
     ("순결제거래액(SP)", "지표_순결제거래액(SP)", "money"),
 ]
 
+# 커스텀 실적 행 차원 (표기순 = 결과표 컬럼 순서)
 CUSTOM_DIMS = {
-    "비용출처": "구분_비용출처", "채널명": "구분_채널", "매체명": "구분_매체명",
-    "상품명": "구분_상품", "부서명(BPU)": "구분_부서명", "디바이스": "구분_디바이스",
-    "카테고리": "카테고리", "광고유형": "구분_광고유형",
-    "캠페인명": "구분_캠페인", "하위캠페인명": "구분_하위캠페인",
-    "AF코드": "구분_AF코드", "소재명": "구분_AF코드이름",
+    "비용출처": "구분_비용출처",
+    "채널명": "구분_채널",
+    "매체명": "구분_매체명",
+    "상품명": "구분_상품",
+    "부서명": "구분_부서명",
+    "디바이스명": "구분_디바이스",
+    "카테고리명": "카테고리",
+    "캠페인명": "구분_캠페인",
+    "하위캠페인명": "구분_하위캠페인",
+    "AF코드": "구분_AF코드",
+    "AF코드명": "구분_AF코드이름",
+    "소재명": "구분_키워드(소재)",
 }
 
 
@@ -2380,14 +2388,18 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
     with c2:
-        dims = st.multiselect("행 차원", list(CUSTOM_DIMS.keys()),
-                              default=["매체명"], key="cu_dims")
+        # 데이터에 존재하는 차원만 옵션으로 제공
+        dim_opts = [x for x in CUSTOM_DIMS if CUSTOM_DIMS[x] in d.columns]
+        default_dim = ["매체명"] if "매체명" in dim_opts else dim_opts[:1]
+        dims = st.multiselect("행 차원", dim_opts, default=default_dim, key="cu_dims")
     with c3:
         # 상세 실적표(DETAIL_SPEC) 순서 → 집행일수 → 채널별 순결제거래액(RD~SP) 순.
         met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
                     + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체 선택
 
+    # 선택한 차원을 CUSTOM_DIMS 표기순(고정)으로 정렬 → 결과표 컬럼 순서 일관성
+    dims = [x for x in CUSTOM_DIMS if x in dims and CUSTOM_DIMS[x] in d.columns]
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
 
     if group_cols:
