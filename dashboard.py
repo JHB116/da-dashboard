@@ -2443,21 +2443,74 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     if d.empty:
         return
 
+    # 지표 라벨→(라벨,컬럼,종류) 매핑
+    spec_by_label = {d[0]: d for d in DETAIL_SPEC}
+    spec_by_label["집행일수"] = ("집행일수", "집행일수", "num")
+    spec_by_label.update({m[0]: m for m in CUSTOM_EXTRA_METRIC_SPEC})
+    met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
+                + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
+    dim_opts = [x for x in CUSTOM_DIMS if CUSTOM_DIMS[x] in d.columns]
+
     st.markdown("##### 🧷 피벗 설정")
-    c1, c2, c3 = st.columns([1, 2, 3])
+    c1, c2, c3 = st.columns([1, 2, 2])
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
+    period_opt = ["기간"] if gran != "없음" else []
     with c2:
-        # 데이터에 존재하는 차원만 옵션으로 제공 (기본: 전체 선택)
-        dim_opts = [x for x in CUSTOM_DIMS if CUSTOM_DIMS[x] in d.columns]
-        dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
+        dims = st.multiselect("행 차원", period_opt + dim_opts,
+                              default=dim_opts, key="cu_dims")
     with c3:
-        # 상세 실적표(DETAIL_SPEC) 순서 → 집행일수 → 채널별 순결제거래액(RD~SP) 순.
-        met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
-                    + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
-        mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체 선택
+        col_opts = [x for x in (period_opt + dim_opts) if x not in dims]
+        col_dims = st.multiselect("열 차원 (피벗)", col_opts, default=[], key="cu_coldims")
+
+    def _dcol(x):
+        return "기간" if x == "기간" else CUSTOM_DIMS[x]
+
+    # ── 피벗(교차표) 모드: 열 차원이 선택되면 단일 지표 교차표
+    if col_dims:
+        val_label = st.selectbox("피벗 값 지표", met_opts, key="cu_pivval")
+        _, vcol, vkind = spec_by_label[val_label]
+        row_dims = [x for x in dims if x not in col_dims]
+        if not row_dims:
+            st.info("행 차원을 1개 이상 선택하세요.")
+            return
+        use_period = "기간" in row_dims or "기간" in col_dims
+        gcols = (PERIOD_COLS[gran] if (gran != "없음" and use_period) else []) \
+            + [CUSTOM_DIMS[x] for x in (row_dims + col_dims)
+               if x != "기간" and CUSTOM_DIMS[x] in d.columns]
+        gg = agg(d, gcols) if gcols else pd.DataFrame()
+        if gg.empty or vcol not in gg.columns:
+            st.info("조건에 맞는 데이터가 없습니다.")
+            return
+        if use_period:
+            gg["기간"] = [_period_label(gran, r) for _, r in gg.iterrows()]
+        row_keys = [_dcol(x) for x in row_dims]
+        col_keys = [_dcol(x) for x in col_dims]
+        piv = gg.pivot_table(index=row_keys, columns=col_keys, values=vcol, aggfunc="first")
+        # 컬럼(MultiIndex) 평탄화 + 인덱스명 라벨화
+        piv.columns = ([" / ".join(map(str, c)) for c in piv.columns]
+                       if isinstance(piv.columns, pd.MultiIndex)
+                       else [str(c) for c in piv.columns])
+        label_of = {v: k for k, v in CUSTOM_DIMS.items()}
+        label_of["기간"] = "기간"
+        piv.index.names = [label_of.get(n, n) for n in piv.index.names]
+        raw_piv = piv.reset_index()
+        disp = piv.map(lambda v: _fmt_kind(v, vkind)).reset_index()
+        st.markdown(f"##### 📊 피벗 결과 · 행={'+'.join(row_dims)} · 열={'+'.join(col_dims)} · 값={val_label}")
+        st.dataframe(disp, use_container_width=False, hide_index=True,
+                     height=_fit_height(min(len(disp), 15)))
+        st.caption("※ CSV는 화면 축약표기가 아닌 **원본 숫자**로 저장됩니다. "
+                   "(교차표는 지표 1개 기준 · 비율지표는 각 셀의 정확한 값)")
+        st.download_button("📄 CSV 다운로드",
+                           data=raw_piv.to_csv(index=False).encode("utf-8-sig"),
+                           file_name="custom_pivot.csv", mime="text/csv", key="cu_pivcsv")
+        return
+
+    with st.container():
+        mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
 
     # 선택한 차원을 CUSTOM_DIMS 표기순(고정)으로 정렬 → 결과표 컬럼 순서 일관성
+    # (기간은 CUSTOM_DIMS에 없어 여기서 제외되고, 아래 gran 로직으로 처리됨)
     dims = [x for x in CUSTOM_DIMS if x in dims and CUSTOM_DIMS[x] in d.columns]
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
 
@@ -2472,9 +2525,6 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         return
 
     # 정렬: 첫 지표(있으면) 기준 내림차순, 없으면 광고비
-    spec_by_label = {d[0]: d for d in DETAIL_SPEC}
-    spec_by_label["집행일수"] = ("집행일수", "집행일수", "num")
-    spec_by_label.update({m[0]: m for m in CUSTOM_EXTRA_METRIC_SPEC})
     sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
     if sort_src in g.columns:
         g = g.sort_values(sort_src, ascending=False, na_position="last")
