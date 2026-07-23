@@ -2361,6 +2361,7 @@ CUSTOM_DIMS = {
     "부서명": "구분_부서명",
     "디바이스명": "구분_디바이스",
     "카테고리명": "카테고리",
+    "기획전번호": "구분_기획전 번호",
     "캠페인명": "구분_캠페인",
     "하위캠페인명": "구분_하위캠페인",
     "AF코드": "구분_AF코드",
@@ -2388,10 +2389,9 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
     with c2:
-        # 데이터에 존재하는 차원만 옵션으로 제공
+        # 데이터에 존재하는 차원만 옵션으로 제공 (기본: 전체 선택)
         dim_opts = [x for x in CUSTOM_DIMS if CUSTOM_DIMS[x] in d.columns]
-        default_dim = ["매체명"] if "매체명" in dim_opts else dim_opts[:1]
-        dims = st.multiselect("행 차원", dim_opts, default=default_dim, key="cu_dims")
+        dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
     with c3:
         # 상세 실적표(DETAIL_SPEC) 순서 → 집행일수 → 채널별 순결제거래액(RD~SP) 순.
         met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
