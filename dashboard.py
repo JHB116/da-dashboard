@@ -2421,12 +2421,12 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         g = g.sort_values(sort_src, ascending=False, na_position="last")
 
     out = {}
-    if gran != "없음":
-        out["기간"] = [_period_label(gran, r) for _, r in g.iterrows()]
     for x in dims:
         col = CUSTOM_DIMS[x]
         if col in g.columns:
             out[x] = g[col].astype(str).values
+    if gran != "없음":  # 기간은 행 차원 뒤(맨 끝 헤더 컬럼)
+        out["기간"] = [_period_label(gran, r) for _, r in g.iterrows()]
     for m in mets:
         _, col, kind = spec_by_label[m]
         if col == "집행일수":
@@ -2460,8 +2460,9 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         return [""] * len(row)
 
     st.markdown(f"##### 📊 결과 ({max(len(table) - (1 if group_cols else 0), 0):,}행 + 총계)")
+    # use_container_width=False: 컬럼을 내용 폭에 맞춰 좁게(과도한 스트레치 방지)
     st.dataframe(table.style.apply(_hl_total, axis=1),
-                 use_container_width=True, hide_index=True,
+                 use_container_width=False, hide_index=True,
                  height=_fit_height(min(len(table), 31)))
     st.download_button("📄 CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="custom_report.csv", mime="text/csv", key="cu_csv")
