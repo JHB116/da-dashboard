@@ -2420,37 +2420,46 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     if sort_src in g.columns:
         g = g.sort_values(sort_src, ascending=False, na_position="last")
 
-    out = {}
+    out, raw = {}, {}   # out=화면표시(포맷), raw=CSV용(원본 숫자)
     for x in dims:
         col = CUSTOM_DIMS[x]
         if col in g.columns:
             out[x] = g[col].astype(str).values
+            raw[x] = g[col].astype(str).values
     if gran != "없음":  # 기간은 행 차원 뒤(맨 끝 헤더 컬럼)
-        out["기간"] = [_period_label(gran, r) for _, r in g.iterrows()]
+        labels = [_period_label(gran, r) for _, r in g.iterrows()]
+        out["기간"] = labels
+        raw["기간"] = labels
     for m in mets:
         _, col, kind = spec_by_label[m]
         if col == "집행일수":
-            out[m] = g["집행일수"].apply(lambda v: _fmt_kind(v, "num")).values if "집행일수" in g.columns else "–"
-        elif col in g.columns:
-            out[m] = g[col].apply(lambda v, k=kind: _fmt_kind(v, k)).values
+            rawv = g["집행일수"].values if "집행일수" in g.columns else None
+        else:
+            rawv = g[col].values if col in g.columns else None
+        if rawv is None:
+            continue
+        out[m] = pd.Series(rawv).apply(lambda v, k=kind: _fmt_kind(v, k)).values
+        raw[m] = rawv
 
     table = pd.DataFrame(out)
+    raw_table = pd.DataFrame(raw)
 
     # 총계 행: 선택 기간·필터 전체 누적(비율지표는 합계 기준 재계산)
     if group_cols and not table.empty:
         tot = calc_kpi(pd.DataFrame([d[AGG_COLS].sum()])).iloc[0]
         tot_days = d["기간_일자"].nunique()
-        trow = {k: "" for k in out.keys()}
+        trow, trow_raw = {k: "" for k in out}, {k: "" for k in raw}
         trow[list(out.keys())[0]] = "🔢 총계"
+        trow_raw[list(raw.keys())[0]] = "총계"
         for m in mets:
+            if m not in out:
+                continue
             _, col, kind = spec_by_label[m]
-            if col == "집행일수":
-                trow[m] = _fmt_kind(tot_days, "num")
-            elif col in tot.index:
-                trow[m] = _fmt_kind(tot[col], kind)
-            else:
-                trow[m] = "–"
+            rv = tot_days if col == "집행일수" else (tot[col] if col in tot.index else None)
+            trow[m] = _fmt_kind(rv, kind) if rv is not None else "–"
+            trow_raw[m] = rv if rv is not None else ""
         table = pd.concat([table, pd.DataFrame([trow])], ignore_index=True)
+        raw_table = pd.concat([raw_table, pd.DataFrame([trow_raw])], ignore_index=True)
 
     last_i = len(table) - 1
 
@@ -2464,7 +2473,8 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     st.dataframe(table.style.apply(_hl_total, axis=1),
                  use_container_width=False, hide_index=True,
                  height=_fit_height(min(len(table), 31)))
-    st.download_button("📄 CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"),
+    st.caption("※ CSV는 화면의 축약표기가 아닌 **원본 숫자**로 저장됩니다.")
+    st.download_button("📄 CSV 다운로드", data=raw_table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="custom_report.csv", mime="text/csv", key="cu_csv")
 
 
