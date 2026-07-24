@@ -2505,75 +2505,13 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     # 값이 전부 비어있는 차원(예: 카테고리명)은 옵션에서 제외
     dim_opts = [x for x in CUSTOM_DIMS if _dim_has_data(CUSTOM_DIMS[x])]
 
-    st.markdown("##### 🧷 피벗 설정")
-    c1, c2, c3 = st.columns([1, 2, 2])
+    st.markdown("##### 🧷 표 설정")
+    c1, c2, c3 = st.columns([1, 2, 3])
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
-    period_opt = ["기간"] if gran != "없음" else []
     with c2:
-        dims = st.multiselect("행 차원", period_opt + dim_opts,
-                              default=dim_opts, key="cu_dims")
+        dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
     with c3:
-        col_opts = [x for x in (period_opt + dim_opts) if x not in dims]
-        col_dims = st.multiselect("열 차원 (피벗)", col_opts, default=[], key="cu_coldims")
-
-    def _dcol(x):
-        return "기간" if x == "기간" else CUSTOM_DIMS[x]
-
-    # ── 피벗(교차표) 모드: 열 차원이 선택되면 단일 지표 교차표
-    if col_dims:
-        val_label = st.selectbox("피벗 값 지표", met_opts, key="cu_pivval")
-        _, vcol, vkind = spec_by_label[val_label]
-        row_dims = [x for x in dims if x not in col_dims]
-        if not row_dims:
-            st.info("행 차원을 1개 이상 선택하세요.")
-            return
-        use_period = "기간" in row_dims or "기간" in col_dims
-        gcols = (PERIOD_COLS[gran] if (gran != "없음" and use_period) else []) \
-            + [CUSTOM_DIMS[x] for x in (row_dims + col_dims)
-               if x != "기간" and CUSTOM_DIMS[x] in d.columns]
-        gg = agg(d, gcols) if gcols else pd.DataFrame()
-        if gg.empty or vcol not in gg.columns:
-            st.info("조건에 맞는 데이터가 없습니다.")
-            return
-        if use_period:
-            gg["기간"] = [_period_label(gran, r) for _, r in gg.iterrows()]
-        row_keys = [_dcol(x) for x in row_dims]
-        col_keys = [_dcol(x) for x in col_dims]
-        # 조합 폭발 방어: 행/열 고유조합 곱이 너무 크면 교차표 생성 불가
-        n_rowcombo = gg.drop_duplicates(row_keys).shape[0]
-        n_colcombo = gg.drop_duplicates(col_keys).shape[0]
-        if n_rowcombo * n_colcombo > 200_000:
-            st.warning(f"행({n_rowcombo:,}) × 열({n_colcombo:,}) 조합이 너무 많아 교차표를 만들 수 없어요. "
-                       "**행 차원을 1~3개로 줄이고** 캠페인·하위캠페인·AF코드 같은 대용량 차원은 "
-                       "행보다 **필터**로 좁혀서 사용하세요.")
-            return
-        try:
-            piv = gg.pivot_table(index=row_keys, columns=col_keys, values=vcol,
-                                 aggfunc="first", observed=True, sort=False)
-        except (OverflowError, MemoryError, ValueError):
-            st.warning("행/열 차원 조합이 너무 커서 교차표를 만들 수 없어요. 행 차원을 줄여주세요.")
-            return
-        # 컬럼(MultiIndex) 평탄화 + 인덱스명 라벨화
-        piv.columns = ([" / ".join(map(str, c)) for c in piv.columns]
-                       if isinstance(piv.columns, pd.MultiIndex)
-                       else [str(c) for c in piv.columns])
-        label_of = {v: k for k, v in CUSTOM_DIMS.items()}
-        label_of["기간"] = "기간"
-        piv.index.names = [label_of.get(n, n) for n in piv.index.names]
-        raw_piv = piv.reset_index()
-        disp = piv.map(lambda v: _fmt_kind(v, vkind)).reset_index()
-        st.markdown(f"##### 📊 피벗 결과 · 행={'+'.join(row_dims)} · 열={'+'.join(col_dims)} · 값={val_label}")
-        st.dataframe(disp, use_container_width=False, hide_index=True,
-                     height=_fit_height(min(len(disp), 15)))
-        st.caption("※ CSV는 화면 축약표기가 아닌 **원본 숫자**로 저장됩니다. "
-                   "(교차표는 지표 1개 기준 · 비율지표는 각 셀의 정확한 값)")
-        st.download_button("📄 CSV 다운로드",
-                           data=raw_piv.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="custom_pivot.csv", mime="text/csv", key="cu_pivcsv")
-        return
-
-    with st.container():
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
 
     # 선택한 차원을 CUSTOM_DIMS 표기순(고정)으로 정렬 → 결과표 컬럼 순서 일관성
