@@ -1630,21 +1630,29 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
     - 대용량 컬럼(캠페인명 등)은 기본 비움: 검색(타이핑)해서 일부만 클릭 선택, 비우면 전체.
     - 그 외 컬럼은 기본 전체 선택."""
     specs = _PAGE_FILTER_SPECS + list(extra_specs or [])
+    name_specs = [(l, c) for (l, c) in specs if c in NAME_SEARCH_COLS and c in df.columns]
+    grid_specs = [(l, c) for (l, c) in specs if c not in NAME_SEARCH_COLS]
     with st.expander("🔎 필터", expanded=expanded):
         out = df
-        for i in range(0, len(specs), 6):
-            chunk = specs[i:i + 6]
+        # ── 캠페인/하위캠페인: 포함·제외 검색 + 매칭 목록 미리보기(전체폭)
+        for label, col in name_specs:
+            q = st.text_input(
+                label, key=f"{key_prefix}_{col}",
+                placeholder="포함검색(쉼표로 여러개) · 제외는 - (예: 단호박, -0107)")
+            out = _apply_name_search(out, col, q)
+            if q and q.strip():
+                matches = sorted(out[col].dropna().astype(str).unique().tolist(), key=str)
+                with st.expander(f"🔎 '{label}' 매칭 {len(matches):,}개 (여기서 제외할 항목 확인)",
+                                 expanded=True):
+                    st.dataframe(pd.DataFrame({label: matches}),
+                                 use_container_width=True, hide_index=True,
+                                 height=min(len(matches) * 35 + 40, 280))
+        # ── 그 외 필터(6열 그리드)
+        for i in range(0, len(grid_specs), 6):
+            chunk = grid_specs[i:i + 6]
             cols = st.columns(len(chunk))
             for (label, col), c in zip(chunk, cols):
                 if col not in df.columns:
-                    continue
-                # 이름이 많은 컬럼(캠페인/하위캠페인): 포함/제외 검색어 입력으로 처리
-                if col in NAME_SEARCH_COLS:
-                    with c:
-                        q = st.text_input(
-                            label, key=f"{key_prefix}_{col}",
-                            placeholder="포함검색(쉼표로 여러개) · 제외는 - (예: 단호박, -0107)")
-                    out = _apply_name_search(out, col, q)
                     continue
                 # key=str: 숫자·문자가 섞인 컬럼(예: 기획전번호)에서 정렬 TypeError 방지
                 opts = sorted(df[col].dropna().unique().tolist(), key=str)
