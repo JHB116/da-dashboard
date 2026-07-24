@@ -1559,10 +1559,11 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
 
     def _show(rows):
-        tbl = summary_table(rows, metric_labels, groups, period_type="월", add_total=True)
+        # 전체요약 월별 실적요약 표는 TOTAL 행 미표시
+        tbl = summary_table(rows, metric_labels, groups, period_type="월", add_total=False)
         st.dataframe(_style_summary(tbl, metric_labels, groups),
                      use_container_width=True, hide_index=True,
-                     height=_fit_height(len(rows) + 1, header_rows=2))
+                     height=_fit_height(len(rows), header_rows=2))
 
     _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
 
