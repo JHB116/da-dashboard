@@ -1600,11 +1600,16 @@ _PAGE_FILTER_SPECS = [
 SOJU_EXTRA_SPECS = [("소구형", "구분_소구형"), ("카테고리(소재)", "구분_소재카테고리")]
 
 
+# 값 종류가 많아 '전체 선택'이 비효율적인 컬럼 → 기본 비움(검색해서 일부만 선택, 비우면 전체)
+HIGH_CARD_COLS = {"구분_캠페인", "구분_하위캠페인", "구분_기획전 번호",
+                  "구분_AF코드", "구분_AF코드이름", "구분_키워드(소재)"}
+
+
 def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                  media_default=None, extra_specs=None) -> pd.DataFrame:
-    """접이식 필터 행(비용출처/채널명/매체명/상품명/부서명/디바이스명). 선택값을 df에 적용해 반환.
-    media_default: 매체명 기본 선택값(list, 부분일치) — 없으면 전체.
-    extra_specs: 추가 (라벨, 컬럼) 목록(예: 캠페인명/하위캠페인명)."""
+    """접이식 필터. 선택값을 df에 적용해 반환.
+    - 대용량 컬럼(캠페인명 등)은 기본 비움: 검색(타이핑)해서 일부만 클릭 선택, 비우면 전체.
+    - 그 외 컬럼은 기본 전체 선택."""
     specs = _PAGE_FILTER_SPECS + list(extra_specs or [])
     with st.expander("🔎 필터", expanded=expanded):
         out = df
@@ -1616,13 +1621,17 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                     continue
                 # key=str: 숫자·문자가 섞인 컬럼(예: 기획전번호)에서 정렬 TypeError 방지
                 opts = sorted(df[col].dropna().unique().tolist(), key=str)
-                default = opts
+                hi_card = col in HIGH_CARD_COLS
+                default = [] if hi_card else opts
+                placeholder = "검색해서 선택 · 비우면 전체" if hi_card else None
                 if label == "매체명" and media_default:
                     d = [m for m in opts if any(x in str(m) for x in media_default)]
                     if d:
                         default = d
                 with c:
-                    sel = st.multiselect(label, opts, default=default, key=f"{key_prefix}_{col}")
+                    sel = st.multiselect(label, opts, default=default,
+                                         key=f"{key_prefix}_{col}", placeholder=placeholder)
+                # 비어있으면(전체) 필터 미적용, 일부 선택 시에만 필터
                 if sel and set(sel) != set(opts):
                     out = out[out[col].isin(sel)]
         return out
@@ -2212,19 +2221,8 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
-    # 캠페인명 / 하위캠페인명 검색 (소재 상세와 동일 방식, 부분일치)
-    s1, s2 = st.columns(2)
-    with s1:
-        camp_q = st.text_input("캠페인명 검색", key="camp_search",
-                               placeholder="캠페인명 일부 입력")
-    with s2:
-        sub_q = st.text_input("하위캠페인명 검색", key="subcamp_search",
-                              placeholder="하위캠페인명 일부 입력")
-    if camp_q:
-        df = df[df["구분_캠페인"].astype(str).str.contains(camp_q, case=False, na=False)]
-    if sub_q:
-        df = df[df["구분_하위캠페인"].astype(str).str.contains(sub_q, case=False, na=False)]
     # 접이식 필터 (공용 구성 + 소재 파생필터, 매체명 기본: 네이버·카카오)
+    # 캠페인명·하위캠페인명은 필터 박스에서 타이핑 검색 후 원하는 것만 선택(비우면 전체)
     df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"],
                       extra_specs=SOJU_EXTRA_SPECS)
     if df.empty:
