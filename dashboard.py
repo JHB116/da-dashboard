@@ -2498,7 +2498,13 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     spec_by_label.update({m[0]: m for m in CUSTOM_EXTRA_METRIC_SPEC})
     met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
                 + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
-    dim_opts = [x for x in CUSTOM_DIMS if CUSTOM_DIMS[x] in d.columns]
+
+    def _dim_has_data(col):
+        if col not in d.columns:
+            return False
+        return d[col].dropna().astype(str).str.strip().ne("").any()
+    # 값이 전부 비어있는 차원(예: 카테고리명)은 옵션에서 제외
+    dim_opts = [x for x in CUSTOM_DIMS if _dim_has_data(CUSTOM_DIMS[x])]
 
     st.markdown("##### 🧷 피벗 설정")
     c1, c2, c3 = st.columns([1, 2, 2])
@@ -2535,7 +2541,20 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             gg["기간"] = [_period_label(gran, r) for _, r in gg.iterrows()]
         row_keys = [_dcol(x) for x in row_dims]
         col_keys = [_dcol(x) for x in col_dims]
-        piv = gg.pivot_table(index=row_keys, columns=col_keys, values=vcol, aggfunc="first")
+        # 조합 폭발 방어: 행/열 고유조합 곱이 너무 크면 교차표 생성 불가
+        n_rowcombo = gg.drop_duplicates(row_keys).shape[0]
+        n_colcombo = gg.drop_duplicates(col_keys).shape[0]
+        if n_rowcombo * n_colcombo > 200_000:
+            st.warning(f"행({n_rowcombo:,}) × 열({n_colcombo:,}) 조합이 너무 많아 교차표를 만들 수 없어요. "
+                       "**행 차원을 1~3개로 줄이고** 캠페인·하위캠페인·AF코드 같은 대용량 차원은 "
+                       "행보다 **필터**로 좁혀서 사용하세요.")
+            return
+        try:
+            piv = gg.pivot_table(index=row_keys, columns=col_keys, values=vcol,
+                                 aggfunc="first", observed=True, sort=False)
+        except (OverflowError, MemoryError, ValueError):
+            st.warning("행/열 차원 조합이 너무 커서 교차표를 만들 수 없어요. 행 차원을 줄여주세요.")
+            return
         # 컬럼(MultiIndex) 평탄화 + 인덱스명 라벨화
         piv.columns = ([" / ".join(map(str, c)) for c in piv.columns]
                        if isinstance(piv.columns, pd.MultiIndex)
