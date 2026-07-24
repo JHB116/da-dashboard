@@ -2508,7 +2508,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     st.markdown("##### 🧷 표 설정")
     c1, c2, c3 = st.columns([1, 2, 3])
     with c1:
-        gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], key="cu_gran")
+        gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], index=3, key="cu_gran")
     with c2:
         dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
     with c3:
@@ -2732,9 +2732,8 @@ def build_html_report(df: pd.DataFrame) -> str:
 def main():
     st.title("📊 DA 광고 실적 대시보드")
 
-    # 사이드바 순서: ① 페이지  ② 내보내기  ③ 파일 업로드 (필터는 제거됨)
+    # 사이드바 순서: ① 페이지  ② 파일 업로드 (필터·내보내기는 제거됨)
     page_box   = st.sidebar.container()
-    export_box = st.sidebar.container()
     upload_box = st.sidebar.container()
 
     # ── ③ 파일 업로드 (맨 아래)
@@ -2796,37 +2795,6 @@ def main():
             "📊 전체 요약", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
             "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
         ], label_visibility="collapsed")
-
-    # 현재 페이지의 날짜 카드 범위를 내보내기에 반영
-    DATE_PREFIX = {"📊 전체 요약": "sum", "🎯 캠페인별 실적": "camp", "🎨 소재 상세": "cr",
-                   "🧩 커스텀 실적": "cu"}
-    prefix = DATE_PREFIX.get(page)
-    export_df = pre_date_filtered
-    rng_note = "전체 기간(날짜 카드 없음)"
-    if prefix and f"{prefix}_start" in st.session_state:
-        s = pd.Timestamp(st.session_state[f"{prefix}_start"])
-        e = pd.Timestamp(st.session_state[f"{prefix}_end"])
-        export_df = pre_date_filtered[(pre_date_filtered["기간_일자"] >= s)
-                                      & (pre_date_filtered["기간_일자"] <= e)]
-        rng_note = f"{s.date()} ~ {e.date()}"
-
-    # ── ③ 내보내기 (사이드바 필터 + 현재 페이지 날짜 카드 반영)
-    # 매 rerun마다 대용량 파일을 만들지 않도록, 체크했을 때만 생성한다.
-    with export_box:
-        st.divider()
-        st.subheader("📤 내보내기")
-        st.caption(f"기간: {rng_note} · {len(export_df):,}행")
-        if st.checkbox("내보내기 파일 준비", key="export_prepare"):
-            try:
-                # CSV — 한글 깨짐 방지 utf-8-sig
-                csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "📄 CSV 출력", data=csv_bytes,
-                    file_name="da_filtered.csv", mime="text/csv",
-                    use_container_width=True, key="export_csv",
-                )
-            except Exception as e:
-                st.warning(f"내보내기 생성 중 오류: {e}")
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
