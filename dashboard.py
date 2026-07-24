@@ -1601,8 +1601,27 @@ SOJU_EXTRA_SPECS = [("소구형", "구분_소구형"), ("카테고리(소재)", 
 
 
 # 값 종류가 많아 '전체 선택'이 비효율적인 컬럼 → 기본 비움(검색해서 일부만 선택, 비우면 전체)
-HIGH_CARD_COLS = {"구분_캠페인", "구분_하위캠페인", "구분_기획전 번호",
-                  "구분_AF코드", "구분_AF코드이름", "구분_키워드(소재)"}
+HIGH_CARD_COLS = {"구분_기획전 번호", "구분_AF코드", "구분_AF코드이름", "구분_키워드(소재)"}
+# 이름이 매우 많은 컬럼 → 포함/제외 검색어 방식(멀티셀렉트 대신)
+NAME_SEARCH_COLS = {"구분_캠페인", "구분_하위캠페인"}
+
+
+def _apply_name_search(out, col, query):
+    """포함/제외 검색어 적용. 예: '단호박, 앵커, -0107' = (단호박|앵커) 포함, '0107' 포함 제외."""
+    if not query or not query.strip():
+        return out
+    terms = [t.strip() for t in query.split(",") if t.strip()]
+    inc = [t for t in terms if not t.startswith("-")]
+    exc = [t[1:].strip() for t in terms if t.startswith("-") and len(t) > 1]
+    s = out[col].astype(str)
+    if inc:
+        m = pd.Series(False, index=out.index)
+        for t in inc:
+            m = m | s.str.contains(re.escape(t), case=False, na=False)
+        out = out[m]
+    for t in exc:
+        out = out[~out[col].astype(str).str.contains(re.escape(t), case=False, na=False)]
+    return out
 
 
 def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
@@ -1618,6 +1637,14 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
             cols = st.columns(len(chunk))
             for (label, col), c in zip(chunk, cols):
                 if col not in df.columns:
+                    continue
+                # 이름이 많은 컬럼(캠페인/하위캠페인): 포함/제외 검색어 입력으로 처리
+                if col in NAME_SEARCH_COLS:
+                    with c:
+                        q = st.text_input(
+                            label, key=f"{key_prefix}_{col}",
+                            placeholder="포함검색(쉼표로 여러개) · 제외는 - (예: 단호박, -0107)")
+                    out = _apply_name_search(out, col, q)
                     continue
                 # key=str: 숫자·문자가 섞인 컬럼(예: 기획전번호)에서 정렬 TypeError 방지
                 opts = sorted(df[col].dropna().unique().tolist(), key=str)
