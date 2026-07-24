@@ -205,6 +205,16 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if "구분_상품" not in df.columns:
         df["구분_상품"] = ""
 
+    # 소재 키워드 파싱: '_'로 구분된 코드에서 소구형(4번째)·카테고리(6번째) 토큰 추출
+    # 예) BU_A_기획_혜택_2A_통합_... → 소구형=혜택, 카테고리=통합
+    if "구분_키워드(소재)" in df.columns:
+        parts = df["구분_키워드(소재)"].astype(str).str.split("_")
+        df["구분_소구형"] = parts.str[3].fillna("").str.strip()
+        df["구분_소재카테고리"] = parts.str[5].fillna("").str.strip()
+    else:
+        df["구분_소구형"] = ""
+        df["구분_소재카테고리"] = ""
+
     if df["기간_주"].isna().all():
         df["기간_주"] = (
             df["기간_일자"].dt.strftime("%Y")
@@ -1586,6 +1596,9 @@ _PAGE_FILTER_SPECS = [
     ("기획전번호", "구분_기획전 번호"),
 ]
 
+# 소재 키워드 파생 필터(캠페인별·커스텀 전용)
+SOJU_EXTRA_SPECS = [("소구형", "구분_소구형"), ("카테고리(소재)", "구분_소재카테고리")]
+
 
 def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                  media_default=None, extra_specs=None) -> pd.DataFrame:
@@ -2211,8 +2224,9 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         df = df[df["구분_캠페인"].astype(str).str.contains(camp_q, case=False, na=False)]
     if sub_q:
         df = df[df["구분_하위캠페인"].astype(str).str.contains(sub_q, case=False, na=False)]
-    # 접이식 필터 (공용 구성, 매체명 기본: 네이버·카카오)
-    df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"])
+    # 접이식 필터 (공용 구성 + 소재 파생필터, 매체명 기본: 네이버·카카오)
+    df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"],
+                      extra_specs=SOJU_EXTRA_SPECS)
     if df.empty:
         st.info("검색·필터 결과 데이터가 없습니다.")
         return
@@ -2428,6 +2442,8 @@ CUSTOM_DIMS = {
     "AF코드": "구분_AF코드",
     "AF코드명": "구분_AF코드이름",
     "소재명": "구분_키워드(소재)",
+    "소구형": "구분_소구형",
+    "카테고리(소재)": "구분_소재카테고리",
 }
 
 
@@ -2438,7 +2454,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.warning("데이터가 없습니다.")
         return
 
-    base = page_filters(df, "cuf", expanded=True)
+    base = page_filters(df, "cuf", expanded=True, extra_specs=SOJU_EXTRA_SPECS)
     d = date_range_filter(base, key_prefix="cu", default_preset="이번달")
     if d.empty:
         return
