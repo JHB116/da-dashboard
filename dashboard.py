@@ -2265,7 +2265,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         st.info("검색·필터 결과 데이터가 없습니다.")
         return
 
-    tab_rank, tab_quad, tab_heat = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면", "🗓️ 요일별 히트맵"])
+    tab_rank, tab_quad, tab_heat = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면", "🗓️ 요일별 실적"])
 
     with tab_rank:
         cc1, cc2 = st.columns([2, 1])
@@ -2358,12 +2358,10 @@ HEATMAP_METRICS = {
 
 
 def _render_weekday_heatmap(df, key_prefix="hm"):
-    """요일별 히트맵(한 줄). 로데이터가 일자 단위라 시간(0~23시)축은 제공 불가."""
+    """요일별 실적 막대 그래프(월~일)."""
     if df.empty:
         st.info("데이터가 없습니다.")
         return
-    st.caption("⚠️ 로데이터가 **일자 단위**(시간 정보 없음)라 시간대(0~23시) 축은 만들 수 없어 "
-               "**요일별** 히트맵으로 제공합니다.")
     sel = st.selectbox("지표", list(HEATMAP_METRICS.keys()), key=f"{key_prefix}_hm_metric")
     col = HEATMAP_METRICS[sel]
     d = df.copy()
@@ -2372,18 +2370,17 @@ def _render_weekday_heatmap(df, key_prefix="hm"):
     if hm.empty:
         st.info("표시할 데이터가 없습니다.")
         return
-    hm = hm.set_index("_요일").reindex(range(7))
-    x_labels = [WEEKDAY_LABELS[i] for i in range(7)]
-    vals = hm[col].values.reshape(1, -1)
-    tf = RATIO_TICKFMT.get(col, ",.0f")
-    fig = px.imshow(vals, x=x_labels, y=[sel],
-                    color_continuous_scale="Blues", aspect="auto")
-    fig.update_traces(text=[[(f"{v:{tf}}" if pd.notna(v) else "") for v in vals[0]]],
-                      texttemplate="%{text}", textfont_size=12,
-                      hovertemplate="%{x}<br>값 %{z:.4g}<extra></extra>")
-    base_layout(fig, f"요일별 {sel}", 220)
-    fig.update_yaxes(showticklabels=False)
-    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_heatmap")
+    hm = hm.set_index("_요일").reindex(range(7)).reset_index()
+    hm["요일"] = hm["_요일"].map(dict(enumerate(WEEKDAY_LABELS)))
+    tf = RATIO_TICKFMT.get(col)
+    fig = px.bar(hm, x="요일", y=col, color_discrete_sequence=["#2563EB"])
+    fig.update_xaxes(categoryorder="array", categoryarray=WEEKDAY_LABELS)
+    if tf:
+        fig.update_yaxes(tickformat=tf)
+    base_layout(fig, f"요일별 {sel}", 380)
+    fig.update_layout(showlegend=False)
+    label_traces(fig, tf if tf else ",.0f")
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_weekbar")
 
 
 def _render_bpu_charts(df):
@@ -2584,10 +2581,13 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         return [""] * len(row)
 
     st.markdown(f"##### 📊 결과 ({max(len(table) - (1 if group_cols else 0), 0):,}행 + TOTAL)")
-    # use_container_width=False: 컬럼을 내용 폭에 맞춰 좁게(과도한 스트레치 방지)
-    # 표 높이는 약 15행(기존의 절반)만 보이도록 제한 → 스크롤 부담 완화
-    st.dataframe(table.style.apply(_hl_total, axis=1),
-                 use_container_width=False, hide_index=True,
+    # 표 높이는 약 15행만 보이도록 제한(스크롤). Styler(총계 강조)는 셀 26만개 제한이
+    # 있어, 표가 크면 스타일 없이 렌더한다.
+    if table.size <= 200_000:
+        shown = table.style.apply(_hl_total, axis=1)
+    else:
+        shown = table  # 대용량: TOTAL 강조 생략(맨 아래 TOTAL 행은 그대로 표시)
+    st.dataframe(shown, use_container_width=False, hide_index=True,
                  height=_fit_height(min(len(table), 15)))
     st.caption("※ CSV는 화면의 축약표기가 아닌 **원본 숫자**로 저장됩니다.")
     st.download_button("📄 CSV 다운로드", data=raw_table.to_csv(index=False).encode("utf-8-sig"),
