@@ -2279,12 +2279,13 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         extra_cols = ["구분_매체명", "구분_상품"] if split_media else []
         extra_ids = ["구분_매체명", "구분_상품"] if split_media else []
 
-        # 캠페인별 실적 (비용출처별 정렬 규칙)
+        pn = ["구분_기획전 번호"] if "구분_기획전 번호" in df.columns else []
+        # 캠페인별 실적 (비용출처별 정렬 규칙) — 캠페인 옆에 기획전번호 표시
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_캠페인", src, slabel, scol, ascending=asc,
-                                 top_n=top_n, group_cols=["구분_캠페인"] + extra_cols,
-                                 id_cols=["구분_캠페인"] + extra_ids)
+                                 top_n=top_n, group_cols=["구분_캠페인"] + pn + extra_cols,
+                                 id_cols=["구분_캠페인"] + pn + extra_ids)
             st.divider()
 
         # 하위캠페인별 실적
@@ -2292,8 +2293,8 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
         for src in ["거래액확대", "신규고객확대", "인지도제고"]:
             slabel, scol, asc = RANK_SORT[src]
             render_ranking_table(df, "구분_하위캠페인", src, slabel, scol, ascending=asc,
-                                 top_n=top_n, group_cols=["구분_하위캠페인"] + extra_cols,
-                                 id_cols=["구분_하위캠페인"] + extra_ids)
+                                 top_n=top_n, group_cols=["구분_하위캠페인"] + pn + extra_cols,
+                                 id_cols=["구분_하위캠페인"] + pn + extra_ids)
             st.divider()
 
     # ── 효율 사분면
