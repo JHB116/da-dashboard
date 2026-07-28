@@ -125,6 +125,43 @@ def _map_weekly_format(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _parse_date_col(s: pd.Series):
+    """기간_일자를 견고하게 파싱한다.
+
+    엑셀에서 넘어온 날짜는 문자열('2026-07-27'), 엑셀 시리얼 넘버(46230),
+    YYYYMMDD 숫자(20260727) 등 형태가 제각각이다. pd.to_datetime 이
+    이를 잘못 읽어 2026년이 4326년(예: '43260727' → 4326-07-27)처럼
+    엉뚱한 연도로 나오는 경우가 있어, 여러 방식으로 파싱한 뒤
+    '그럴듯한 연도(2015~2100)' 비율이 가장 높은 결과를 채택한다.
+    """
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+
+    def _plausible(d):
+        if d is None:
+            return 0.0
+        yrs = d.dt.year
+        ok = (yrs >= 2015) & (yrs <= 2100)
+        return float(ok.mean()) if len(d) else 0.0
+
+    candidates = []
+    # 1) 표준 파싱
+    candidates.append(pd.to_datetime(s, errors="coerce"))
+    # 2) 엑셀 시리얼 넘버 (숫자로 저장된 날짜)
+    num = pd.to_numeric(s, errors="coerce")
+    if num.notna().mean() > 0.5:
+        candidates.append(
+            pd.to_datetime(num, unit="D", origin="1899-12-30", errors="coerce")
+        )
+    # 3) YYYYMMDD 형태(숫자만 남겼을 때 8자리)
+    txt = s.astype(str).str.replace(r"[^0-9]", "", regex=True)
+    if (txt.str.len() == 8).mean() > 0.5:
+        candidates.append(pd.to_datetime(txt, format="%Y%m%d", errors="coerce"))
+
+    best = max(candidates, key=_plausible)
+    return best
+
+
 @st.cache_data(show_spinner=False)
 def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     ext = filename.rsplit(".", 1)[-1].lower()
@@ -152,7 +189,7 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if "지표_광고비" not in df.columns and ("비용" in df.columns or "순결제매출" in df.columns):
         df = _map_weekly_format(df)
 
-    df["기간_일자"] = pd.to_datetime(df["기간_일자"], errors="coerce")
+    df["기간_일자"] = _parse_date_col(df["기간_일자"])
     df = df.dropna(subset=["기간_일자"])
 
     num_cols = [
@@ -2777,6 +2814,15 @@ def main():
         st.caption(
             f"총 {len(df):,}행 | {df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
         )
+        _yrs = df["기간_일자"].dt.year
+        if ((_yrs < 2015) | (_yrs > 2100)).any():
+            _bad = sorted(_yrs[(_yrs < 2015) | (_yrs > 2100)].unique().tolist())
+            st.warning(
+                "⚠️ 비정상 연도가 감지되었습니다: "
+                + ", ".join(str(y) for y in _bad)
+                + " — 로데이터 `기간_일자` 열의 셀 형식을 '날짜' 또는 "
+                "`YYYY-MM-DD` 텍스트로 맞춰주세요."
+            )
         if report_file is not None:
             n_m = sum(len(v) for v in report_targets.get("monthly", {}).values())
             n_w = len(report_targets.get("weekly", {}))
