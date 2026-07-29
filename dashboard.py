@@ -1023,6 +1023,13 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     data_max = df["기간_일자"].max()
     data_min = df["기간_일자"].min()
 
+    # 선택된 필터(예: 특정 BPU)에 데이터가 하나도 없으면 data_min/data_max가
+    # NaT가 되어 아래 _clamp의 날짜 비교에서 TypeError가 난다. 빈 결과를 정직하게
+    # 안내하고 빈 DataFrame을 반환한다.
+    if df.empty or pd.isna(data_min) or pd.isna(data_max):
+        st.info("선택한 조건에 해당하는 데이터가 없습니다.")
+        return df.iloc[0:0]
+
     week_start = today - pd.Timedelta(days=today.dayofweek)   # 월요일 시작
     last_week_start = week_start - pd.Timedelta(days=7)
     presets = {
@@ -2541,12 +2548,16 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     # 값이 전부 비어있는 차원(예: 카테고리명)은 옵션에서 제외
     dim_opts = [x for x in CUSTOM_DIMS if _dim_has_data(CUSTOM_DIMS[x])]
 
+    # 기본 선택에서 제외할 행 차원(옵션 목록에는 남아 사용자가 직접 켤 수 있음)
+    CUSTOM_DIMS_OFF_BY_DEFAULT = {"AF코드", "AF코드명", "소재명", "소구형", "카테고리(소재)"}
+    dim_default = [x for x in dim_opts if x not in CUSTOM_DIMS_OFF_BY_DEFAULT]
+
     st.markdown("##### 🧷 표 설정")
     c1, c2, c3 = st.columns([1, 2, 3])
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], index=3, key="cu_gran")
     with c2:
-        dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
+        dims = st.multiselect("행 차원", dim_opts, default=dim_default, key="cu_dims")
     with c3:
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
 
