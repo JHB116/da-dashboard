@@ -1023,6 +1023,13 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
     data_max = df["기간_일자"].max()
     data_min = df["기간_일자"].min()
 
+    # 선택된 필터(예: 특정 BPU)에 데이터가 하나도 없으면 data_min/data_max가
+    # NaT가 되어 아래 _clamp의 날짜 비교에서 TypeError가 난다. 빈 결과를 정직하게
+    # 안내하고 빈 DataFrame을 반환한다.
+    if df.empty or pd.isna(data_min) or pd.isna(data_max):
+        st.info("선택한 조건에 해당하는 데이터가 없습니다.")
+        return df.iloc[0:0]
+
     week_start = today - pd.Timedelta(days=today.dayofweek)   # 월요일 시작
     last_week_start = week_start - pd.Timedelta(days=7)
     presets = {
