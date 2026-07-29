@@ -2548,12 +2548,16 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     # 값이 전부 비어있는 차원(예: 카테고리명)은 옵션에서 제외
     dim_opts = [x for x in CUSTOM_DIMS if _dim_has_data(CUSTOM_DIMS[x])]
 
+    # 기본 선택에서 제외할 행 차원(옵션 목록에는 남아 사용자가 직접 켤 수 있음)
+    CUSTOM_DIMS_OFF_BY_DEFAULT = {"AF코드", "AF코드명", "소재명", "소구형", "카테고리(소재)"}
+    dim_default = [x for x in dim_opts if x not in CUSTOM_DIMS_OFF_BY_DEFAULT]
+
     st.markdown("##### 🧷 표 설정")
     c1, c2, c3 = st.columns([1, 2, 3])
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], index=3, key="cu_gran")
     with c2:
-        dims = st.multiselect("행 차원", dim_opts, default=dim_opts, key="cu_dims")
+        dims = st.multiselect("행 차원", dim_opts, default=dim_default, key="cu_dims")
     with c3:
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
 
