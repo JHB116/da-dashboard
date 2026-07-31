@@ -81,6 +81,20 @@ MONTH_LABELS = {i: f"{i}월" for i in range(1, 13)}
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
 
 
+def _weekday_kr(ts) -> str:
+    """요일 한글 한 글자('월'~'일')."""
+    return WEEKDAY_LABELS[pd.Timestamp(ts).weekday()]
+
+
+def _date_label_kr(ts, short: bool = False) -> str:
+    """일자에 요일을 병기. short=False: '26년 7월 1일(수)', short=True: '7/1(수)'."""
+    t = pd.Timestamp(ts)
+    wd = WEEKDAY_LABELS[t.weekday()]
+    if short:
+        return f"{t.month}/{t.day}({wd})"
+    return f"{t.year % 100:02d}년 {t.month}월 {t.day}일({wd})"
+
+
 # ───────────────────────────────────────────────
 # 데이터 로드
 # ───────────────────────────────────────────────
@@ -690,22 +704,38 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         fig = yoy_overlay_fig(d, "월", val_col, title,
                               ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
     elif gran == "일":
-        # 일 단위: 실제 날짜 시계열 (연도별 색상) + 데이터값 라벨
+        # 일 단위: 연도별 라인을 동요일(-364일×N) 정렬해 같은 x축에 겹쳐 비교.
+        # 전년 이전 연도는 현재년도 달력으로 이동시켜 '동요일 일자' 오버레이가 되게 한다.
         d = agg(df, ["기간_일자"]).sort_values("기간_일자").dropna(subset=[val_col])
         d["_yr"] = d["기간_일자"].dt.year
+        cur_year = int(d["_yr"].max())
+        d["_ax"] = d["기간_일자"] + pd.to_timedelta((cur_year - d["_yr"]) * 364, unit="D")
+        d = d.sort_values("_ax")
         fig = go.Figure()
         # 점이 너무 많으면 라벨이 겹치므로 40개 이하일 때만 값 표시
-        show_text = d["기간_일자"].nunique() <= 40
+        show_text = d["_ax"].nunique() <= 40
         for i, yr in enumerate(sorted(d["_yr"].unique())):
             sub = d[d["_yr"] == yr]
+            hov = [_date_label_kr(t) for t in sub["기간_일자"]]  # 실제(전년) 날짜+요일
             fig.add_trace(go.Scatter(
-                x=sub["기간_일자"], y=sub[val_col], name=f"{yr}년",
+                x=sub["_ax"], y=sub[val_col], name=f"{yr}년",
                 mode="lines+markers+text" if show_text else "lines+markers",
                 line=dict(color=YEAR_COLORS[i % len(YEAR_COLORS)], width=1.8),
                 marker=dict(size=4),
                 texttemplate=(f"%{{y:{lbl_fmt}}}" if show_text else None),
                 textposition="top center", textfont=dict(size=8),
+                customdata=hov,
+                hovertemplate="%{customdata}<br>%{y:" + lbl_fmt + "}<extra>%{fullData.name}</extra>",
             ))
+        # x축 눈금: 현재년도 날짜에 요일 병기(과밀 방지 위해 최대 ~15개만 라벨)
+        axdays = sorted(pd.Series(d["_ax"].dt.normalize().unique()))
+        if 0 < len(axdays) <= 40:
+            step = max(1, -(-len(axdays) // 15))  # ceil(len/15)
+            ticks = axdays[::step]
+            fig.update_xaxes(
+                tickvals=ticks,
+                ticktext=[_date_label_kr(t, short=True) for t in ticks],
+            )
         base_layout(fig, title, height)
     else:
         # 주 / 주(최근10주): 주 단위 일평균
@@ -1810,7 +1840,7 @@ def _period_key(gran, r):
 def _period_label(gran, r):
     if gran == "월": return f"{int(r['연도']) % 100:02d}년 {int(r['월'])}월"
     if gran == "주": return week_of_month_label(int(r["연도"]), int(r["주차번호"]))
-    return pd.Timestamp(r["기간_일자"]).strftime("%y년 %m월 %d일")
+    return _date_label_kr(r["기간_일자"])  # '26년 7월 1일(수)' — 요일 병기
 
 
 def _sameday_prev(df, gran):
@@ -1951,23 +1981,36 @@ def _render_period_tabs(df, gran, report_targets, targets, prev_df=None):
                                    key=f"{gran}_{i}", prev_tab=prev_tab)
 
 
-def _render_period_graph(df, gran, key_prefix):
-    """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값. 당기간은 전년 MTD 비교."""
+def _render_period_graph(df, gran, key_prefix, prev_df=None):
+    """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
+    당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
+    전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다."""
     avg_note = "" if gran == "일" else " · 일평균"
     st.markdown(f"#### 📈 지표별 추이 ({gran}{avg_note})")
+    st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
     src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
                    horizontal=True, key=f"{key_prefix}_gsrc")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
+    # 표시 기간이 당해년도만 담긴 경우(주=최근N주, 일=선택월) 전년 동요일 데이터를 보충
+    graph_src = df_tab
+    if prev_df is not None:
+        prev_tab = _filter_cost(prev_df, src)
+        cur_dates = df_tab["기간_일자"].drop_duplicates()
+        prev_dates = pd.Series(cur_dates.values) - pd.Timedelta(days=364)
+        extra = prev_tab[prev_tab["기간_일자"].isin(prev_dates)
+                         & ~prev_tab["기간_일자"].isin(cur_dates)]
+        if not extra.empty:
+            graph_src = pd.concat([df_tab, extra], ignore_index=True)
     suffix = "" if gran == "일" else f" ({gran} 일평균)"
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), 2):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
-                fig = metric_trend_fig(df_tab, col, gran, f"{lbl}{suffix}",
+                fig = metric_trend_fig(graph_src, col, gran, f"{lbl}{suffix}",
                                        height=300, tickfmt=RATIO_TICKFMT.get(col))
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
@@ -2055,7 +2098,7 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
     st.divider()
     _render_period_detail(df, gran, key_prefix=key_prefix, prev_df=prev_df)
     st.divider()
-    _render_period_graph(df, gran, key_prefix)
+    _render_period_graph(df, gran, key_prefix, prev_df=prev_df)
 
 
 # ───────────────────────────────────────────────
@@ -2560,6 +2603,17 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         dims = st.multiselect("행 차원", dim_opts, default=dim_default, key="cu_dims")
     with c3:
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
+    cs1, cs2 = st.columns([2, 4])
+    with cs1:
+        SORT_DIM_FIRST = "행 차원 → 기간(권장)"
+        SORT_PERIOD_FIRST = "기간 → 행 차원"
+        SORT_METRIC = "지표값(내림차순)"
+        sort_mode = st.selectbox(
+            "정렬", [SORT_DIM_FIRST, SORT_PERIOD_FIRST, SORT_METRIC],
+            index=0, key="cu_sort",
+            help="‘행 차원 → 기간’은 캠페인 등 행 차원별로 묶고 그 안에서 기간을 "
+                 "순서대로 정렬합니다(예: 캠페인1-월·화·수…→캠페인2-월·화·수…). "
+                 "표의 열 머리글을 클릭하면 정렬이 일시적으로 바뀌니, 순서를 고정하려면 이 옵션을 사용하세요.")
 
     # 선택한 차원을 CUSTOM_DIMS 표기순(고정)으로 정렬 → 결과표 컬럼 순서 일관성
     # (기간은 CUSTOM_DIMS에 없어 여기서 제외되고, 아래 gran 로직으로 처리됨)
@@ -2576,10 +2630,35 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.info("조건에 맞는 데이터가 없습니다.")
         return
 
-    # 정렬: 첫 지표(있으면) 기준 내림차순, 없으면 광고비
+    # 정렬 기준 컬럼(첫 지표, 없으면 광고비)
     sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
-    if sort_src in g.columns:
-        g = g.sort_values(sort_src, ascending=False, na_position="last")
+    dim_cols = [CUSTOM_DIMS[x] for x in dims if CUSTOM_DIMS[x] in g.columns]
+    period_cols = [c for c in (PERIOD_COLS[gran] if gran != "없음" else []) if c in g.columns]
+    if sort_mode == SORT_METRIC:
+        # 지표값 내림차순(기존 동작)
+        if sort_src in g.columns:
+            g = g.sort_values(sort_src, ascending=False, na_position="last")
+    elif sort_mode == SORT_PERIOD_FIRST:
+        # 기간 → 행 차원: 같은 기간의 행들을 모아서 표시
+        keys = period_cols + dim_cols
+        if keys:
+            g = g.sort_values(keys, na_position="last")
+    else:  # SORT_DIM_FIRST — 행 차원별로 묶고 그 안에서 기간을 순서대로
+        if dim_cols:
+            # 행 차원 그룹은 지표 합계 내림차순(큰 캠페인 먼저), 그 안에서 기간 오름차순
+            if sort_src in g.columns:
+                rank = g.groupby(dim_cols, dropna=False)[sort_src].transform("sum")
+                g = g.assign(_grank=rank).sort_values(
+                    ["_grank"] + dim_cols + period_cols,
+                    ascending=[False] + [True] * (len(dim_cols) + len(period_cols)),
+                    na_position="last",
+                ).drop(columns="_grank")
+            else:
+                g = g.sort_values(dim_cols + period_cols, na_position="last")
+        elif period_cols:
+            g = g.sort_values(period_cols, na_position="last")
+        elif sort_src in g.columns:
+            g = g.sort_values(sort_src, ascending=False, na_position="last")
 
     out, raw = {}, {}   # out=화면표시(포맷), raw=CSV용(원본 숫자)
     for x in dims:
