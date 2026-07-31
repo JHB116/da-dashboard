@@ -62,6 +62,8 @@ COST_BUCKETS = {
     ],
 }
 TOTAL_SOURCES = COST_BUCKETS["TOTAL"]  # 사이드바 'TOTAL' 모드용
+# 비용출처 선택 옵션(요약표·상세표·그래프 공용) — 한 번 고르면 섹션 전체에 적용된다.
+COST_SRC_OPTS = list(COST_BUCKETS.keys())
 
 MEDIA_COLORS = {
     "카카오": "#FFCD00", "네이버": "#03C75A", "버즈빌": "#FF6B35",
@@ -1642,11 +1644,9 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
     _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
 
 
-def _render_trend_grid(df, targets):
-    """지표별 추이 그리드 — 월 단위 일평균만 표시. 비용출처는 선택식."""
-    st.markdown("#### 📈 지표별 추이 (월 · 일평균)")
-    src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
-                   horizontal=True, key="sum_trend_src")
+def _render_trend_grid(df, targets, src="TOTAL"):
+    """지표별 추이 그리드 — 월 단위 일평균만 표시. 비용출처는 상단 선택값(src)을 따른다."""
+    st.markdown(f"#### 📈 지표별 추이 (월 · 일평균) · 비용출처: {src}")
     st.caption("월별 **일평균**(합계 지표 ÷ 집행일수). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
@@ -1796,28 +1796,23 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     st.divider()
     st.caption("아래 표·그래프는 날짜 카드와 무관하게 전체 기간 데이터를 표시합니다.")
 
-    # ── 상단: 비용출처별 탭 (Excel 시트와 동일 구조)
-    main_tabs = st.tabs(["📋 TOTAL", "📋 TOTAL(서비스비용미반영)", "📋 거래액확대",
-                         "📋 신규고객확대", "📋 인지도제고"])
-    tab_names = ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"]
-
-    st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다.")
+    # ── 상단: 비용출처 선택 (한 번 고르면 아래 요약표·그래프 전체에 동일 적용)
+    src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key="sum_src")
+    st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
+               "· 선택한 **비용출처가 아래 표·그래프 전체에 적용**됩니다.")
     sameday = True
 
     monthly_targets = (report_targets or {}).get("monthly", {})
     weekly_rows = (report_targets or {}).get("weekly_rows", {})
-    for i, tname in enumerate(tab_names):
-        with main_tabs[i]:
-            st.caption(f"비용출처: {tname}  |  {'동요일 기준' if sameday else '동월 기준'} 전년비")
-            df_tab = _filter_cost(df, tname)
-            wr = weekly_rows if tname in ("TOTAL", "TOTAL(서비스비용미반영)") else None
-            _render_monthly_section(df_tab, targets, tab_key=f"t{i}", sameday=sameday,
-                                    monthly_targets=monthly_targets, tab_name=tname,
-                                    weekly_rows=wr)
+    df_tab = _filter_cost(df, src)
+    wr = weekly_rows if src in ("TOTAL", "TOTAL(서비스비용미반영)") else None
+    st.markdown(f"##### 📋 월별 실적요약 · 비용출처: {src}")
+    _render_monthly_section(df_tab, targets, tab_key="sum", sameday=sameday,
+                            monthly_targets=monthly_targets, tab_name=src, weekly_rows=wr)
 
-    # ── 실적요약표(탭) → 그래프 (월별 상세 실적표는 제거됨)
+    # ── 실적요약표 → 그래프 (동일 비용출처 적용)
     st.divider()
-    _render_trend_grid(df, targets)
+    _render_trend_grid(df, targets, src=src)
 
 
 # ───────────────────────────────────────────────
@@ -1961,35 +1956,29 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=False)
 
 
-def _render_period_tabs(df, gran, report_targets, targets, prev_df=None):
-    tab_names = ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"]
-    tabs = st.tabs(["📋 " + t for t in tab_names])
+def _render_period_summary(df, gran, report_targets, targets, prev_df=None, src="TOTAL"):
+    """기간별 실적요약표 — 상단에서 고른 비용출처(src) 한 개만 렌더한다."""
     monthly_targets = (report_targets or {}).get("monthly", {})
     weekly_targets = (report_targets or {}).get("weekly", {})
     weekly_rows = (report_targets or {}).get("weekly_rows", {})
-    st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다.")
-    for i, tname in enumerate(tab_names):
-        with tabs[i]:
-            st.caption(f"비용출처: {tname}")
-            df_tab = _filter_cost(df, tname)
-            prev_tab = _filter_cost(prev_df, tname) if prev_df is not None else None
-            is_total = tname in ("TOTAL", "TOTAL(서비스비용미반영)")
-            _render_period_section(df_tab, gran, tname,
-                                   weekly_targets=(weekly_targets if is_total else None),
-                                   monthly_targets=monthly_targets,
-                                   weekly_rows=(weekly_rows if is_total else None),
-                                   key=f"{gran}_{i}", prev_tab=prev_tab)
+    df_tab = _filter_cost(df, src)
+    prev_tab = _filter_cost(prev_df, src) if prev_df is not None else None
+    is_total = src in ("TOTAL", "TOTAL(서비스비용미반영)")
+    _render_period_section(df_tab, gran, src,
+                           weekly_targets=(weekly_targets if is_total else None),
+                           monthly_targets=monthly_targets,
+                           weekly_rows=(weekly_rows if is_total else None),
+                           key=f"{gran}_sum", prev_tab=prev_tab)
 
 
-def _render_period_graph(df, gran, key_prefix, prev_df=None):
+def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
     """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
     당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
-    전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다."""
+    전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다.
+    비용출처는 상단 선택값(src)을 따른다."""
     avg_note = "" if gran == "일" else " · 일평균"
-    st.markdown(f"#### 📈 지표별 추이 ({gran}{avg_note})")
+    st.markdown(f"#### 📈 지표별 추이 ({gran}{avg_note}) · 비용출처: {src}")
     st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
-    src = st.radio("비용출처", ["TOTAL", "TOTAL(서비스비용미반영)", "거래액확대", "신규고객확대", "인지도제고"],
-                   horizontal=True, key=f"{key_prefix}_gsrc")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
@@ -2015,12 +2004,12 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None):
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
 
-def _render_period_detail(df, gran, key_prefix="", prev_df=None):
-    """기간별 상세 실적표 + 상세 실적표(전년비). TOTAL 기준, 25년 한 표 접이식."""
-    df_tot = _filter_cost(df, "TOTAL")
+def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
+    """기간별 상세 실적표 + 상세 실적표(전년비). 상단에서 고른 비용출처(src) 기준, 25년 한 표 접이식."""
+    df_tot = _filter_cost(df, src)
     if df_tot.empty:
         return
-    prev_tot = _filter_cost(prev_df, "TOTAL") if prev_df is not None else df_tot
+    prev_tot = _filter_cost(prev_df, src) if prev_df is not None else df_tot
     cols = PERIOD_COLS[gran]
     d_all = agg(df_tot, cols)
     yr_ser = (d_all["기간_일자"].dt.year if gran == "일" else d_all["연도"])
@@ -2052,9 +2041,9 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None):
                      use_container_width=True, hide_index=True,
                      height=_fit_height(len(rows) + 1))
 
-    st.markdown(f"##### 📄 {gran}별 상세 실적")
+    st.markdown(f"##### 📄 {gran}별 상세 실적 · 비용출처: {src}")
     _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
-    st.markdown(f"##### 📄 {gran}별 실적 (전년비)")
+    st.markdown(f"##### 📄 {gran}별 실적 (전년비) · 비용출처: {src}")
     _split_render(rows_new, rows_old, _yoy, key=f"{key_prefix}_detB", latest_first=lf)
 
 
@@ -2093,12 +2082,16 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
             if df.empty:
                 st.info("최근 데이터가 없습니다.")
                 return
-    # 순서: 실적요약탭 → 상세표 → 그래프(맨 하단)
-    _render_period_tabs(df, gran, report_targets, targets or {}, prev_df=prev_df)
+    # 비용출처 선택(한 번 고르면 요약표·상세표·그래프 전체에 동일 적용)
+    src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key=f"{key_prefix}_src")
+    st.caption("ℹ️ 선택한 **비용출처가 아래 요약표·상세표·그래프 전체에 적용**됩니다. "
+               "전년비는 동요일 기준(전년 동일 요일, -364일)으로 비교합니다.")
+    # 순서: 실적요약 → 상세표 → 그래프(맨 하단)
+    _render_period_summary(df, gran, report_targets, targets or {}, prev_df=prev_df, src=src)
     st.divider()
-    _render_period_detail(df, gran, key_prefix=key_prefix, prev_df=prev_df)
+    _render_period_detail(df, gran, key_prefix=key_prefix, prev_df=prev_df, src=src)
     st.divider()
-    _render_period_graph(df, gran, key_prefix, prev_df=prev_df)
+    _render_period_graph(df, gran, key_prefix, prev_df=prev_df, src=src)
 
 
 # ───────────────────────────────────────────────
