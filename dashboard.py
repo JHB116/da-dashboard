@@ -2550,6 +2550,7 @@ CUSTOM_DIMS = {
     "기획전번호": "구분_기획전 번호",
     "캠페인명": "구분_캠페인",
     "하위캠페인명": "구분_하위캠페인",
+    "요일": "요일",   # 0=월~6=일 (표시는 월~일, 정렬도 월~일 순)
     "AF코드": "구분_AF코드",
     "AF코드명": "구분_AF코드이름",
     "소재명": "구분_키워드(소재)",
@@ -2585,7 +2586,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     dim_opts = [x for x in CUSTOM_DIMS if _dim_has_data(CUSTOM_DIMS[x])]
 
     # 기본 선택에서 제외할 행 차원(옵션 목록에는 남아 사용자가 직접 켤 수 있음)
-    CUSTOM_DIMS_OFF_BY_DEFAULT = {"AF코드", "AF코드명", "소재명", "소구형", "카테고리(소재)"}
+    CUSTOM_DIMS_OFF_BY_DEFAULT = {"요일", "AF코드", "AF코드명", "소재명", "소구형", "카테고리(소재)"}
     dim_default = [x for x in dim_opts if x not in CUSTOM_DIMS_OFF_BY_DEFAULT]
 
     st.markdown("##### 🧷 표 설정")
@@ -2657,8 +2658,14 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     for x in dims:
         col = CUSTOM_DIMS[x]
         if col in g.columns:
-            out[x] = g[col].astype(str).values
-            raw[x] = g[col].astype(str).values
+            if x == "요일":
+                # 정렬은 정수(0~6, 월~일)로 하되 표시는 한글 요일로
+                vals = [WEEKDAY_LABELS[int(v)] if pd.notna(v) and 0 <= int(v) <= 6 else ""
+                        for v in g[col].values]
+            else:
+                vals = g[col].astype(str).values
+            out[x] = vals
+            raw[x] = vals
     if gran != "없음":  # 기간은 행 차원 뒤(맨 끝 헤더 컬럼)
         labels = [_period_label(gran, r) for _, r in g.iterrows()]
         out["기간"] = labels
