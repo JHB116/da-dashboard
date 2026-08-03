@@ -1585,6 +1585,19 @@ def _split_render(rows_new, rows_old, show_fn, key, latest_first=False):
         st.info("표시할 데이터가 없습니다.")
 
 
+def _raw_dl(num_df, key, label="📥 원본 숫자 CSV 다운로드"):
+    """표의 원본(억/백만 미변환) 숫자를 그대로 CSV로 저장하는 버튼.
+    화면 표기는 백만/억 축약이라도 파일에는 원본값이 들어간다."""
+    if num_df is None or getattr(num_df, "empty", True):
+        return
+    keep = [c for c in num_df.columns if not str(c).startswith("_")]
+    out = num_df.loc[:, keep].copy()
+    # 헤더 가독성만 개선(값은 원본 그대로). 내부 접두어(지표_/구분_) 제거.
+    out.columns = [str(c).replace("지표_", "").replace("구분_", "") for c in out.columns]
+    st.download_button(label, data=out.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"{key}.csv", mime="text/csv", key=f"rawdl_{key}")
+
+
 def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None,
                             tab_name=None, weekly_targets=None, weekly_rows=None):
     """비용출처별 탭 내부: 실적요약 테이블 (2줄 헤더).
@@ -1642,6 +1655,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
                      height=_fit_height(len(rows), header_rows=2))
 
     _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
+    _raw_dl(cur, f"{tab_key}_월별요약")
 
 
 def _render_trend_grid(df, targets, src="TOTAL"):
@@ -1954,6 +1968,7 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
 
     # 최근 기간이 맨 아래(오름차순)로 표시
     _split_render(rows_new, rows_old, _show, key=f"{key}_yr", latest_first=False)
+    _raw_dl(cur, f"{key}_요약")
 
 
 def _render_period_summary(df, gran, report_targets, targets, prev_df=None, src="TOTAL"):
@@ -2045,6 +2060,7 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
     st.markdown(f"##### 📄 {gran}별 실적 (전년비) · 비용출처: {src}")
     _split_render(rows_new, rows_old, _yoy, key=f"{key_prefix}_detB", latest_first=lf)
+    _raw_dl(cur, f"{key_prefix}_상세")
 
 
 def render_period_sheet(df, gran, header, report_targets=None, targets=None,
@@ -2153,6 +2169,7 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
                             for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dyt.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
                  use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
+    _raw_dl(cur, f"{ptype}별_실적")
 
 
 # 캠페인/하위캠페인 랭킹 표 지표 순서 (표기명, 원본컬럼, 종류)
@@ -2249,6 +2266,7 @@ def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
 
     st.dataframe(table.style.apply(_hl, axis=1),
                  use_container_width=True, hide_index=True)
+    _raw_dl(cdf, f"랭킹_{'_'.join(group_cols)}_{src_name}_{sort_col}".replace("구분_", ""))
 
 
 # 비용출처별 정렬 규칙: (정렬라벨, 정렬컬럼, 오름차순)
@@ -2835,6 +2853,7 @@ def page_creative(df: pd.DataFrame):
         exp[label] = cr_df[c].values if (c and c in cr_df.columns) else ""
     export_tbl = pd.DataFrame(exp)
     st.dataframe(export_tbl, use_container_width=True, hide_index=True)
+    _raw_dl(cr_df, "소재_상세")
 
 
 def build_html_report(df: pd.DataFrame) -> str:
