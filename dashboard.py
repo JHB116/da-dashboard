@@ -2072,11 +2072,18 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
             st.info("해당 기간 데이터가 없습니다.")
             return
     elif recent_default and not base.empty:
-        full = st.checkbox(f"전체 기간 보기 (기본: 최근 {recent_default}주)",
-                           value=False, key=f"{key_prefix}_full")
+        c_full, c_n = st.columns([1, 1])
+        with c_full:
+            full = st.checkbox("전체 기간 보기", value=False, key=f"{key_prefix}_full")
+        with c_n:
+            n_weeks = st.number_input(
+                "최근 표시 주차 수", min_value=1, max_value=520,
+                value=recent_default, step=1, key=f"{key_prefix}_nweeks",
+                disabled=full,
+                help="최근 몇 주를 표시할지 직접 입력하세요. '전체 기간 보기'를 켜면 무시됩니다.")
         if not full:
             ordv = base["연도"].astype(int) * 100 + base["주차번호"].astype(int)
-            recent = sorted(ordv.unique())[-recent_default:]
+            recent = sorted(ordv.unique())[-int(n_weeks):]
             df = base[ordv.isin(recent)]
             prev_df = base  # 전년비는 전체 기간에서 동요일 비교
             if df.empty:
