@@ -457,6 +457,15 @@ def safe_div(num, den):
     return np.where((den == 0) | pd.isna(den), np.nan, num / den)
 
 
+# calc_kpi가 '비율(소수)'로 산출하는 컬럼 — 원본 CSV 저장 시 % 숫자(×100)로 변환한다.
+# (CPC/CPM/CPUV/객단가/CPA 등 '금액' 파생지표는 원 단위이므로 여기 포함하지 않는다.)
+PCT_RAW_COLS = {
+    "CTR", "순결제ROAS", "총결제ROAS", "가입률", "첫구매율",
+    "CR(순)", "CR(총)", "순결제비중", "신규비중", "윈백비중",
+    "첫구매비중", "UV/클릭",
+}
+
+
 # ───────────────────────────────────────────────
 # 포맷 헬퍼
 # ───────────────────────────────────────────────
@@ -506,8 +515,8 @@ def chg_style(v):
 # 전체요약/일별 공통 그래프 지표 (표기 순서)
 SUMMARY_CHART_METRICS = {
     "광고비": "지표_광고비",
-    "거래액(순결제)": "지표_순결제거래액", "ROAS(순결제)": "순결제ROAS",
     "순결제비중": "순결제비중",
+    "거래액(순결제)": "지표_순결제거래액", "ROAS(순결제)": "순결제ROAS",
     "거래액(총결제)": "지표_총결제거래액", "ROAS(총결제)": "총결제ROAS",
     "총결제객단가": "객단가(총)",
     "UV": "지표_UV(전체)", "CR(총)": "CR(총)",
@@ -1587,13 +1596,22 @@ def _split_render(rows_new, rows_old, show_fn, key, latest_first=False):
 
 def _raw_dl(num_df, key, label="📥 원본 숫자 CSV 다운로드"):
     """표의 원본(억/백만 미변환) 숫자를 그대로 CSV로 저장하는 버튼.
-    화면 표기는 백만/억 축약이라도 파일에는 원본값이 들어간다."""
+    화면 표기는 백만/억 축약이라도 파일에는 원본값이 들어간다.
+    - 금액/건수: 원본 숫자(원·정수) 그대로
+    - 비율/ROAS: 화면과 동일한 % 숫자(예: 0.98→98, ROAS 8.5→850)로 저장, 헤더에 (%) 표기"""
     if num_df is None or getattr(num_df, "empty", True):
         return
     keep = [c for c in num_df.columns if not str(c).startswith("_")]
     out = num_df.loc[:, keep].copy()
+    # 비율/ROAS 컬럼은 화면에 보이는 % 숫자로 환산(×100)해 저장한다.
+    rename = {}
+    for c in list(out.columns):
+        if c in PCT_RAW_COLS:
+            out[c] = pd.to_numeric(out[c], errors="coerce") * 100
+            rename[c] = f"{c}(%)"
     # 헤더 가독성만 개선(값은 원본 그대로). 내부 접두어(지표_/구분_) 제거.
-    out.columns = [str(c).replace("지표_", "").replace("구분_", "") for c in out.columns]
+    out.columns = [rename.get(c, str(c)).replace("지표_", "").replace("구분_", "")
+                   for c in out.columns]
     st.download_button(label, data=out.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"{key}.csv", mime="text/csv", key=f"rawdl_{key}")
 
@@ -2067,7 +2085,8 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
                         key_prefix=None, month_picker=False, recent_default=None):
     """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
     month_picker=True(일별): 기본은 최신 연월만 표시.
-    recent_default=N(주차별): 기본은 최근 N주만, '전체 기간 보기'로 전체 표시."""
+    recent_default=N(주차별): 기본은 '로데이터 마지막 월 주차'만 노출.
+        표시 범위 라디오로 '최근 N주'(기본 N=recent_default)·'전체 기간' 전환 가능."""
     st.header(header)
     if df.empty:
         st.warning("데이터가 없습니다.")
@@ -2088,23 +2107,36 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
             st.info("해당 기간 데이터가 없습니다.")
             return
     elif recent_default and not base.empty:
-        c_full, c_n = st.columns([1, 1])
-        with c_full:
-            full = st.checkbox("전체 기간 보기", value=False, key=f"{key_prefix}_full")
-        with c_n:
-            n_weeks = st.number_input(
-                "최근 표시 주차 수", min_value=1, max_value=520,
-                value=recent_default, step=1, key=f"{key_prefix}_nweeks",
-                disabled=full,
-                help="최근 몇 주를 표시할지 직접 입력하세요. '전체 기간 보기'를 켜면 무시됩니다.")
-        if not full:
-            ordv = base["연도"].astype(int) * 100 + base["주차번호"].astype(int)
+        # 디폴트: 로데이터 마지막 월에 속한 주차만 노출.
+        # (주차 경계상 전월 일자가 섞인 주차도 그 주차 전체를 그대로 노출)
+        SCOPE_MONTH = "마지막 월 주차"
+        SCOPE_RECENT = "최근 N주"
+        SCOPE_ALL = "전체 기간"
+        c_scope, c_n = st.columns([2, 1])
+        with c_scope:
+            scope = st.radio("표시 범위", [SCOPE_MONTH, SCOPE_RECENT, SCOPE_ALL],
+                             horizontal=True, key=f"{key_prefix}_scope",
+                             help="기본은 로데이터 마지막 월에 해당하는 주차만 노출합니다. "
+                                  "주차가 전월 일자를 포함해도(예: 6/29~7/5) 해당 주차 전체를 표시합니다.")
+        ordv = base["연도"].astype(int) * 100 + base["주차번호"].astype(int)
+        if scope == SCOPE_RECENT:
+            with c_n:
+                n_weeks = st.number_input(
+                    "최근 표시 주차 수", min_value=1, max_value=520,
+                    value=recent_default, step=1, key=f"{key_prefix}_nweeks",
+                    help="최근 몇 주를 표시할지 직접 입력하세요.")
             recent = sorted(ordv.unique())[-int(n_weeks):]
             df = base[ordv.isin(recent)]
             prev_df = base  # 전년비는 전체 기간에서 동요일 비교
-            if df.empty:
-                st.info("최근 데이터가 없습니다.")
-                return
+        elif scope == SCOPE_MONTH:
+            last_ym = base["연월"].dropna().max()  # 'YYYY-MM' 문자열 → 사전순 최대 = 최신 월
+            month_ordv = ordv[base["연월"] == last_ym].unique()
+            df = base[ordv.isin(month_ordv)]
+            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
+        # SCOPE_ALL은 df=base(전체) 그대로 사용
+        if scope != SCOPE_ALL and df.empty:
+            st.info("해당 기간 데이터가 없습니다.")
+            return
     # 비용출처 선택(한 번 고르면 요약표·상세표·그래프 전체에 동일 적용)
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key=f"{key_prefix}_src")
     st.caption("ℹ️ 선택한 **비용출처가 아래 요약표·상세표·그래프 전체에 적용**됩니다. "
@@ -2622,21 +2654,14 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         dims = st.multiselect("행 차원", dim_opts, default=dim_default, key="cu_dims")
     with c3:
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
-    cs1, cs2 = st.columns([2, 4])
-    with cs1:
-        SORT_DIM_FIRST = "행 차원 → 기간(권장)"
-        SORT_PERIOD_FIRST = "기간 → 행 차원"
-        SORT_METRIC = "지표값(내림차순)"
-        sort_mode = st.selectbox(
-            "정렬", [SORT_DIM_FIRST, SORT_PERIOD_FIRST, SORT_METRIC],
-            index=0, key="cu_sort",
-            help="‘행 차원 → 기간’은 캠페인 등 행 차원별로 묶고 그 안에서 기간을 "
-                 "순서대로 정렬합니다(예: 캠페인1-월·화·수…→캠페인2-월·화·수…). "
-                 "표의 열 머리글을 클릭하면 정렬이 일시적으로 바뀌니, 순서를 고정하려면 이 옵션을 사용하세요.")
+    st.caption("🧷 **피벗 행처럼** 보기: ‘행 차원’에 넣은 순서가 곧 **행 중첩 순서**입니다"
+               "(먼저 고른 차원이 바깥, 나중에 고른 차원이 안쪽). "
+               "예: 캠페인명 → 매체명 순으로 고르면 캠페인별로 묶이고 그 안에서 매체명으로 나뉩니다. "
+               "표의 **열 머리글을 클릭**하면 그 지표 기준으로 즉석 정렬도 됩니다.")
 
-    # 선택한 차원을 CUSTOM_DIMS 표기순(고정)으로 정렬 → 결과표 컬럼 순서 일관성
-    # (기간은 CUSTOM_DIMS에 없어 여기서 제외되고, 아래 gran 로직으로 처리됨)
-    dims = [x for x in CUSTOM_DIMS if x in dims and CUSTOM_DIMS[x] in d.columns]
+    # 피벗 '행'처럼: 사용자가 고른 '행 차원' 선택 순서를 그대로 중첩 순서로 사용한다.
+    # (CUSTOM_DIMS 고정순으로 재정렬하지 않는다 — 사용자가 순서를 직접 통제)
+    dims = [x for x in dims if x in CUSTOM_DIMS and CUSTOM_DIMS[x] in d.columns]
     group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
 
     if group_cols:
@@ -2649,35 +2674,15 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.info("조건에 맞는 데이터가 없습니다.")
         return
 
-    # 정렬 기준 컬럼(첫 지표, 없으면 광고비)
-    sort_src = spec_by_label[mets[0]][1] if mets else "지표_광고비"
+    # 피벗 행 정렬: 선택한 '행 차원' 순서(바깥→안쪽) → 기간 순으로 정렬(엑셀 피벗 행과 동일).
+    # 열 머리글 클릭으로 지표 기준 즉석 재정렬은 st.dataframe이 기본 제공한다.
     dim_cols = [CUSTOM_DIMS[x] for x in dims if CUSTOM_DIMS[x] in g.columns]
     period_cols = [c for c in (PERIOD_COLS[gran] if gran != "없음" else []) if c in g.columns]
-    if sort_mode == SORT_METRIC:
-        # 지표값 내림차순(기존 동작)
-        if sort_src in g.columns:
-            g = g.sort_values(sort_src, ascending=False, na_position="last")
-    elif sort_mode == SORT_PERIOD_FIRST:
-        # 기간 → 행 차원: 같은 기간의 행들을 모아서 표시
-        keys = period_cols + dim_cols
-        if keys:
-            g = g.sort_values(keys, na_position="last")
-    else:  # SORT_DIM_FIRST — 행 차원별로 묶고 그 안에서 기간을 순서대로
-        if dim_cols:
-            # 행 차원 그룹은 지표 합계 내림차순(큰 캠페인 먼저), 그 안에서 기간 오름차순
-            if sort_src in g.columns:
-                rank = g.groupby(dim_cols, dropna=False)[sort_src].transform("sum")
-                g = g.assign(_grank=rank).sort_values(
-                    ["_grank"] + dim_cols + period_cols,
-                    ascending=[False] + [True] * (len(dim_cols) + len(period_cols)),
-                    na_position="last",
-                ).drop(columns="_grank")
-            else:
-                g = g.sort_values(dim_cols + period_cols, na_position="last")
-        elif period_cols:
-            g = g.sort_values(period_cols, na_position="last")
-        elif sort_src in g.columns:
-            g = g.sort_values(sort_src, ascending=False, na_position="last")
+    sort_keys = dim_cols + period_cols
+    if sort_keys:
+        g = g.sort_values(sort_keys, na_position="last")
+    elif "지표_광고비" in g.columns:
+        g = g.sort_values("지표_광고비", ascending=False, na_position="last")
 
     out, raw = {}, {}   # out=화면표시(포맷), raw=CSV용(원본 숫자)
     for x in dims:
@@ -2704,7 +2709,11 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         if rawv is None:
             continue
         out[m] = pd.Series(rawv).apply(lambda v, k=kind: _fmt_kind(v, k)).values
-        raw[m] = rawv
+        # 비율/ROAS는 화면과 동일한 % 숫자(×100)로 저장하고 헤더에 (%) 표기
+        if kind in ("roas", "pct1", "pct2"):
+            raw[f"{m}(%)"] = pd.to_numeric(pd.Series(rawv), errors="coerce").values * 100
+        else:
+            raw[m] = rawv
 
     table = pd.DataFrame(out)
     raw_table = pd.DataFrame(raw)
@@ -2722,7 +2731,10 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
             _, col, kind = spec_by_label[m]
             rv = tot_days if col == "집행일수" else (tot[col] if col in tot.index else None)
             trow[m] = _fmt_kind(rv, kind) if rv is not None else "–"
-            trow_raw[m] = rv if rv is not None else ""
+            if kind in ("roas", "pct1", "pct2"):
+                trow_raw[f"{m}(%)"] = (rv * 100) if rv is not None else ""
+            else:
+                trow_raw[m] = rv if rv is not None else ""
         table = pd.concat([table, pd.DataFrame([trow])], ignore_index=True)
         raw_table = pd.concat([raw_table, pd.DataFrame([trow_raw])], ignore_index=True)
 
@@ -2742,7 +2754,8 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         shown = table  # 대용량: TOTAL 강조 생략(맨 아래 TOTAL 행은 그대로 표시)
     st.dataframe(shown, use_container_width=False, hide_index=True,
                  height=_fit_height(min(len(table), 15)))
-    st.caption("※ CSV는 화면의 축약표기가 아닌 **원본 숫자**로 저장됩니다.")
+    st.caption("※ CSV는 화면의 축약표기가 아닌 **원본 숫자**로 저장됩니다. "
+               "(금액=원, 건수=정수, 비율·ROAS=% 숫자)")
     st.download_button("📄 CSV 다운로드", data=raw_table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="custom_report.csv", mime="text/csv", key="cu_csv")
 
@@ -2882,9 +2895,43 @@ def build_html_report(df: pd.DataFrame) -> str:
 
 
 # ───────────────────────────────────────────────
+# 필터 상태 유지 / 초기화
+# ───────────────────────────────────────────────
+# 페이지(라디오)로만 화면을 전환하는 단일 앱이라, 다른 페이지로 갔다 오면 Streamlit이
+# '이번 실행에 렌더되지 않은 위젯' 상태를 폐기해 필터가 초기화된다. 이를 막기 위해
+# 실행 맨 앞에서 세션 상태를 자기 자신으로 재대입(touch)해 값을 살려둔다.
+# '필터 초기화' 버튼은 아래 접두어에 해당하는 키만 지운다.
+_FILTER_KEY_PREFIXES = (
+    "sumf", "medf", "campf", "bpuf", "wkf", "mof", "dyf", "cuf", "crf",
+    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy",
+)
+
+
+def _persist_widget_state():
+    """멀티페이지 전환 시 위젯 상태가 폐기되지 않도록 세션 키를 재대입한다."""
+    for k in list(st.session_state.keys()):
+        if k in ("data_uploader", "report_uploader"):
+            continue
+        try:
+            st.session_state[k] = st.session_state[k]
+        except Exception:
+            pass
+
+
+def _reset_all_filters():
+    """모든 페이지의 필터·날짜·조회옵션 위젯 상태를 초기화(페이지 선택은 유지)."""
+    for k in list(st.session_state.keys()):
+        if any(k == p or k.startswith(p + "_") for p in _FILTER_KEY_PREFIXES):
+            del st.session_state[k]
+
+
+# ───────────────────────────────────────────────
 # 메인
 # ───────────────────────────────────────────────
 def main():
+    # 페이지 이동 후에도 필터가 유지되도록 위젯 상태를 살려둔다(반드시 위젯 생성 전에).
+    _persist_widget_state()
+
     st.title("📊 DA 광고 실적 대시보드")
 
     # 사이드바 순서: ① 페이지  ② 파일 업로드 (필터·내보내기는 제거됨)
@@ -2959,6 +3006,11 @@ def main():
             "📊 전체 요약", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
             "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
         ], label_visibility="collapsed")
+        st.caption("필터는 페이지를 옮겨도 유지됩니다.")
+        if st.button("🧹 필터 초기화", use_container_width=True,
+                     help="모든 페이지의 필터·날짜·조회옵션을 기본값으로 되돌립니다. (페이지 선택은 유지)"):
+            _reset_all_filters()
+            st.rerun()
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
