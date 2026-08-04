@@ -2907,10 +2907,20 @@ _FILTER_KEY_PREFIXES = (
 )
 
 
+def _is_button_key(k: str) -> bool:
+    """버튼/다운로드버튼 키 여부. 이런 위젯은 세션 상태 쓰기가 금지되어 있어
+    재대입 시 StreamlitValueAssignmentNotAllowedError가 난다.
+    - 날짜 프리셋 버튼: '{prefix}_btn_{label}'  → '_btn_' 포함
+    - 원본 CSV 다운로드 버튼: 'rawdl_*'
+    - 커스텀 CSV 다운로드 버튼: 'cu_csv'"""
+    return ("_btn_" in k) or k.startswith("rawdl_") or k == "cu_csv"
+
+
 def _persist_widget_state():
-    """멀티페이지 전환 시 위젯 상태가 폐기되지 않도록 세션 키를 재대입한다."""
+    """멀티페이지 전환 시 위젯 상태가 폐기되지 않도록 세션 키를 재대입한다.
+    (버튼/다운로드버튼·파일업로더는 세션 쓰기가 불가하므로 건너뛴다.)"""
     for k in list(st.session_state.keys()):
-        if k in ("data_uploader", "report_uploader"):
+        if k in ("data_uploader", "report_uploader") or _is_button_key(k):
             continue
         try:
             st.session_state[k] = st.session_state[k]
