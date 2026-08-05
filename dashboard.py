@@ -2647,22 +2647,34 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     dim_default = [x for x in dim_opts if x not in CUSTOM_DIMS_OFF_BY_DEFAULT]
 
     st.markdown("##### 🧷 표 설정")
+    # '기간'을 다른 차원처럼 위치 지정 가능한 행 차원으로 취급한다(피벗 행).
+    PERIOD_TOKEN = "기간"
     c1, c2, c3 = st.columns([1, 2, 3])
     with c1:
         gran = st.selectbox("기간 단위", ["없음", "월", "주", "일"], index=3, key="cu_gran")
+    period_opt = [PERIOD_TOKEN] if gran != "없음" else []
     with c2:
-        dims = st.multiselect("행 차원", dim_opts, default=dim_default, key="cu_dims")
+        dims_sel = st.multiselect("행 차원", dim_opts + period_opt,
+                                  default=dim_default + period_opt, key="cu_dims")
     with c3:
         mets = st.multiselect("지표", met_opts, default=met_opts, key="cu_mets")  # 기본 전체
     st.caption("🧷 **피벗 행처럼** 보기: ‘행 차원’에 넣은 순서가 곧 **행 중첩 순서**입니다"
                "(먼저 고른 차원이 바깥, 나중에 고른 차원이 안쪽). "
-               "예: 캠페인명 → 매체명 순으로 고르면 캠페인별로 묶이고 그 안에서 매체명으로 나뉩니다. "
+               "‘**기간**’도 하나의 행 차원이라 원하는 위치로 옮길 수 있습니다"
+               "(예: 기간 → 캠페인명 = 주차별로 먼저 묶고 그 안에서 캠페인). "
                "표의 **열 머리글을 클릭**하면 그 지표 기준으로 즉석 정렬도 됩니다.")
 
-    # 피벗 '행'처럼: 사용자가 고른 '행 차원' 선택 순서를 그대로 중첩 순서로 사용한다.
+    # 유효 토큰만 남기되 사용자가 고른 '순서'를 그대로 중첩 순서로 사용한다.
     # (CUSTOM_DIMS 고정순으로 재정렬하지 않는다 — 사용자가 순서를 직접 통제)
-    dims = [x for x in dims if x in CUSTOM_DIMS and CUSTOM_DIMS[x] in d.columns]
-    group_cols = (PERIOD_COLS[gran] if gran != "없음" else []) + [CUSTOM_DIMS[x] for x in dims]
+    order_tokens = [t for t in dims_sel
+                    if t == PERIOD_TOKEN or (t in CUSTOM_DIMS and CUSTOM_DIMS[t] in d.columns)]
+    # 기간 단위가 있으면 '기간' 열은 항상 표시(토큰을 뺐어도 맨 뒤에 보충 → 기존 동작 유지)
+    if gran != "없음" and PERIOD_TOKEN not in order_tokens:
+        order_tokens.append(PERIOD_TOKEN)
+    real_dims = [t for t in order_tokens if t != PERIOD_TOKEN]
+
+    period_cols_all = PERIOD_COLS[gran] if gran != "없음" else []
+    group_cols = list(period_cols_all) + [CUSTOM_DIMS[x] for x in real_dims]
 
     if group_cols:
         g = agg(d, group_cols)
@@ -2674,32 +2686,37 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         st.info("조건에 맞는 데이터가 없습니다.")
         return
 
-    # 피벗 행 정렬: 선택한 '행 차원' 순서(바깥→안쪽) → 기간 순으로 정렬(엑셀 피벗 행과 동일).
-    # 열 머리글 클릭으로 지표 기준 즉석 재정렬은 st.dataframe이 기본 제공한다.
-    dim_cols = [CUSTOM_DIMS[x] for x in dims if CUSTOM_DIMS[x] in g.columns]
-    period_cols = [c for c in (PERIOD_COLS[gran] if gran != "없음" else []) if c in g.columns]
-    sort_keys = dim_cols + period_cols
+    # 피벗 행 정렬: 표시 순서(order_tokens)를 그대로 정렬 키로 사용.
+    # '기간' 토큰은 실제 기간 컬럼(연도·주차번호 등)으로 매핑한다.
+    sort_keys = []
+    for t in order_tokens:
+        if t == PERIOD_TOKEN:
+            sort_keys += [c for c in period_cols_all if c in g.columns]
+        elif CUSTOM_DIMS[t] in g.columns:
+            sort_keys.append(CUSTOM_DIMS[t])
     if sort_keys:
         g = g.sort_values(sort_keys, na_position="last")
     elif "지표_광고비" in g.columns:
         g = g.sort_values("지표_광고비", ascending=False, na_position="last")
 
     out, raw = {}, {}   # out=화면표시(포맷), raw=CSV용(원본 숫자)
-    for x in dims:
-        col = CUSTOM_DIMS[x]
-        if col in g.columns:
-            if x == "요일":
-                # 정렬은 정수(0~6, 월~일)로 하되 표시는 한글 요일로
-                vals = [WEEKDAY_LABELS[int(v)] if pd.notna(v) and 0 <= int(v) <= 6 else ""
-                        for v in g[col].values]
-            else:
-                vals = g[col].astype(str).values
-            out[x] = vals
-            raw[x] = vals
-    if gran != "없음":  # 기간은 행 차원 뒤(맨 끝 헤더 컬럼)
-        labels = [_period_label(gran, r) for _, r in g.iterrows()]
-        out["기간"] = labels
-        raw["기간"] = labels
+    for t in order_tokens:
+        if t == PERIOD_TOKEN:
+            labels = [_period_label(gran, r) for _, r in g.iterrows()]
+            out["기간"] = labels
+            raw["기간"] = labels
+            continue
+        col = CUSTOM_DIMS[t]
+        if col not in g.columns:
+            continue
+        if t == "요일":
+            # 정렬은 정수(0~6, 월~일)로 하되 표시는 한글 요일로
+            vals = [WEEKDAY_LABELS[int(v)] if pd.notna(v) and 0 <= int(v) <= 6 else ""
+                    for v in g[col].values]
+        else:
+            vals = g[col].astype(str).values
+        out[t] = vals
+        raw[t] = vals
     for m in mets:
         _, col, kind = spec_by_label[m]
         if col == "집행일수":
