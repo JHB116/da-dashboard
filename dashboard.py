@@ -2394,12 +2394,15 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
-    # 접이식 필터 (공용 구성 + 소재 파생필터, 매체명 기본: 네이버·카카오)
+    # 접이식 필터 (공용 구성 + 소재 파생필터)
+    # NOTE: 예전에는 매체명 기본을 '네이버·카카오'로 좁혀두어, 그 외 매체(SNS/토스 등)에
+    # 집행된 캠페인을 이름으로 검색해도 '데이터 없음'으로 보이는 문제가 있었다.
+    # → 매체명 기본을 '전체'로 두어 조용한 제외를 막는다(필요 시 사용자가 직접 좁힘).
     # 캠페인명·하위캠페인명은 필터 박스에서 타이핑 검색 후 원하는 것만 선택(비우면 전체)
-    df = page_filters(df, "campf", expanded=False, media_default=["네이버", "카카오"],
-                      extra_specs=SOJU_EXTRA_SPECS)
+    df = page_filters(df, "campf", expanded=False, extra_specs=SOJU_EXTRA_SPECS)
     if df.empty:
-        st.info("검색·필터 결과 데이터가 없습니다.")
+        st.info("검색·필터 결과 데이터가 없습니다. 필터(매체명·비용출처·소구형 등)가 "
+                "결과를 제외했을 수 있어요 — 사이드바 **🧹 필터 초기화**로 되돌리거나 필터를 넓혀보세요.")
         return
 
     tab_rank, tab_quad, tab_heat = st.tabs(["📋 캠페인 랭킹", "🔲 효율 사분면", "🗓️ 요일별 실적"])
