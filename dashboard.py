@@ -2670,6 +2670,12 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
                "그룹을 유지한 채 날짜순으로 보려면 머리글을 누르지 말고 위 행 차원 순서를 쓰세요"
                "(이미 눌렀다면 아무 설정이나 바꿔 새로고침하면 원래 순서로 복구).")
 
+    show_impr_only = st.checkbox(
+        "👁️ 노출수 0 초과만 보기 (노출 없는 행 숨김)", value=False, key="cu_impr_pos",
+        help="집계 결과에서 노출수가 0인 행(집행되지 않은 조합)을 숨깁니다. "
+             "노출수는 음수가 없으므로 '0 초과'만 의미가 있습니다. "
+             "맨 아래 TOTAL은 전체 선택 기준(숨긴 행 포함)입니다.")
+
     # 유효 토큰만 남기되 사용자가 고른 '순서'를 그대로 중첩 순서로 사용한다.
     # (CUSTOM_DIMS 고정순으로 재정렬하지 않는다 — 사용자가 순서를 직접 통제)
     order_tokens = [t for t in dims_sel
@@ -2691,6 +2697,13 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     if g.empty:
         st.info("조건에 맞는 데이터가 없습니다.")
         return
+
+    # 노출수 0 초과만 보기: 노출이 없는(집행되지 않은) 집계 행을 숨긴다.
+    if show_impr_only and "지표_노출수" in g.columns:
+        g = g[pd.to_numeric(g["지표_노출수"], errors="coerce").fillna(0) > 0]
+        if g.empty:
+            st.info("노출수가 0보다 큰 데이터가 없습니다. (필터를 끄면 전체가 표시됩니다)")
+            return
 
     # 피벗 행 정렬: 표시 순서(order_tokens)를 그대로 정렬 키로 사용.
     # '기간' 토큰은 실제 기간 컬럼(연도·주차번호 등)으로 매핑한다.
