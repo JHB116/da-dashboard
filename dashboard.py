@@ -2671,7 +2671,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
                "(이미 눌렀다면 아무 설정이나 바꿔 새로고침하면 원래 순서로 복구).")
 
     show_impr_only = st.checkbox(
-        "👁️ 노출수 0 초과만 보기 (노출 없는 행 숨김)", value=False, key="cu_impr_pos",
+        "노출수 0 초과만 보기 (노출 없는 행 숨김)", value=False, key="cu_impr_pos",
         help="집계 결과에서 노출수가 0인 행(집행되지 않은 조합)을 숨깁니다. "
              "노출수는 음수가 없으므로 '0 초과'만 의미가 있습니다. "
              "맨 아래 TOTAL은 전체 선택 기준(숨긴 행 포함)입니다.")
