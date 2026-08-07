@@ -2680,22 +2680,34 @@ def _drill_walk(df_sub, dims, di, path, level, gran, period_on, top_n,
                         level + 1, gran, period_on, top_n, expanded, rows, meta)
 
 
-def _drill_default_expanded(df, dims):
-    """기본 펼침: 전체 + 모든 채널(1단계) → '매체'까지 보이게."""
+def _drill_keys_upto(df, dims, top_n, target):
+    """'target' 차원(0=첫 차원)까지 한 번에 보이도록 펼칠 노드 키 집합.
+    target=0이면 ROOT만(첫 차원 접힘), target=1이면 첫 차원까지 펼쳐 둘째 차원이
+    보인다 … target>=len(dims)면 마지막 차원까지 모두 펼친다(기간 노출)."""
     exp = {"ROOT"}
-    col0 = dims[0][1]
-    g0 = agg(df, [col0])
-    g0 = g0[g0["지표_광고비"].fillna(0) > 0]
-    for _, r in g0.iterrows():
-        exp.add(_drill_node_key(("ROOT",), 0, r[col0]))
+
+    def walk(sub, di, path):
+        if di >= len(dims) or di >= target:
+            return
+        col = dims[di][1]
+        g = agg(sub, [col])
+        g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
+        if top_n:
+            g = g.head(top_n)
+        for _, r in g.iterrows():
+            exp.add(_drill_node_key(path, di, r[col]))
+            walk(sub[_drill_mask(sub[col], r[col])], di + 1,
+                 path + (f"{di}={_drill_token(r[col])}",))
+
+    walk(df, 0, ("ROOT",))
     return exp
 
 
 def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     st.header("🌳 펼쳐보기 실적")
-    st.caption("전체→채널→매체→상품→기간을 **한 표에서** 봅니다. 기본은 **매체까지** 펼쳐져 "
-               "모든 실적 지표가 나오고, **행을 클릭하면 그 아래로 다음 단계가 펼쳐집니다** "
-               "(다시 클릭하면 접힘).")
+    st.caption("전체→채널→매체→상품→기간을 **한 표에서** 봅니다. 위 **‘펼침 단계’**로 한 번에 "
+               "펼치거나, 표의 맨 앞 **‘펼치기’ 체크박스**로 행별로 펼쳤다 접을 수 있어요. "
+               "모든 실적 지표가 함께 나옵니다.")
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
@@ -2726,26 +2738,22 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         return
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
-    # 펼침 상태 초기화(순서가 바뀌면 매체까지 기본 펼침으로 리셋)
-    if (DRILL_EXP_KEY not in st.session_state
-            or st.session_state.get("drill_order_snap") != order):
-        st.session_state[DRILL_EXP_KEY] = _drill_default_expanded(df, dims)
-        st.session_state["drill_order_snap"] = list(order)
-    expanded = st.session_state[DRILL_EXP_KEY]
+    # ── 펼침 단계(한 번에 여기까지 펼치기)
+    level_opts = [l for l, _ in dims] + (["기간"] if period_on else [])
+    default_lvl = min(1, len(level_opts) - 1)   # 기본 '매체'까지
+    lvl_sel = st.radio(
+        "펼침 단계 — 한 번에 여기까지 펼치기", level_opts, index=default_lvl,
+        horizontal=True, key="drill_level")
+    target = level_opts.index(lvl_sel) if lvl_sel in level_opts else default_lvl
 
-    bcols = st.columns([1, 1, 5])
-    with bcols[0]:
-        if st.button("🔼 매체까지만", key="drill_btn_tomedia", use_container_width=True,
-                     help="매체까지만 펼친 기본 상태로"):
-            st.session_state[DRILL_EXP_KEY] = _drill_default_expanded(df, dims)
-            st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
-            st.rerun()
-    with bcols[1]:
-        if st.button("🔽 전부 접기", key="drill_btn_collapseall", use_container_width=True,
-                     help="채널만 남기고 모두 접기"):
-            st.session_state[DRILL_EXP_KEY] = {"ROOT"}
-            st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
-            st.rerun()
+    # 설정(순서·기간·개수·펼침단계)이 바뀌면 그 단계까지 다시 펼친다.
+    snap = (list(order), bool(period_on), (top_n or "all"), lvl_sel)
+    if (DRILL_EXP_KEY not in st.session_state
+            or st.session_state.get("drill_snap") != snap):
+        st.session_state[DRILL_EXP_KEY] = _drill_keys_upto(df, dims, top_n, target)
+        st.session_state["drill_snap"] = snap
+        st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
+    expanded = st.session_state[DRILL_EXP_KEY]
 
     # ── 계층 표 구성
     rows, meta = [], []
@@ -2755,36 +2763,40 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         _drill_walk(df, dims, 0, ("ROOT",), 1, gran, period_on, top_n,
                     expanded, rows, meta)
 
+    # 맨 앞 '펼치기' 체크박스 열: 펼칠 수 있는 행만 현재 펼침 상태를 반영
+    exp_flags = [(m["key"] in expanded) if m["expandable"] else False for m in meta]
     tbl = pd.DataFrame(rows, columns=["구분"] + DETAIL_COLS)
+    tbl.insert(0, "펼치기", exp_flags)
 
     st.divider()
     dfver = st.session_state.get(DRILL_DFKEY, 0)
-    event = st.dataframe(
+    edited = st.data_editor(
         tbl, use_container_width=True, hide_index=True,
         height=_fit_height(len(rows) + 1),
-        key=f"drill_grid_{dfver}",
-        on_select="rerun", selection_mode="single-row",
-        column_config={"구분": st.column_config.TextColumn("구분", width="large")},
+        key=f"drill_ed_{dfver}",
+        disabled=["구분"] + DETAIL_COLS,   # '펼치기'만 편집 가능
+        column_config={
+            "펼치기": st.column_config.CheckboxColumn(
+                "펼치기", help="체크하면 그 아래 단계가 펼쳐집니다.", width="small"),
+            "구분": st.column_config.TextColumn("구분", width="large"),
+        },
     )
 
-    # 선택된 행 → 펼침/접힘 토글 (선택은 표 키 버전을 올려 초기화)
-    try:
-        sel = list(event.selection["rows"])
-    except Exception:
-        try:
-            sel = list(event.selection.rows)
-        except Exception:
-            sel = []
-    sig = (dfver, tuple(sel))
-    if sel and st.session_state.get("drill_sel_sig") != sig:
-        st.session_state["drill_sel_sig"] = sig
-        m = meta[sel[0]] if sel[0] < len(meta) else None
-        if m and m["expandable"]:
-            expanded.discard(m["key"]) if m["key"] in expanded else expanded.add(m["key"])
-        st.session_state[DRILL_DFKEY] = dfver + 1   # 선택 해제
+    # 체크박스 변경 → 해당 노드 펼침/접힘 반영
+    new_flags = edited["펼치기"].tolist()
+    changed = False
+    for i, (o, n) in enumerate(zip(exp_flags, new_flags)):
+        if o == n:
+            continue
+        changed = True   # 리프의 잘못된 체크는 아래 리셋으로 원상복구
+        if meta[i]["expandable"]:
+            key = meta[i]["key"]
+            expanded.add(key) if n else expanded.discard(key)
+    if changed:
+        st.session_state[DRILL_DFKEY] = dfver + 1   # 편집기 리셋
         st.rerun()
 
-    st.caption("ℹ️ ▶(접힘)/▼(펼침) 행을 클릭하면 그 아래로 다음 단계가 펼쳐집니다. "
+    st.caption("ℹ️ 맨 앞 **‘펼치기’**를 체크/해제하면 그 행 아래 단계가 펼쳐지고 접힙니다. "
                "· 각 단계 광고비 큰 순 · 비율지표는 합계 기준 재계산.")
 
 
