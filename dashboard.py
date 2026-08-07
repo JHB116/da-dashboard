@@ -2605,7 +2605,6 @@ DRILL_DIM_OPTS = {
 }
 DRILL_DEFAULT = ["채널", "매체", "상품"]
 DRILL_EXP_KEY = "drill_expanded"     # 펼쳐진 노드 키 집합(session_state)
-DRILL_DFKEY = "drill_grid_ver"       # 표 위젯 키 버전(선택 초기화용)
 
 
 def _drill_disp(v) -> str:
@@ -2642,19 +2641,42 @@ def _drill_node_key(path, di, val):
     return "|".join(path + (f"{di}={_drill_token(val)}",))
 
 
-def _drill_append(rows, meta, key, series, level, name, expandable, expanded):
-    indent = "　" * level     # 전각 공백으로 계층 들여쓰기
-    marker = ("▼" if key in expanded else "▶") if expandable else "·"
-    rec = {"구분": f"{indent}{marker} {name}"}
-    for disp, col, kind in DETAIL_SPEC:
+# 계층 표에 함께 보여줄 실적 지표(표기, 원본컬럼, 종류) — 이름 왼쪽, 지표 오른쪽
+DRILL_SHOW = [
+    ("광고비",      "지표_광고비",              "money"),
+    ("순결제매출",   "지표_순결제거래액",         "money"),
+    ("ROAS",       "순결제ROAS",              "roas"),
+    ("결제고객수",   "지표_순결제고객수",         "num"),
+    ("첫구매수",     "지표_순결제고객수(첫구매)",   "num"),
+    ("노출수",      "지표_노출수",              "num"),
+    ("클릭수",      "지표_클릭수",              "num"),
+    ("CTR",        "CTR",                    "pct2"),
+]
+DRILL_WIDTHS = [4.4] + [1.25] * len(DRILL_SHOW)
+
+
+def _drill_metric_cols(cols, series, start=1):
+    for i, (_label, col, kind) in enumerate(DRILL_SHOW):
         v = series.get(col, np.nan) if series is not None else np.nan
-        rec[disp] = _fmt_kind(v, kind)
-    rows.append(rec)
-    meta.append({"key": key, "expandable": expandable})
+        txt = _fmt_kind(v, kind)
+        style = "text-align:right"
+        if col == "순결제ROAS" and not pd.isna(v):
+            style += f";color:{'#16A34A' if v >= 1 else '#DC2626'};font-weight:600"
+        cols[start + i].markdown(f"<div style='{style}'>{txt}</div>",
+                                 unsafe_allow_html=True)
 
 
-def _drill_walk(df_sub, dims, di, path, level, gran, period_on, top_n,
-                expanded, rows, meta):
+def _drill_head():
+    cols = st.columns(DRILL_WIDTHS, vertical_alignment="center")
+    cols[0].markdown("**구분** <small style='color:#6B7280'>(이름 클릭 → 펼침/접힘)</small>",
+                     unsafe_allow_html=True)
+    for i, (label, _c, _k) in enumerate(DRILL_SHOW):
+        cols[1 + i].markdown(f"<div style='text-align:right'><b>{label}</b></div>",
+                             unsafe_allow_html=True)
+
+
+def _drill_render(df_sub, dims, di, path, level, gran, period_on, top_n, expanded):
+    """현재 단계 자식들을 '이름 버튼 + 실적지표' 행으로 렌더. 펼쳐진 노드는 재귀."""
     is_period = di >= len(dims)
     if is_period:
         d = df_sub.copy()
@@ -2673,11 +2695,25 @@ def _drill_walk(df_sub, dims, di, path, level, gran, period_on, top_n,
         name = _drill_disp(r["_name"])
         has_children = (not is_period) and ((not last_dim) or period_on)
         nkey = _drill_node_key(path, di, r["_name"])
-        _drill_append(rows, meta, nkey, r, level, name, has_children, expanded)
-        if has_children and nkey in expanded:
+        is_exp = nkey in expanded
+        indent = "　" * level
+        rc = st.columns(DRILL_WIDTHS, vertical_alignment="center")
+        with rc[0]:
+            if has_children:
+                sym = "▼" if is_exp else "▶"
+                if st.button(f"{indent}{sym} {name}", key=f"drill_btn_{nkey}",
+                             use_container_width=True):
+                    expanded.discard(nkey) if is_exp else expanded.add(nkey)
+                    st.rerun()
+            else:
+                rc[0].markdown(f"<div style='color:#6B7280'>{indent}· {name}</div>",
+                               unsafe_allow_html=True)
+        _drill_metric_cols(rc, r)
+        if has_children and is_exp:
             sub2 = df_sub[_drill_mask(df_sub[col], r["_name"])]
-            _drill_walk(sub2, dims, di + 1, path + (f"{di}={_drill_token(r['_name'])}",),
-                        level + 1, gran, period_on, top_n, expanded, rows, meta)
+            _drill_render(sub2, dims, di + 1,
+                          path + (f"{di}={_drill_token(r['_name'])}",),
+                          level + 1, gran, period_on, top_n, expanded)
 
 
 def _drill_keys_upto(df, dims, top_n, target):
@@ -2705,9 +2741,9 @@ def _drill_keys_upto(df, dims, top_n, target):
 
 def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     st.header("🌳 펼쳐보기 실적")
-    st.caption("전체→채널→매체→상품→기간을 **한 표에서** 봅니다. 위 **‘펼침 단계’**로 한 번에 "
-               "펼치거나, 표의 맨 앞 **‘펼치기’ 체크박스**로 행별로 펼쳤다 접을 수 있어요. "
-               "모든 실적 지표가 함께 나옵니다.")
+    st.caption("전체→채널→매체→상품→기간을 한 화면에서 봅니다. **이름을 클릭하면 그 아래 단계가 "
+               "펼쳐지고, 다시 클릭하면 접힙니다.** 위 **‘펼침 단계’**로 한 번에 펼칠 수도 있어요. "
+               "각 행에 실적 지표가 함께 나옵니다.")
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
@@ -2752,52 +2788,21 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
             or st.session_state.get("drill_snap") != snap):
         st.session_state[DRILL_EXP_KEY] = _drill_keys_upto(df, dims, top_n, target)
         st.session_state["drill_snap"] = snap
-        st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
     expanded = st.session_state[DRILL_EXP_KEY]
 
-    # ── 계층 표 구성
-    rows, meta = [], []
-    root_series = agg(df.assign(_all="_"), ["_all"]).iloc[0] if not df.empty else None
-    _drill_append(rows, meta, "ROOT", root_series, 0, "전체 TOTAL", True, expanded)
-    if "ROOT" in expanded:
-        _drill_walk(df, dims, 0, ("ROOT",), 1, gran, period_on, top_n,
-                    expanded, rows, meta)
-
-    # 맨 앞 '펼치기' 체크박스 열: 펼칠 수 있는 행만 현재 펼침 상태를 반영
-    exp_flags = [(m["key"] in expanded) if m["expandable"] else False for m in meta]
-    tbl = pd.DataFrame(rows, columns=["구분"] + DETAIL_COLS)
-    tbl.insert(0, "펼치기", exp_flags)
-
     st.divider()
-    dfver = st.session_state.get(DRILL_DFKEY, 0)
-    edited = st.data_editor(
-        tbl, use_container_width=True, hide_index=True,
-        height=_fit_height(len(rows) + 1),
-        key=f"drill_ed_{dfver}",
-        disabled=["구분"] + DETAIL_COLS,   # '펼치기'만 편집 가능
-        column_config={
-            "펼치기": st.column_config.CheckboxColumn(
-                "펼치기", help="체크하면 그 아래 단계가 펼쳐집니다.", width="small"),
-            "구분": st.column_config.TextColumn("구분", width="large"),
-        },
-    )
+    _drill_head()
+    st.markdown("<hr style='margin:3px 0'>", unsafe_allow_html=True)
 
-    # 체크박스 변경 → 해당 노드 펼침/접힘 반영
-    new_flags = edited["펼치기"].tolist()
-    changed = False
-    for i, (o, n) in enumerate(zip(exp_flags, new_flags)):
-        if o == n:
-            continue
-        changed = True   # 리프의 잘못된 체크는 아래 리셋으로 원상복구
-        if meta[i]["expandable"]:
-            key = meta[i]["key"]
-            expanded.add(key) if n else expanded.discard(key)
-    if changed:
-        st.session_state[DRILL_DFKEY] = dfver + 1   # 편집기 리셋
-        st.rerun()
+    # 최상단 전체 TOTAL(항상 펼침) + 하위 계층
+    root_series = agg(df.assign(_all="_"), ["_all"]).iloc[0] if not df.empty else None
+    rc = st.columns(DRILL_WIDTHS, vertical_alignment="center")
+    rc[0].markdown("**📊 전체 TOTAL**")
+    _drill_metric_cols(rc, root_series)
+    _drill_render(df, dims, 0, ("ROOT",), 1, gran, period_on, top_n, expanded)
 
-    st.caption("ℹ️ 맨 앞 **‘펼치기’**를 체크/해제하면 그 행 아래 단계가 펼쳐지고 접힙니다. "
-               "· 각 단계 광고비 큰 순 · 비율지표는 합계 기준 재계산.")
+    st.caption("ℹ️ 이름(▶/▼)을 클릭하면 그 아래 단계가 펼쳐지고 접힙니다. "
+               "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
 
 
 
