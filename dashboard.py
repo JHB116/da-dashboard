@@ -2586,6 +2586,192 @@ def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = No
 
 
 # ───────────────────────────────────────────────
+# 펼쳐보기(드릴다운) 실적
+#   전체 → 채널 → 매체 → 상품 → 기간을 "눌러서" 한 화면에서 파고든다.
+#   (엑셀 피벗의 그룹 접기/펼치기처럼 동작, 시트 왔다갔다 없이 계층 탐색)
+# ───────────────────────────────────────────────
+# 펼칠 수 있는 차원(표기 → 원본 컬럼). 순서는 사용자가 자유 지정.
+DRILL_DIM_OPTS = {
+    "채널": "구분_채널",
+    "매체": "구분_매체명",
+    "상품": "구분_상품",
+    "캠페인": "구분_캠페인",
+    "하위캠페인": "구분_하위캠페인",
+    "부서(BPU)": "구분_부서명",
+    "비용출처": "구분_비용출처",
+    "디바이스": "구분_디바이스",
+}
+DRILL_DEFAULT = ["채널", "매체", "상품"]
+
+# 각 노드 행에 함께 보여줄 핵심 지표(표기, 원본컬럼, 종류)
+DRILL_METRIC_SPEC = [
+    ("광고비",      "지표_광고비",              "money"),
+    ("순결제매출",   "지표_순결제거래액",         "money"),
+    ("ROAS",       "순결제ROAS",              "roas"),
+    ("결제고객수",   "지표_순결제고객수",         "num"),
+    ("첫구매수",     "지표_순결제고객수(첫구매)",   "num"),
+]
+DRILL_WIDTHS = [0.5, 3.6] + [1.25] * len(DRILL_METRIC_SPEC)
+DRILL_EXP_KEY = "drill_exp"   # 펼쳐진 노드 키 집합(session_state)
+
+
+def _drill_disp(v) -> str:
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return "(미지정)"
+    s = str(v)
+    return "(미지정)" if s.strip() in ("", "nan", "None", "-") else s
+
+
+def _drill_token(v) -> str:
+    """노드 키에 쓸 안정적 문자열(결측은 ∅로 통일)."""
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return "∅"
+    return str(v)
+
+
+def _drill_mask(series, v):
+    """그룹 값 v에 해당하는 행 마스크. 결측(NaN)도 정확히 매칭한다.
+    (pandas 신규 str dtype에서 astype(str)이 결측을 'nan'으로 만들지 않아
+     문자열 비교만으로는 결측 그룹이 통째로 누락되는 문제를 방지.)"""
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return series.isna()
+    return series.astype("object").astype(str) == str(v)
+
+
+def _drill_row(disp, series, nkey, level, has_children, expanded_set):
+    """트리 한 행: [펼침토글] [들여쓴 라벨] [핵심지표…]."""
+    cols = st.columns(DRILL_WIDTHS, vertical_alignment="center")
+    with cols[0]:
+        if has_children:
+            sym = "▼" if nkey in expanded_set else "▶"
+            if st.button(sym, key=f"drill_btn_{nkey}", use_container_width=True):
+                expanded_set.discard(nkey) if nkey in expanded_set else expanded_set.add(nkey)
+                st.rerun()
+        else:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+    indent = "&emsp;" * level
+    guide = "└&nbsp;" if level > 0 else ""
+    strong = level == 0
+    label_html = f"{indent}{guide}" + (f"<b>{disp}</b>" if strong else disp)
+    cols[1].markdown(label_html, unsafe_allow_html=True)
+    for i, (_mlabel, mcol, kind) in enumerate(DRILL_METRIC_SPEC):
+        v = series.get(mcol, np.nan) if series is not None else np.nan
+        txt = _fmt_kind(v, kind)
+        style = "text-align:right"
+        if mcol == "순결제ROAS" and not pd.isna(v):
+            style += f";color:{'#16A34A' if v >= 1 else '#DC2626'};font-weight:600"
+        cols[2 + i].markdown(f"<div style='{style}'>{txt}</div>", unsafe_allow_html=True)
+
+
+def _drill_header():
+    cols = st.columns(DRILL_WIDTHS)
+    cols[1].markdown("**구분**")
+    for i, (mlabel, _c, _k) in enumerate(DRILL_METRIC_SPEC):
+        cols[2 + i].markdown(f"<div style='text-align:right'><b>{mlabel}</b></div>",
+                             unsafe_allow_html=True)
+
+
+def _drill_periods(df_sub, gran, level):
+    d = df_sub.copy()
+    if gran == "주":
+        d["_pk"] = d["기간_주"].astype(str)
+    elif gran == "월":
+        d["_pk"] = d["연월"].astype(str)
+    else:
+        d["_pk"] = d["기간_일자"].dt.strftime("%Y-%m-%d")
+    g = agg(d, ["_pk"]).sort_values("_pk")
+    for _, r in g.iterrows():
+        _drill_row(f"📅 {r['_pk']}", r, "", level, False, set())
+
+
+def _drill_recurse(df_sub, dims, di, path, level, gran, period_on, top_n, expanded_set):
+    label, col = dims[di]
+    g = agg(df_sub, [col])
+    g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
+    if top_n:
+        g = g.head(top_n)
+    if g.empty:
+        st.markdown(f"<div style='color:#9CA3AF'>{'&emsp;' * level}└ (데이터 없음)</div>",
+                    unsafe_allow_html=True)
+        return
+    is_last = di == len(dims) - 1
+    for _, r in g.iterrows():
+        orig = r[col]
+        disp = f"[{label}] {_drill_disp(orig)}"
+        cpath = path + (f"{col}={_drill_token(orig)}",)
+        nkey = "|".join(cpath)
+        has_children = (not is_last) or period_on
+        exp = nkey in expanded_set
+        _drill_row(disp, r, nkey, level, has_children, expanded_set)
+        if has_children and exp:
+            sub2 = df_sub[_drill_mask(df_sub[col], orig)]
+            if not is_last:
+                _drill_recurse(sub2, dims, di + 1, cpath,
+                               level + 1, gran, period_on, top_n, expanded_set)
+            else:
+                _drill_periods(sub2, gran, level + 1)
+
+
+def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
+    st.header("🌳 펼쳐보기 실적")
+    st.caption("전체 실적에서 시작해 **▶를 누르면 아래 단계가 펼쳐집니다.** "
+               "채널→매체→상품→기간처럼, 시트를 옮겨 다니지 않고 한 화면에서 파고들 수 있어요.")
+    if df.empty:
+        st.warning("데이터가 없습니다.")
+        return
+
+    base = page_filters(df, "drillf", expanded=False)
+    df = date_range_filter(base, key_prefix="drill", default_preset="이번달")
+    if df.empty:
+        st.warning("선택한 날짜 범위에 데이터가 없습니다.")
+        return
+
+    c1, c2, c3 = st.columns([3, 1.5, 1.3])
+    with c1:
+        order = st.multiselect(
+            "펼치는 순서 (위 → 아래)", list(DRILL_DIM_OPTS.keys()),
+            default=DRILL_DEFAULT, key="drill_order",
+            help="선택한 순서대로 계층이 만들어집니다. 예) 채널 → 매체 → 상품")
+    with c2:
+        period_on = st.checkbox("기간까지 펼치기", value=True, key="drill_period_on")
+        gran = st.selectbox("기간 단위", ["일", "주", "월"], index=0,
+                            key="drill_gran", disabled=not period_on)
+    with c3:
+        topn_lab = st.selectbox("단계별 표시 개수", ["전체", 10, 20, 50], index=0,
+                                key="drill_topn",
+                                help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
+        top_n = None if topn_lab == "전체" else int(topn_lab)
+
+    if not order:
+        st.info("‘펼치는 순서’를 한 개 이상 선택해주세요.")
+        return
+    dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
+
+    if DRILL_EXP_KEY not in st.session_state:
+        st.session_state[DRILL_EXP_KEY] = {"ROOT"}   # 최초엔 전체만 펼쳐 채널이 보이게
+    expanded_set = st.session_state[DRILL_EXP_KEY]
+
+    bc1, bc2 = st.columns([1, 5])
+    with bc1:
+        if st.button("🔽 모두 접기", key="drill_collapse_btn", use_container_width=True):
+            st.session_state[DRILL_EXP_KEY] = {"ROOT"}
+            st.rerun()
+
+    st.divider()
+    _drill_header()
+    st.markdown("<hr style='margin:2px 0'>", unsafe_allow_html=True)
+
+    # 최상단 전체 TOTAL
+    root_series = agg(df.assign(_all="전체"), ["_all"]).iloc[0]
+    root_exp = "ROOT" in expanded_set
+    _drill_row("📊 전체 TOTAL", root_series, "ROOT", 0, True, expanded_set)
+    if root_exp:
+        _drill_recurse(df, dims, 0, ("ROOT",), 1, gran, period_on, top_n, expanded_set)
+
+    st.caption("ℹ️ 각 단계는 광고비 큰 순으로 정렬됩니다. ROAS는 100% 이상 초록, 미만 빨강.")
+
+
+# ───────────────────────────────────────────────
 # 커스텀 실적 (피벗형: 차원/지표/필터를 자유 조합)
 # ───────────────────────────────────────────────
 # 커스텀 시트에서만 노출하는 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
@@ -2938,8 +3124,8 @@ def build_html_report(df: pd.DataFrame) -> str:
 # 실행 맨 앞에서 세션 상태를 자기 자신으로 재대입(touch)해 값을 살려둔다.
 # '필터 초기화' 버튼은 아래 접두어에 해당하는 키만 지운다.
 _FILTER_KEY_PREFIXES = (
-    "sumf", "medf", "campf", "bpuf", "wkf", "mof", "dyf", "cuf", "crf",
-    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy",
+    "sumf", "medf", "campf", "bpuf", "wkf", "mof", "dyf", "cuf", "crf", "drillf",
+    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy", "drill",
 )
 
 
@@ -3049,8 +3235,8 @@ def main():
     with page_box:
         st.subheader("📄 페이지")
         page = st.radio("페이지", [
-            "📊 전체 요약", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적", "📡 매체별 실적",
-            "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
+            "📊 전체 요약", "🌳 펼쳐보기 실적", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적",
+            "📡 매체별 실적", "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
         ], label_visibility="collapsed")
         st.caption("필터는 페이지를 옮겨도 유지됩니다.")
         if st.button("🧹 필터 초기화", use_container_width=True,
@@ -3060,6 +3246,8 @@ def main():
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
+    elif page == "🌳 펼쳐보기 실적":
+        page_drilldown(pre_date_filtered, targets, report_targets)
     elif page == "🗓️ 월별 실적":
         page_monthly(pre_date_filtered, targets, report_targets)
     elif page == "📅 주차별 실적":
