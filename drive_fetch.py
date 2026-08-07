@@ -93,15 +93,23 @@ def latest_week_folder(svc, root_id=SOJAE_ROOT_ID):
     return _latest(list_children(svc, root_id, mime=FOLDER_MIME), key="createdTime")
 
 
-def download_bytes(svc, file_id):
-    """파일 원본 bytes 다운로드."""
+def download_bytes(svc, file_id, chunk_mb=5, tries=4):
+    """파일 원본 bytes 다운로드. 대용량(수십 MB)·불안정 네트워크 대비 청크+재시도.
+    청크 실패 시 처음부터 재시작(부분 IncompleteRead 방지)."""
     from googleapiclient.http import MediaIoBaseDownload
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    return buf.getvalue()
+    last = None
+    for attempt in range(tries):
+        try:
+            buf = io.BytesIO()
+            req = svc.files().get_media(fileId=file_id)
+            dl = MediaIoBaseDownload(buf, req, chunksize=chunk_mb * 1024 * 1024)
+            done = False
+            while not done:
+                _, done = dl.next_chunk(num_retries=3)
+            return buf.getvalue()
+        except Exception as e:  # IncompleteRead·타임아웃 등 → 재시작
+            last = e
+    raise last
 
 
 # ──────────────────────────────────────────────────────────────
