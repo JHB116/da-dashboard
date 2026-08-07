@@ -20,12 +20,56 @@ DA 디스플레이 광고 '소재(카피+이미지)'와 '실적'을 소재 단�
   · 순수 함수(load_da_perf / parse_creative_order / tag_copy / appeal_perf …) = Streamlit 무관·테스트 가능.
   · 단일 하루는 소재별 전환이 희소(거래액 0 다수) → 분석은 '기간 누적' 위에서 해야 안정적.
 """
+import io
 import re
 import numpy as np
 import pandas as pd
 
 # ══════════════════════════════════════════════════════════════════════
-# 0. 실적(DA로우_RAW) → 소재별 성과
+# 0-A. 소재안(주차별 Drive 엑셀) → 소재 단위 카피/속성
+# ══════════════════════════════════════════════════════════════════════
+# 소재안 시트 컬럼 인덱스(0-based, 헤더 3행). 실측 확인됨.
+SOJAE_COLS = {
+    "기획전번호": 10, "기획전명": 11, "상품명": 13, "이미지유형": 14,
+    "브랜드": 16, "소구형_수동": 17, "메인카피": 18, "서브카피": 20,
+    "성별": 4, "카테고리": 8, "최종소재안": 31,
+}
+
+
+def parse_sojae_bytes(file_bytes, sheet=None, header_row=3):
+    """소재안 엑셀 bytes → 소재 단위 DataFrame.
+    한 기획전번호 그룹 안에서 등장 순서대로 소재N(1,2,3…)을 매긴다(실적 _N 과 대칭)."""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    ws = wb[sheet] if sheet else wb[wb.sheetnames[0]]
+    recs, cur_pid, n = [], None, 0
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        def cell(key):
+            i = SOJAE_COLS[key]
+            v = row[i] if i < len(row) else None
+            return "" if v is None else str(v).replace("\n", " ").strip()
+        pid = cell("기획전번호")
+        if not pid:
+            continue
+        if pid != cur_pid:
+            cur_pid, n = pid, 0
+        n += 1
+        recs.append({
+            "기획전번호": pid, "소재N": n, "기획전명": cell("기획전명"),
+            "브랜드": cell("브랜드"), "카테고리": cell("카테고리"), "성별": cell("성별"),
+            "이미지유형": cell("이미지유형"), "소구형_수동": cell("소구형_수동"),
+            "메인카피": cell("메인카피"), "서브카피": cell("서브카피"),
+        })
+    wb.close()
+    df = pd.DataFrame(recs)
+    if not df.empty:
+        df["기획전번호"] = pd.to_numeric(df["기획전번호"], errors="coerce").astype("Int64")
+        df["소재N"] = df["소재N"].astype("Int64")
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 0-B. 실적(DA로우_RAW) → 소재별 성과
 # ══════════════════════════════════════════════════════════════════════
 # 매체 프리셋: 소재안 폴더(비즈보드/디스플레이/버즈빌)와 대응. AF코드이름 안의 매체 토큰으로 식별.
 MEDIA_TOKENS = {"비즈보드": "비즈보드", "버즈빌": "버즈빌", "디스플레이": "디스플레이"}
@@ -68,6 +112,58 @@ def load_da_perf(raw_df, media="비즈보드"):
     return out
 
 
+def load_da_perf_bytes(file_bytes, media="비즈보드", sheet="DA로우_RAW"):
+    """대용량 DA로우 엑셀 bytes → (기획전번호, 소재N) 소재별 성과. openpyxl 스트리밍 집계
+    (45MB 전체 누적도 pandas 전체 로드 없이 메모리 효율적으로 처리)."""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    ws = wb[sheet] if sheet in wb.sheetnames else wb[wb.sheetnames[0]]
+    it = ws.iter_rows(values_only=True)
+    header = [("" if h is None else str(h).strip()) for h in next(it)]
+    idx = {}
+    for i, h in enumerate(header):
+        idx.setdefault(h, i)
+    af_i, pid_i = idx.get("구분_AF코드이름"), idx.get("구분_기획전 번호")
+    br_i = idx.get("구분_브랜드/기획전")
+    met_i = {c: idx[c] for c in PERF_NUM if c in idx}
+    tok = MEDIA_TOKENS.get(media)
+    agg, names = {}, {}
+    for row in it:
+        name = row[af_i] if af_i is not None and af_i < len(row) else None
+        if not name:
+            continue
+        name = str(name)
+        if tok and tok not in name:
+            continue
+        m = re.search(r"_(\d+)\s*$", name)
+        if not m:
+            continue
+        N = int(m.group(1))
+        pv = row[pid_i] if pid_i is not None and pid_i < len(row) else None
+        try:
+            pid = int(float(pv))
+        except (TypeError, ValueError):
+            continue
+        key = (pid, N)
+        d = agg.setdefault(key, {c: 0.0 for c in met_i})
+        for c, i in met_i.items():
+            v = row[i] if i < len(row) else None
+            try:
+                d[c] += float(v)
+            except (TypeError, ValueError):
+                pass
+        if key not in names and br_i is not None and br_i < len(row) and row[br_i]:
+            names[key] = str(row[br_i])
+    wb.close()
+    rows = [{"기획전번호": k[0], "소재N": k[1], "기획전명": names.get(k, ""), **v}
+            for k, v in agg.items()]
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["기획전번호"] = df["기획전번호"].astype("Int64")
+        df["소재N"] = df["소재N"].astype("Int64")
+    return df
+
+
 def _rate(n, d):
     d = pd.to_numeric(d, errors="coerce")
     return np.where(d > 0, pd.to_numeric(n, errors="coerce") / d, np.nan)
@@ -97,8 +193,8 @@ DA_KW = {
     "신상": ["신상", "신규", "출시", "입고", "재입고", "론칭", "컬렉션", "NEW", "new", "드롭"],
     "시즌": ["여름", "겨울", "봄", "가을", "환절기", "시즌", "썸머", "윈터", "연말", "휴가", "필드", "라운딩"],
     "단독": ["단독", "독점", "한정", "선착순", "리미티드", "LF몰 단독", "온라인 단독"],
-    "브랜드": ["브랜드", "공식", "데상트", "르꼬끄", "헤지스", "닥스", "질스튜어트", "킨", "바네사브루노"],
-    "상품": ["티셔츠", "팬츠", "셔츠", "니트", "원피스", "스니커즈", "샌들", "블라우스", "의류", "잡화", "골프화"],
+    "브랜드소구": ["브랜드", "공식", "데상트", "르꼬끄", "헤지스", "닥스", "질스튜어트", "킨", "바네사브루노"],
+    "상품소구": ["티셔츠", "팬츠", "셔츠", "니트", "원피스", "스니커즈", "샌들", "블라우스", "의류", "잡화", "골프화"],
 }
 KW_RE = {k: re.compile("|".join(re.escape(w) for w in ws)) for k, ws in DA_KW.items()}
 PCT_RE   = re.compile(r"\d{1,3}\s*[%％]")
@@ -199,6 +295,29 @@ def appeal_perf(joined, metric_label, tags=None, min_n=5):
         r["q"] = q
     out = pd.DataFrame(rows)
     return out.sort_values("차이", ascending=not higher).reset_index(drop=True) if len(out) else out
+
+
+def cat_perf(joined, cat_col, metric_label, min_n=3):
+    """범주형 컬럼(이미지유형·브랜드·소구형_수동 등) 값별 가중 성과."""
+    num, den, higher = METRICS[metric_label]
+    rows = []
+    for val, sub in joined.groupby(cat_col):
+        if not str(val).strip() or len(sub) < min_n:
+            continue
+        rows.append({cat_col: str(val), "n": len(sub),
+                     metric_label: float(_rate(sub[num].sum(), sub[den].sum())),
+                     "노출": float(pd.to_numeric(sub["지표_노출수"], errors="coerce").sum())})
+    out = pd.DataFrame(rows)
+    return out.sort_values(metric_label, ascending=not higher).reset_index(drop=True) if len(out) else out
+
+
+def sig_label(q):
+    if q is None or (isinstance(q, float) and pd.isna(q)):
+        return "표본부족"
+    if q < 0.01: return "p<0.01 · 신뢰가능"
+    if q < 0.05: return "p<0.05 · 유의함"
+    if q < 0.10: return "p<0.10 · 약한신호"
+    return f"q={q:.2f} · 유의하지않음"
 
 
 # ══════════════════════════════════════════════════════════════════════
