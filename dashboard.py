@@ -2587,9 +2587,9 @@ def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = No
 
 # ───────────────────────────────────────────────
 # 펼쳐보기(드릴다운) 실적
-#   전체 → 채널 → 매체 → 상품 → 기간을 "눌러서 안으로" 파고든다.
-#   한 화면엔 현재 단계 목록만 깔끔하게 보이고(막대), 항목을 누르면 그
-#   안으로 들어가며, 상단 경로(브레드크럼)로 되돌아온다. (엑셀 드릴다운 방식)
+#   계층 표(전체→채널→매체→상품→기간)를 한 화면에 보여준다.
+#   기본은 '매체'까지 펼쳐진 상태로 모든 실적 지표를 표로 나열하고,
+#   행을 클릭하면 그 자리 아래로 다음 단계가 펼쳐진다(다시 클릭 시 접힘).
 # ───────────────────────────────────────────────
 # 펼칠 수 있는 차원(표기 → 원본 컬럼). 순서는 사용자가 자유 지정.
 DRILL_DIM_OPTS = {
@@ -2604,24 +2604,8 @@ DRILL_DIM_OPTS = {
     "디바이스": "구분_디바이스",
 }
 DRILL_DEFAULT = ["채널", "매체", "상품"]
-
-# 막대·정렬 기준으로 쓸 수 있는 지표(표기, 원본컬럼, 종류)
-DRILL_METRIC_CHOICES = [
-    ("광고비",      "지표_광고비",              "money"),
-    ("순결제매출",   "지표_순결제거래액",         "money"),
-    ("순결제ROAS",  "순결제ROAS",              "roas"),
-    ("결제고객수",   "지표_순결제고객수",         "num"),
-    ("첫구매수",     "지표_순결제고객수(첫구매)",   "num"),
-]
-# 현재 노드 상단에 요약으로 보여줄 지표
-DRILL_KPI_SPEC = [
-    ("광고비",      "지표_광고비",              "money"),
-    ("순결제매출",   "지표_순결제거래액",         "money"),
-    ("순결제ROAS",  "순결제ROAS",              "roas"),
-    ("결제고객수",   "지표_순결제고객수",         "num"),
-    ("첫구매수",     "지표_순결제고객수(첫구매)",   "num"),
-]
-DRILL_PATH_KEY = "drill_path"   # [(col, val)] 형태의 현재 경로(session_state)
+DRILL_EXP_KEY = "drill_expanded"     # 펼쳐진 노드 키 집합(session_state)
+DRILL_DFKEY = "drill_grid_ver"       # 표 위젯 키 버전(선택 초기화용)
 
 
 def _drill_disp(v) -> str:
@@ -2629,6 +2613,12 @@ def _drill_disp(v) -> str:
         return "(미지정)"
     s = str(v)
     return "(미지정)" if s.strip() in ("", "nan", "None", "-") else s
+
+
+def _drill_token(v) -> str:
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return "∅"
+    return str(v)
 
 
 def _drill_mask(series, v):
@@ -2648,26 +2638,64 @@ def _drill_period_key(df_sub, gran):
     return df_sub["기간_일자"].dt.strftime("%Y-%m-%d")
 
 
-def _drill_kpi_row(series):
-    """현재 노드 핵심 지표를 st.metric 카드 한 줄로."""
-    cols = st.columns(len(DRILL_KPI_SPEC))
-    for c, (label, col, kind) in zip(cols, DRILL_KPI_SPEC):
+def _drill_node_key(path, di, val):
+    return "|".join(path + (f"{di}={_drill_token(val)}",))
+
+
+def _drill_append(rows, meta, key, series, level, name, expandable, expanded):
+    indent = "　" * level     # 전각 공백으로 계층 들여쓰기
+    marker = ("▼" if key in expanded else "▶") if expandable else "·"
+    rec = {"구분": f"{indent}{marker} {name}"}
+    for disp, col, kind in DETAIL_SPEC:
         v = series.get(col, np.nan) if series is not None else np.nan
-        c.metric(label, _fmt_kind(v, kind))
+        rec[disp] = _fmt_kind(v, kind)
+    rows.append(rec)
+    meta.append({"key": key, "expandable": expandable})
 
 
-def _drill_bar(pct, is_roas_bad=False):
-    color = "#DC2626" if is_roas_bad else "#2563EB"
-    return (f"<div style='background:#E5E7EB;border-radius:4px;height:16px;"
-            f"width:100%'><div style='width:{max(pct,1):.1f}%;height:16px;"
-            f"background:{color};border-radius:4px'></div></div>")
+def _drill_walk(df_sub, dims, di, path, level, gran, period_on, top_n,
+                expanded, rows, meta):
+    is_period = di >= len(dims)
+    if is_period:
+        d = df_sub.copy()
+        d["_pk"] = _drill_period_key(d, gran)
+        g = agg(d, ["_pk"]).sort_values("_pk").rename(columns={"_pk": "_name"})
+        col = None
+    else:
+        _label, col = dims[di]
+        g = agg(df_sub, [col])
+        g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
+        if top_n:
+            g = g.head(top_n)
+        g = g.rename(columns={col: "_name"})
+    last_dim = di == len(dims) - 1
+    for _, r in g.iterrows():
+        name = _drill_disp(r["_name"])
+        has_children = (not is_period) and ((not last_dim) or period_on)
+        nkey = _drill_node_key(path, di, r["_name"])
+        _drill_append(rows, meta, nkey, r, level, name, has_children, expanded)
+        if has_children and nkey in expanded:
+            sub2 = df_sub[_drill_mask(df_sub[col], r["_name"])]
+            _drill_walk(sub2, dims, di + 1, path + (f"{di}={_drill_token(r['_name'])}",),
+                        level + 1, gran, period_on, top_n, expanded, rows, meta)
+
+
+def _drill_default_expanded(df, dims):
+    """기본 펼침: 전체 + 모든 채널(1단계) → '매체'까지 보이게."""
+    exp = {"ROOT"}
+    col0 = dims[0][1]
+    g0 = agg(df, [col0])
+    g0 = g0[g0["지표_광고비"].fillna(0) > 0]
+    for _, r in g0.iterrows():
+        exp.add(_drill_node_key(("ROOT",), 0, r[col0]))
+    return exp
 
 
 def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     st.header("🌳 펼쳐보기 실적")
-    st.caption("전체에서 시작해 **항목을 누르면 그 안으로 들어갑니다.** "
-               "채널→매체→상품처럼 한 단계씩, 화면엔 지금 단계만 깔끔하게. "
-               "위쪽 **경로**를 누르면 언제든 되돌아옵니다.")
+    st.caption("전체→채널→매체→상품→기간을 **한 표에서** 봅니다. 기본은 **매체까지** 펼쳐져 "
+               "모든 실적 지표가 나오고, **행을 클릭하면 그 아래로 다음 단계가 펼쳐집니다** "
+               "(다시 클릭하면 접힘).")
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
@@ -2678,134 +2706,86 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
 
-    c1, c2, c3 = st.columns([3, 1.5, 1.3])
+    c1, c2, c3 = st.columns([3, 1.6, 1.2])
     with c1:
         order = st.multiselect(
-            "파고드는 순서 (왼쪽 → 오른쪽)", list(DRILL_DIM_OPTS.keys()),
+            "펼치는 순서 (위 → 아래)", list(DRILL_DIM_OPTS.keys()),
             default=DRILL_DEFAULT, key="drill_order",
-            help="선택한 순서대로 단계가 만들어집니다. 예) 채널 → 매체 → 상품")
+            help="선택한 순서대로 계층이 만들어집니다. 예) 채널 → 매체 → 상품")
     with c2:
-        period_on = st.checkbox("맨 끝에 기간", value=True, key="drill_period_on",
-                                help="마지막 단계 다음에 기간별 실적까지 볼 수 있어요.")
+        period_on = st.checkbox("맨 끝에 기간까지", value=True, key="drill_period_on")
         gran = st.selectbox("기간 단위", ["일", "주", "월"], index=0,
                             key="drill_gran", disabled=not period_on)
     with c3:
-        metric_lab = st.selectbox("막대·정렬 지표", [m[0] for m in DRILL_METRIC_CHOICES],
-                                  index=0, key="drill_metric")
-        topn = st.selectbox("상위 개수", [10, 20, 50, "전체"], index=0, key="drill_topn")
+        topn = st.selectbox("단계별 개수", [10, 20, 50, "전체"], index=3, key="drill_topn",
+                            help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
         top_n = None if topn == "전체" else int(topn)
 
     if not order:
-        st.info("‘파고드는 순서’를 한 개 이상 선택해주세요.")
+        st.info("‘펼치는 순서’를 한 개 이상 선택해주세요.")
         return
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
-    n_dim = len(dims)
-    metric_col = next(m[1] for m in DRILL_METRIC_CHOICES if m[0] == metric_lab)
-    metric_kind = next(m[2] for m in DRILL_METRIC_CHOICES if m[0] == metric_lab)
 
-    # 경로(현재 위치). 선택 차원이 바뀌면 경로 초기화.
-    path = st.session_state.get(DRILL_PATH_KEY, [])
-    if st.session_state.get("drill_order_snapshot") != order:
-        path = []
-        st.session_state["drill_order_snapshot"] = list(order)
-    # 경로 길이가 차원 수를 넘지 않도록 방어
-    path = path[:n_dim]
-    st.session_state[DRILL_PATH_KEY] = path
+    # 펼침 상태 초기화(순서가 바뀌면 매체까지 기본 펼침으로 리셋)
+    if (DRILL_EXP_KEY not in st.session_state
+            or st.session_state.get("drill_order_snap") != order):
+        st.session_state[DRILL_EXP_KEY] = _drill_default_expanded(df, dims)
+        st.session_state["drill_order_snap"] = list(order)
+    expanded = st.session_state[DRILL_EXP_KEY]
 
-    depth = len(path)                      # 현재 보고 있는 단계
-    # 경로대로 데이터 필터
-    sub = df
-    for (col, val) in path:
-        sub = sub[_drill_mask(sub[col], val)]
+    bcols = st.columns([1, 1, 5])
+    with bcols[0]:
+        if st.button("🔼 매체까지만", key="drill_btn_tomedia", use_container_width=True,
+                     help="매체까지만 펼친 기본 상태로"):
+            st.session_state[DRILL_EXP_KEY] = _drill_default_expanded(df, dims)
+            st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
+            st.rerun()
+    with bcols[1]:
+        if st.button("🔽 전부 접기", key="drill_btn_collapseall", use_container_width=True,
+                     help="채널만 남기고 모두 접기"):
+            st.session_state[DRILL_EXP_KEY] = {"ROOT"}
+            st.session_state[DRILL_DFKEY] = st.session_state.get(DRILL_DFKEY, 0) + 1
+            st.rerun()
+
+    # ── 계층 표 구성
+    rows, meta = [], []
+    root_series = agg(df.assign(_all="_"), ["_all"]).iloc[0] if not df.empty else None
+    _drill_append(rows, meta, "ROOT", root_series, 0, "전체 TOTAL", True, expanded)
+    if "ROOT" in expanded:
+        _drill_walk(df, dims, 0, ("ROOT",), 1, gran, period_on, top_n,
+                    expanded, rows, meta)
+
+    tbl = pd.DataFrame(rows, columns=["구분"] + DETAIL_COLS)
 
     st.divider()
+    dfver = st.session_state.get(DRILL_DFKEY, 0)
+    event = st.dataframe(
+        tbl, use_container_width=True, hide_index=True,
+        height=_fit_height(len(rows) + 1),
+        key=f"drill_grid_{dfver}",
+        on_select="rerun", selection_mode="single-row",
+        column_config={"구분": st.column_config.TextColumn("구분", width="large")},
+    )
 
-    # ── 브레드크럼(경로) : 전체 › … › 현재
-    crumbs = st.container()
-    with crumbs:
-        labels = ["🏠 전체"] + [f"{_drill_disp(v)}" for (_c, v) in path]
-        ccols = st.columns([1] * len(labels) + [4])
-        for i, lab in enumerate(labels):
-            with ccols[i]:
-                if i == len(labels) - 1:
-                    st.markdown(f"**{lab}**")
-                else:
-                    if st.button(lab, key=f"drill_btn_crumb_{i}", use_container_width=True):
-                        st.session_state[DRILL_PATH_KEY] = path[:i]
-                        st.rerun()
+    # 선택된 행 → 펼침/접힘 토글 (선택은 표 키 버전을 올려 초기화)
+    try:
+        sel = list(event.selection["rows"])
+    except Exception:
+        try:
+            sel = list(event.selection.rows)
+        except Exception:
+            sel = []
+    sig = (dfver, tuple(sel))
+    if sel and st.session_state.get("drill_sel_sig") != sig:
+        st.session_state["drill_sel_sig"] = sig
+        m = meta[sel[0]] if sel[0] < len(meta) else None
+        if m and m["expandable"]:
+            expanded.discard(m["key"]) if m["key"] in expanded else expanded.add(m["key"])
+        st.session_state[DRILL_DFKEY] = dfver + 1   # 선택 해제
+        st.rerun()
 
-    # ── 현재 노드 요약
-    node_series = agg(sub.assign(_all="_"), ["_all"]).iloc[0] if not sub.empty else None
-    _drill_kpi_row(node_series)
-
-    # ── 현재 단계 목록(막대)
-    if depth < n_dim:
-        cur_label, cur_col = dims[depth]
-        is_period = False
-    else:
-        cur_label, cur_col = ("기간", None)   # depth == n_dim (period_on일 때만 도달)
-        is_period = True
-
-    if is_period:
-        d = sub.copy()
-        d["_pk"] = _drill_period_key(d, gran)
-        g = agg(d, ["_pk"]).sort_values("_pk")
-        g = g.rename(columns={"_pk": "_name"})
-    else:
-        g = agg(sub, [cur_col])
-        g = g[g["지표_광고비"].fillna(0) > 0]
-        sort_col = metric_col if metric_col in g.columns else "지표_광고비"
-        g = g.sort_values(sort_col, ascending=False, na_position="last")
-        if top_n:
-            g = g.head(top_n)
-        g = g.rename(columns={cur_col: "_name"})
-
-    # 이 단계에서 더 내려갈 곳이 있나?
-    clickable = (not is_period) and (depth < n_dim - 1 or period_on)
-
-    st.markdown(f"##### {'📅' if is_period else '📂'} {cur_label} 기준 "
-                f"· {metric_lab} {'낮은→높은' if False else '큰 순'}")
-
-    if g.empty:
-        st.info("이 단계에 표시할 데이터가 없습니다.")
-        st.caption("ℹ️ 항목을 누르면 그 안으로 들어갑니다. 위 경로를 눌러 되돌아옵니다.")
-        return
-
-    total = g[metric_col].sum() if metric_col in g.columns else np.nan
-    mx = g[metric_col].max() if metric_col in g.columns else 1
-    mx = mx if (mx and not pd.isna(mx) and mx > 0) else 1
-
-    # 헤더
-    h = st.columns([3.2, 4.6, 2.2])
-    h[0].markdown("**구분**")
-    h[1].markdown(f"**{metric_lab}**")
-    h[2].markdown("<div style='text-align:right'><b>값 · 비중</b></div>",
-                  unsafe_allow_html=True)
-
-    for i, (_, r) in enumerate(g.iterrows()):
-        name = _drill_disp(r["_name"])
-        v = r.get(metric_col, np.nan)
-        pct = (v / mx * 100) if (not pd.isna(v) and mx) else 0
-        share = (v / total * 100) if (total and not pd.isna(v) and total != 0) else np.nan
-        roas_bad = (metric_col == "순결제ROAS" and not pd.isna(v) and v < 1)
-        rc = st.columns([3.2, 4.6, 2.2], vertical_alignment="center")
-        with rc[0]:
-            if clickable:
-                if st.button(f"{name}  ›", key=f"drill_btn_row_{depth}_{i}",
-                             use_container_width=True):
-                    st.session_state[DRILL_PATH_KEY] = path + [(cur_col, r["_name"])]
-                    st.rerun()
-            else:
-                st.markdown(name)
-        rc[1].markdown(_drill_bar(pct, roas_bad), unsafe_allow_html=True)
-        share_txt = "" if pd.isna(share) else f" <small style='color:#6B7280'>{share:.1f}%</small>"
-        rc[2].markdown(
-            f"<div style='text-align:right'>{_fmt_kind(v, metric_kind)}{share_txt}</div>",
-            unsafe_allow_html=True)
-
-    tip = ("항목을 누르면 그 안으로 들어갑니다."
-           if clickable else "마지막 단계입니다. 위 경로를 눌러 되돌아가세요.")
-    st.caption(f"ℹ️ {tip} · 전체 {len(g)}개 · 정렬: {metric_lab} 큰 순")
+    st.caption("ℹ️ ▶(접힘)/▼(펼침) 행을 클릭하면 그 아래로 다음 단계가 펼쳐집니다. "
+               "· 각 단계 광고비 큰 순 · 비율지표는 합계 기준 재계산.")
 
 
 
