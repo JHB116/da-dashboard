@@ -107,15 +107,16 @@ def main():
     if sojae.empty or perf.empty:
         st.info("소재안 또는 실적 데이터가 비어 있어요."); st.stop()
 
-    tagged = C.add_tags(sojae)
+    tagged = C.derive_attrs(C.add_tags(sojae))
     joined = C.join_sojae_perf(tagged, perf)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("조인된 소재", f"{len(joined):,}")
     c2.metric("소재 카탈로그", f"{len(sojae):,}")
-    c3.metric("실적 파일", pmeta["file"].replace("●", ""))
+    c3.metric("소재당 평균 소구수", f"{joined['소구개수'].mean():.1f}" if len(joined) else "–")
+    c4.metric("실적 파일", pmeta["file"].replace("●", ""))
     st.caption(f"매체 {media} · 소재안 {len(files_used)}개 파일 수집 · 실적 {pmeta['createdTime'][:10]} 기준 · "
-               "성과는 기획전 전체 집행기간 누적")
+               "성과는 기획전 전체 집행기간 누적 · 소구형은 메인+서브카피 멀티라벨 자동분류")
 
     if joined.empty:
         st.warning("조인된 소재가 없어요. (아직 집행 전 주차이거나 매체 불일치일 수 있어요)"); st.stop()
@@ -126,66 +127,78 @@ def main():
         if brands:
             joined = joined[joined["브랜드"].isin(brands)]
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🏷 소구형별 성과", "🖼 이미지유형별", "🥇 소재 리더보드", "💡 제안"])
+    hb = C.METRICS[metric][2]
+
+    def appeal_table(ap, caption):
+        st.plotly_chart(bar(ap, "태그", "차이", f"{metric} 보유−미보유", hb, pct=(metric != "ROAS")),
+                        use_container_width=True)
+        show = ap.copy()
+        for c in ["보유가중", "미보유가중"]:
+            show[c] = ap[c].map(lambda v: fmt_metric(v, metric))
+        show["차이"] = ap["차이"].map(lambda v: fmt_metric(v, metric) if metric == "ROAS"
+                                    else f"{v*100:+.2f}%p")
+        show["효과크기"] = ap["효과크기"].map(lambda v: "–" if pd.isna(v) else f"{v:+.2f}")
+        show["유의성"] = ap["q"].map(C.sig_label)
+        st.dataframe(show[["태그", "보유가중", "보유n", "미보유가중", "미보유n", "차이", "효과크기", "유의성"]],
+                     use_container_width=True, hide_index=True)
+        st.caption(caption)
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["🏷 소구형별", "✍️ 표현형식별", "🖼 이미지속성별", "🥇 소재 리더보드", "💡 제안"])
 
     with tab1:
-        st.subheader(f"소구형(카피 자동분류)별 {metric}")
-        ap = C.appeal_perf(joined, metric, min_n=int(min_n))
+        st.subheader(f"소구형(카피 멀티라벨)별 {metric}")
+        ap = C.appeal_perf(joined, metric, tags=list(C.DA_KW), min_n=int(min_n))
         if ap.empty:
             st.info("표본이 부족해요.")
         else:
-            hb = C.METRICS[metric][2]
-            st.plotly_chart(bar(ap, "태그", "차이", f"{metric} 보유−미보유", hb,
-                                pct=(metric != "ROAS")), use_container_width=True)
-            show = ap.copy()
-            for c in ["보유가중", "미보유가중"]:
-                show[c] = ap[c].map(lambda v: fmt_metric(v, metric))
-            show["차이"] = ap["차이"].map(lambda v: fmt_metric(v, metric) if metric == "ROAS"
-                                        else f"{v*100:+.2f}%p")
-            show["효과크기"] = ap["효과크기"].map(lambda v: "–" if pd.isna(v) else f"{v:+.2f}")
-            show["유의성"] = ap["q"].map(C.sig_label)
-            st.dataframe(show[["태그", "보유가중", "보유n", "미보유가중", "미보유n", "차이", "효과크기", "유의성"]],
-                         use_container_width=True, hide_index=True)
-            st.caption("차이 = 해당 소구형 소재의 가중 성과 − 안 쓴 소재. 효과크기·유의성(FDR 보정)으로 우연 여부 판단.")
+            appeal_table(ap, "메인+서브카피에서 자동분류한 소구형(소재당 여러 개). "
+                             "차이 = 해당 소구 소재의 가중 성과 − 안 쓴 소재. 유의성은 FDR 보정.")
 
     with tab2:
-        st.subheader(f"이미지유형별 {metric}")
-        cp = C.cat_perf(joined, "이미지유형", metric, min_n=int(min_n))
-        if cp.empty:
+        st.subheader(f"표현형식별 {metric}")
+        ap = C.appeal_perf(joined, metric, tags=C.FORM_TAGS, min_n=int(min_n))
+        if ap.empty:
             st.info("표본이 부족해요.")
         else:
+            appeal_table(ap, "질문형·느낌표·숫자·영문·이모지 등 '표현 방식'이 성과에 주는 영향.")
+
+    with tab3:
+        st.subheader(f"이미지속성별 {metric}")
+        st.caption("소재안 컬럼 기반(이미지유형·상품수·로고). 타이포·레이아웃 등은 Vision 연동(v2)에서 추가.")
+        for col, label in [("이미지유형", "이미지유형"), ("상품수구간", "노출 상품 수"),
+                           ("로고구분", "로고 종류")]:
+            cp = C.cat_perf(joined, col, metric, min_n=int(min_n))
+            if cp.empty:
+                continue
+            st.markdown(f"**{label}**")
             cp2 = cp.copy(); cp2[metric] = cp[metric].map(lambda v: fmt_metric(v, metric))
             cp2["노출"] = cp["노출"].map(lambda v: f"{v:,.0f}")
             st.dataframe(cp2, use_container_width=True, hide_index=True)
 
-    with tab3:
+    with tab4:
         st.subheader("소재 리더보드 (조인된 개별 소재)")
         lb = joined.copy()
         lb["CTR"] = lb["CTR"].map(lambda v: fmt_metric(v, "CTR"))
         lb["ROAS"] = lb["ROAS"].map(lambda v: fmt_metric(v, "ROAS"))
         lb["노출"] = pd.to_numeric(lb["지표_노출수"], errors="coerce")
-        st.dataframe(
-            lb.sort_values("노출", ascending=False)[
-                ["기획전번호", "소재N", "브랜드", "이미지유형", "소구형_수동",
-                 "메인카피", "서브카피", "노출", "CTR", "ROAS"]],
-            use_container_width=True, hide_index=True)
+        cols = ["기획전번호", "소재N", "브랜드", "이미지유형", "상품수", "로고구분", "소구개수",
+                "메인카피", "서브카피", "노출", "CTR", "ROAS"]
+        st.dataframe(lb.sort_values("노출", ascending=False)[[c for c in cols if c in lb.columns]],
+                     use_container_width=True, hide_index=True)
 
-    with tab4:
-        st.subheader("💡 제안 — 밀어볼 소구형")
-        ap = C.appeal_perf(joined, metric, min_n=int(min_n))
-        hb = C.METRICS[metric][2]
+    with tab5:
+        st.subheader(f"💡 제안 — {metric} 밀어볼 소구/속성")
+        ap = C.appeal_perf(joined, metric, tags=list(C.DA_KW), min_n=int(min_n))
         good = ap[(ap["q"].notna()) & (ap["q"] < 0.10) & ((ap["차이"] > 0) == hb)] if len(ap) else ap
         if len(good):
-            for _, r in good.head(5).iterrows():
+            for _, r in good.head(6).iterrows():
                 st.markdown(f"- **{r['태그']}** — {metric} 우위 ({C.sig_label(r['q'])}, 소재 {int(r['보유n'])}건)")
         else:
-            st.info("아직 통계적으로 뚜렷하게 이기는 소구형이 없어요(표본 누적 필요). "
-                    "아래는 방향성 상위입니다:")
-            if len(ap):
-                topk = ap.head(3)
-                for _, r in topk.iterrows():
-                    d = fmt_metric(r["차이"], metric) if metric == "ROAS" else f"{r['차이']*100:+.2f}%p"
-                    st.markdown(f"- {r['태그']} — {metric} {d} (소재 {int(r['보유n'])}건)")
+            st.info("아직 통계적으로 뚜렷한 승자는 없어요(주차 누적 시 신뢰도↑). 방향성 상위:")
+            for _, r in ap.head(4).iterrows():
+                d = fmt_metric(r["차이"], metric) if metric == "ROAS" else f"{r['차이']*100:+.2f}%p"
+                st.markdown(f"- {r['태그']} — {metric} {d} (소재 {int(r['보유n'])}건)")
 
 
 if __name__ == "__main__":
