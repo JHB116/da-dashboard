@@ -277,7 +277,55 @@ def derive_attrs(sojae_df):
     if "로고" in df.columns:
         df["로고구분"] = df["로고"].map(lambda v: {"LF": "LF로고", "BR": "브랜드로고"}
                                     .get(_s(v).strip().upper(), _s(v).strip() or "없음"))
+    # ── 카피 심화 속성 (메인+서브) ──
+    main = df["메인카피"].map(_s) if "메인카피" in df.columns else pd.Series([""] * len(df))
+    both = (main + " " + (df["서브카피"].map(_s) if "서브카피" in df.columns else "")).str.strip()
+    df["할인율구간"] = both.map(discount_bucket)
+    df["문장형"] = main.map(sentence_type)
+    df["브랜드노출수"] = both.map(count_brands)
+    df["브랜드구성"] = df["브랜드노출수"].map(lambda n: "멀티브랜드" if n >= 2 else ("단일브랜드" if n == 1 else "브랜드무노출"))
     return df
+
+
+# 카피 심화 분류 헬퍼 ──────────────────────────────────────────
+BRANDS = ["헤지스", "닥스", "질스튜어트", "질 스튜어트", "킨", "바네사브루노", "이자벨마랑", "데상트",
+          "르꼬끄", "TNGT", "티엔지티", "라코스테", "에트로", "프라다", "질샌더", "지방시", "페라가모",
+          "바버", "빈스", "알레그리", "리복", "크래쉬배기지", "벨류엣", "콜롬보", "애타트", "아떼",
+          "PXG", "타이틀리스트", "챌린저", "볼빅", "에코", "더블플래그", "리스", "마에스트로", "라움"]
+_BRAND_RE = re.compile("|".join(re.escape(b) for b in sorted(BRANDS, key=len, reverse=True)))
+_PCT_ALL = re.compile(r"(\d{1,3})\s*[%％]")
+# 명령·청유형 어미/표현
+_IMPER_RE = re.compile(r"(하세요|보세요|담으세요|가세요|해보세요|만나보|받아가|보러가|확인하|시작|주목|"
+                       r"놓치지|드세요|하러|즐기세요|누리세요|잡으세요)")
+
+
+def discount_bucket(text):
+    """카피의 최대 할인율 → 구간. 없으면 '할인율없음'."""
+    t = _s(text)
+    vals = [int(m) for m in _PCT_ALL.findall(t) if int(m) <= 100]
+    if "반값" in t:
+        vals.append(50)
+    if not vals:
+        return "할인율없음"
+    mx = max(vals)
+    if mx <= 30: return "~30%"
+    if mx <= 50: return "~50%"
+    if mx <= 70: return "~70%"
+    return "~80%+"
+
+
+def sentence_type(main):
+    """메인카피 문장형: 감탄형/의문형/명령·청유형/평서형."""
+    t = _s(main).strip()
+    if "!" in t or "！" in t: return "감탄형"
+    if "?" in t or "？" in t: return "의문형"
+    if _IMPER_RE.search(t):   return "명령·청유형"
+    return "평서형"
+
+
+def count_brands(text):
+    """카피에 등장한 브랜드명 개수(중복 제거)."""
+    return len(set(_BRAND_RE.findall(_s(text))))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -371,6 +419,104 @@ def sig_label(q):
     if q < 0.05: return "p<0.05 · 유의함"
     if q < 0.10: return "p<0.10 · 약한신호"
     return f"q={q:.2f} · 유의하지않음"
+
+
+# ── 단어 단위 성과 (발송 대시보드 keyword_perf 이식) ──────────────
+_STOP = set(["외", "및", "the", "of", "up", "to", "for", "with", "and", "LF몰", "LFmall",
+             "지금", "더", "이", "그", "저", "수", "것", "때", "안"])
+_WORD_RE = re.compile(r"[가-힣A-Za-z][가-힣A-Za-z0-9]{1,}")
+
+
+def keyword_perf(joined, metric_label, main_col="메인카피", sub_col="서브카피",
+                 min_n=5, top=30):
+    """카피 단어별 '포함 vs 미포함' 가중 성과 + 유의성. 어떤 단어가 지표를 올리나."""
+    num, den, higher = METRICS[metric_label]
+    texts = (joined[main_col].map(_s) + " " + joined.get(sub_col, "").map(_s)) \
+        if main_col in joined.columns else pd.Series([""] * len(joined), index=joined.index)
+    word_sets = texts.map(lambda t: set(w for w in _WORD_RE.findall(t)
+                                        if w not in _STOP and len(w) >= 2))
+    from collections import Counter
+    cnt = Counter(w for ws in word_sets for w in ws)
+    per_row = pd.Series(_rate(joined[num], joined[den]), index=joined.index)
+    rows, pv = [], []
+    for w, c in cnt.items():
+        if c < min_n or len(joined) - c < 3:
+            continue
+        has = word_sets.map(lambda s: w in s)
+        wh = _rate(joined.loc[has, num].sum(), joined.loc[has, den].sum())
+        wn = _rate(joined.loc[~has, num].sum(), joined.loc[~has, den].sum())
+        p = _welch_p(per_row[has].values, per_row[~has].values)
+        rows.append({"단어": w, "포함가중": float(wh), "포함n": int(c),
+                     "미포함가중": float(wn), "차이": float(wh) - float(wn), "p": p})
+        pv.append(p)
+    for r, q in zip(rows, fdr_bh(pv)):
+        r["q"] = q
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values("차이", ascending=not higher).head(top).reset_index(drop=True)
+
+
+# ── 교차분석: 태그(bool) × 범주형 → 가중 성과 매트릭스 ──────────────
+def cross_perf(joined, tag_cols, cat_col, metric_label, min_n=3):
+    """행=소구형(각 bool True인 소재), 열=범주형 값. 셀=가중 성과(표본 min_n 미만은 NaN)."""
+    num, den, _ = METRICS[metric_label]
+    cats = [c for c in joined[cat_col].dropna().unique() if str(c).strip()]
+    out = {}
+    for tag in tag_cols:
+        if tag not in joined.columns:
+            continue
+        sub_t = joined[joined[tag].fillna(False).astype(bool)]
+        row = {}
+        for cv in cats:
+            cell = sub_t[sub_t[cat_col] == cv]
+            row[cv] = float(_rate(cell[num].sum(), cell[den].sum())) if len(cell) >= min_n else np.nan
+        out[tag] = row
+    return pd.DataFrame(out).T  # index=소구형, columns=범주
+
+
+# ── OLS 순효과: 교란(브랜드·카테고리·이미지유형) 통제 후 소구형 계수 ──
+def ols_effects(joined, tag_cols, control_cols, metric_label, min_n=4):
+    """소구형 더미 + 통제변수 더미로 metric 회귀 → 소구형별 순효과(계수)와 근사 유의성.
+    통제 후에도 남는 소구형의 순수 기여를 본다(단순 비교의 착시 제거)."""
+    num, den, higher = METRICS[metric_label]
+    y = pd.Series(_rate(joined[num], joined[den]), index=joined.index)
+    mask = y.notna()
+    d = joined[mask].copy(); y = y[mask].values
+    if len(y) < min_n * 2:
+        return pd.DataFrame()
+    X_parts, names = [np.ones((len(d), 1))], ["const"]
+    tags_used = []
+    for t in tag_cols:
+        if t in d.columns and d[t].fillna(False).astype(bool).sum() >= min_n:
+            X_parts.append(d[t].fillna(False).astype(float).values.reshape(-1, 1))
+            names.append(t); tags_used.append(t)
+    for c in control_cols:
+        if c not in d.columns:
+            continue
+        dummies = pd.get_dummies(d[c].astype(str), prefix=c, drop_first=True)
+        if len(dummies.columns):
+            X_parts.append(dummies.values.astype(float)); names += list(dummies.columns)
+    X = np.hstack(X_parts)
+    try:
+        beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        resid = y - X @ beta
+        dofr = max(len(y) - X.shape[1], 1)
+        sigma2 = (resid @ resid) / dofr
+        XtX_inv = np.linalg.pinv(X.T @ X)
+        se = np.sqrt(np.maximum(np.diag(XtX_inv) * sigma2, 0))
+    except Exception:
+        return pd.DataFrame()
+    rows = []
+    for t in tags_used:
+        i = names.index(t)
+        coef, s = beta[i], se[i]
+        from math import erf, sqrt
+        z = coef / s if s > 0 else 0.0
+        p = 2 * (1 - 0.5 * (1 + erf(abs(z) / sqrt(2))))
+        rows.append({"소구형": t, "순효과(계수)": float(coef), "p": float(p)})
+    out = pd.DataFrame(rows)
+    return out.sort_values("순효과(계수)", ascending=not higher).reset_index(drop=True) if len(out) else out
 
 
 # ══════════════════════════════════════════════════════════════════════
