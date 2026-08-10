@@ -2703,9 +2703,15 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
               "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0], daily_avg)}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
+    period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
         g = agg(work, cols[:d])
-        g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
+        # 기간(일/주/월) 단계는 광고비 0인 날짜(전환만 있는 날 등)도 모두 표시해야
+        # 부모의 '일평균'이 보이는 일자 행들의 평균과 정확히 일치한다.
+        # (그 외 차원은 광고비 0 그룹을 제외해 잡음 방지)
+        if dims[d - 1][1] not in period_cols:
+            g = g[g["지표_광고비"].fillna(0) > 0]
+        g = g.sort_values("지표_광고비", ascending=False)
         anc = cols[:d - 1]
         if anc:
             g["_rk"] = g.groupby(anc, dropna=False).cumcount()
