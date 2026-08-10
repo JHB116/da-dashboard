@@ -6,7 +6,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
 import re
+import json
 import calendar
+from streamlit.components.v1 import html as _components_html
 
 st.set_page_config(
     page_title="DA 광고 실적 대시보드",
@@ -2610,14 +2612,15 @@ DRILL_DIM_OPTS = {
 DRILL_DEFAULT = ["채널", "매체", "상품", "—", "—", "기간(일)"]
 DRILL_NONE = "—"
 DRILL_SLOTS = 6                      # 펼치기 단계 최대 개수
-DRILL_EXP_KEY = "drill_expanded"     # 펼쳐진 노드 키 집합(session_state)
 
 
 def _drill_disp(v) -> str:
     if v is None or (not isinstance(v, str) and pd.isna(v)):
         return "(미지정)"
     s = str(v)
-    return "(미지정)" if s.strip() in ("", "nan", "None", "-") else s
+    if s.strip() in ("", "nan", "None", "-"):
+        return "(미지정)"
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _drill_token(v) -> str:
@@ -2637,29 +2640,6 @@ def _drill_series(df_sub, col):
     return df_sub[col]
 
 
-def _drill_mask(series, v):
-    """그룹 값 v에 해당하는 행 마스크. 결측(NaN)도 정확히 매칭한다.
-    (pandas 신규 str dtype에서 astype(str)이 결측을 'nan'으로 만들지 않아
-     문자열 비교만으로는 결측 그룹이 통째로 누락되는 문제를 방지.)"""
-    if v is None or (not isinstance(v, str) and pd.isna(v)):
-        return series.isna()
-    return series.astype("object").astype(str) == str(v)
-
-
-def _drill_children(df_sub, col, top_n):
-    """col 기준으로 집계한 자식 목록(광고비>0, 광고비 큰 순, 상위 top_n)."""
-    d = df_sub.assign(_g=_drill_series(df_sub, col))
-    g = agg(d, ["_g"])
-    g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
-    if top_n:
-        g = g.head(top_n)
-    return g.rename(columns={"_g": "_name"})
-
-
-def _drill_node_key(path, di, val):
-    return "|".join(path + (f"{di}={_drill_token(val)}",))
-
-
 # 계층 표에 함께 보여줄 실적 지표(표기, 원본컬럼, 종류) — 이름 왼쪽, 지표 오른쪽
 DRILL_SHOW = [
     ("광고비",      "지표_광고비",              "money"),
@@ -2671,85 +2651,154 @@ DRILL_SHOW = [
     ("클릭수",      "지표_클릭수",              "num"),
     ("CTR",        "CTR",                    "pct2"),
 ]
-DRILL_WIDTHS = [3.0] + [1.15] * len(DRILL_SHOW)
-
-
-def _drill_metric_cols(cols, series, start=1):
-    for i, (_label, col, kind) in enumerate(DRILL_SHOW):
+def _drill_cells(series):
+    """DRILL_SHOW 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
+    out = []
+    for _label, col, kind in DRILL_SHOW:
         v = series.get(col, np.nan) if series is not None else np.nan
         txt = _fmt_kind(v, kind)
-        style = "text-align:right"
         if col == "순결제ROAS" and not pd.isna(v):
-            style += f";color:{'#16A34A' if v >= 1 else '#DC2626'};font-weight:600"
-        cols[start + i].markdown(f"<div style='{style}'>{txt}</div>",
-                                 unsafe_allow_html=True)
+            txt = f'<span class="{"up" if v >= 1 else "dn"}">{txt}</span>'
+        out.append(txt)
+    return out
 
 
-def _drill_head():
-    cols = st.columns(DRILL_WIDTHS, vertical_alignment="center")
-    cols[0].markdown("**구분** <small style='color:#6B7280'>(이름 클릭 → 펼침)</small>",
-                     unsafe_allow_html=True)
-    for i, (label, _c, _k) in enumerate(DRILL_SHOW):
-        cols[1 + i].markdown(f"<div style='text-align:right'><b>{label}</b></div>",
-                             unsafe_allow_html=True)
+def _drill_build_tree(df, dims, top_n):
+    """차원 순서대로 계층 노드 목록을 만든다. 각 노드:
+    {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지."""
+    work = df.copy()
+    cols = []
+    for i, (_lab, col) in enumerate(dims):
+        cn = f"_d{i}"
+        work[cn] = _drill_series(work, col).astype("object")
+        cols.append(cn)
+
+    nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
+              "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0])}]
+    prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
+    for d in range(1, len(dims) + 1):
+        g = agg(work, cols[:d])
+        g = g[g["지표_광고비"].fillna(0) > 0].sort_values("지표_광고비", ascending=False)
+        anc = cols[:d - 1]
+        if anc:
+            g["_rk"] = g.groupby(anc, dropna=False).cumcount()
+        else:
+            g = g.reset_index(drop=True)
+            g["_rk"] = range(len(g))
+        if top_n:
+            g = g[g["_rk"] < top_n]
+        new_kept = {}
+        for _, r in g.iterrows():
+            atuple = tuple(_drill_token(r[c]) for c in anc)
+            pid = prev_kept.get(atuple)
+            if pid is None:
+                continue
+            tok = _drill_token(r[cols[d - 1]])
+            nid = f"{pid}|{d - 1}={tok}"
+            nodes.append({"id": nid, "parent": pid, "depth": d,
+                          "name": _drill_disp(r[cols[d - 1]]), "cells": _drill_cells(r)})
+            new_kept[atuple + (tok,)] = nid
+        prev_kept = new_kept
+        if not prev_kept:
+            break
+
+    parents = {n["parent"] for n in nodes if n["parent"]}
+    for n in nodes:
+        n["hasChildren"] = n["id"] in parents
+    return nodes
 
 
-def _drill_render(df_sub, dims, di, path, level, top_n, expanded):
-    """현재 단계 자식들을 '이름(텍스트 클릭) + 실적지표' 행으로 렌더. 펼친 노드는 재귀."""
-    _label, col = dims[di]
-    g = _drill_children(df_sub, col, top_n)
-    last_dim = di == len(dims) - 1
-    for _, r in g.iterrows():
-        name = _drill_disp(r["_name"])
-        has_children = not last_dim
-        nkey = _drill_node_key(path, di, r["_name"])
-        is_exp = nkey in expanded
-        indent = "　" * (level - 1)
-        rc = st.columns(DRILL_WIDTHS, vertical_alignment="center")
-        with rc[0]:
-            if has_children:
-                sym = "▼" if is_exp else "▶"
-                # 테두리 없는 텍스트 버튼(type=tertiary) — 일반 표처럼 보이게
-                if st.button(f"{indent}{sym} {name}", key=f"drill_btn_{nkey}",
-                             use_container_width=False, type="tertiary"):
-                    expanded.discard(nkey) if is_exp else expanded.add(nkey)
-                    st.rerun()
-            else:
-                rc[0].markdown(
-                    f"<div style='color:#6B7280;padding:2px 0'>{indent}　{name}</div>",
-                    unsafe_allow_html=True)
-        _drill_metric_cols(rc, r)
-        if has_children and is_exp:
-            sub2 = df_sub[_drill_mask(_drill_series(df_sub, col), r["_name"])]
-            _drill_render(sub2, dims, di + 1,
-                          path + (f"{di}={_drill_token(r['_name'])}",),
-                          level + 1, top_n, expanded)
-
-
-def _drill_keys_all(df, dims, top_n):
-    """모든 노드를 펼치는 키 집합(마지막 차원 제외 — 리프는 자식이 없음)."""
-    exp = {"ROOT"}
-
-    def walk(sub, di, path):
-        if di >= len(dims) - 1:   # 마지막 차원은 리프이므로 펼칠 필요 없음
-            return
-        col = dims[di][1]
-        for _, r in _drill_children(sub, col, top_n).iterrows():
-            exp.add(_drill_node_key(path, di, r["_name"]))
-            walk(sub[_drill_mask(_drill_series(sub, col), r["_name"])], di + 1,
-                 path + (f"{di}={_drill_token(r['_name'])}",))
-
-    walk(df, 0, ("ROOT",))
-    return exp
-
-
-def _drill_keys_first(df, dims, top_n):
-    """기본 펼침: 전체 + 첫 차원 노드들(→ 둘째 차원까지 보이게)."""
-    exp = {"ROOT"}
-    if len(dims) >= 1:
-        for _, r in _drill_children(df, dims[0][1], top_n).iterrows():
-            exp.add(_drill_node_key(("ROOT",), 0, r["_name"]))
-    return exp
+def _drill_html(nodes):
+    """계층 노드를 클릭-펼침 가능한 HTML 표로. (펼침/접힘은 브라우저에서 즉시)"""
+    headers = "".join(f"<th>{l}</th>" for l, _c, _k in DRILL_SHOW)
+    data = json.dumps(nodes, ensure_ascii=False)
+    return """
+<div class="viz">
+  <div class="bar">
+    <button id="expandAll">모두 펼치기</button>
+    <button id="collapseAll">모두 접기</button>
+    <span class="hint">이름을 클릭하면 그 아래 단계가 펼쳐집니다.</span>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th class="name">구분</th>__HEADERS__</tr></thead>
+      <tbody id="tb"></tbody>
+    </table>
+  </div>
+</div>
+<style>
+  :root{color-scheme:light dark}
+  .viz{font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+    font-variant-numeric:tabular-nums;color:#111}
+  .bar{display:flex;gap:8px;align-items:center;margin:0 0 8px}
+  .bar button{font:inherit;font-size:12px;padding:4px 10px;border:1px solid #d5d7db;
+    border-radius:7px;background:#fff;color:#374151;cursor:pointer}
+  .bar button:hover{border-color:#2563EB;color:#2563EB}
+  .bar .hint{font-size:11.5px;color:#6B7280}
+  .scroll{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;max-height:560px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
+  th,td{padding:7px 12px;border-bottom:1px solid #eef0f2;text-align:right;font-weight:500}
+  thead th{position:sticky;top:0;background:#f7f8fa;color:#6b7280;font-size:11px;
+    font-weight:650;z-index:2}
+  th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1}
+  thead th.name{z-index:3;background:#f7f8fa}
+  tbody tr:hover td{background:#f5f8ff}
+  tbody tr:hover td.name{background:#f5f8ff}
+  tr.d0 td{font-weight:750;background:#fbfbfc}
+  tr.d0 td.name{background:#fbfbfc}
+  .tw{display:inline-flex;align-items:center;gap:6px;cursor:default}
+  .tw.clk{cursor:pointer}
+  .car{display:inline-block;width:12px;color:#9aa0a6;font-size:10px;transition:transform .12s}
+  .car.o{transform:rotate(90deg)}
+  .nm{color:#111}
+  .tw.clk:hover .nm{color:#2563EB}
+  .up{color:#0f7a52;font-weight:650}
+  .dn{color:#c0392b;font-weight:650}
+  @media (prefers-color-scheme:dark){
+    .viz{color:#e8e8e3}
+    .bar button{background:#232322;border-color:#3a3a37;color:#c3c2b7}
+    .scroll{border-color:#33332f}
+    th,td{border-bottom-color:#2a2a27}
+    thead th{background:#232322;color:#9a998f}
+    th.name,td.name{background:#1a1a19}
+    thead th.name{background:#232322}
+    tr.d0 td,tr.d0 td.name{background:#202020}
+    tbody tr:hover td,tbody tr:hover td.name{background:#22314a}
+    .nm{color:#f3f3ee}.car{color:#77766f}
+    .up{color:#57cd9a}.dn{color:#f0716d}
+  }
+</style>
+<script>
+  const NODES=__DATA__, byId={}, exp={};
+  NODES.forEach(n=>{byId[n.id]=n; exp[n.id]=(n.depth===0);});
+  const tb=document.getElementById('tb');
+  function visible(n){
+    let p=n;
+    while(p && p.depth>0){ p=byId[p.parent]; if(!p) break; if(!exp[p.id]) return false; }
+    return true;
+  }
+  function rowHTML(n){
+    const car = n.hasChildren
+      ? `<span class="car ${exp[n.id]?'o':''}">▶</span>` : `<span class="car"></span>`;
+    const pad = 4 + n.depth*17;
+    const nm = `<span class="tw ${n.hasChildren?'clk':''}" data-id="${n.id}"
+      style="padding-left:${pad}px">${car}<span class="nm">${n.name}</span></span>`;
+    const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
+    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${cells}</tr>`;
+  }
+  function render(){
+    tb.innerHTML = NODES.filter(visible).map(rowHTML).join('');
+    tb.querySelectorAll('.tw.clk').forEach(el=>el.onclick=()=>{
+      const id=el.dataset.id; exp[id]=!exp[id]; render();
+    });
+  }
+  document.getElementById('expandAll').onclick=()=>{
+    NODES.forEach(n=>{if(n.hasChildren)exp[n.id]=true;}); render();};
+  document.getElementById('collapseAll').onclick=()=>{
+    NODES.forEach(n=>{exp[n.id]=(n.depth===0);}); render();};
+  render();
+</script>
+""".replace("__HEADERS__", headers).replace("__DATA__", data)
 
 
 def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
@@ -2779,8 +2828,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    b1, b2, b3 = st.columns([1.1, 1.1, 3])
-    topn = b3.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=3, key="drill_topn",
+    topn = st.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
 
@@ -2789,33 +2837,10 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         return
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
-    # 순서/개수가 바뀌면 기본 펼침(첫 단계까지)으로 리셋
-    snap = (list(order), (top_n or "all"))
-    if (DRILL_EXP_KEY not in st.session_state
-            or st.session_state.get("drill_snap") != snap):
-        st.session_state[DRILL_EXP_KEY] = _drill_keys_first(df, dims, top_n)
-        st.session_state["drill_snap"] = snap
-    expanded = st.session_state[DRILL_EXP_KEY]
-
-    if b1.button("⊞ 모두 펼치기", key="drill_btn_expandall", use_container_width=True):
-        st.session_state[DRILL_EXP_KEY] = _drill_keys_all(df, dims, top_n)
-        st.rerun()
-    if b2.button("⊟ 모두 접기", key="drill_btn_collapseall", use_container_width=True):
-        st.session_state[DRILL_EXP_KEY] = {"ROOT"}
-        st.rerun()
-
     st.divider()
-    _drill_head()
-    st.markdown("<hr style='margin:3px 0'>", unsafe_allow_html=True)
-
-    # 최상단 전체 TOTAL + 하위 계층
-    root_series = agg(df.assign(_all="_"), ["_all"]).iloc[0] if not df.empty else None
-    rc = st.columns(DRILL_WIDTHS, vertical_alignment="center")
-    rc[0].markdown("**📊 전체 TOTAL**")
-    _drill_metric_cols(rc, root_series)
-    _drill_render(df, dims, 0, ("ROOT",), 1, top_n, expanded)
-
-    st.caption("ℹ️ 이름(▶/▼)을 클릭하면 그 아래 단계가 펼쳐집니다. "
+    nodes = _drill_build_tree(df, dims, top_n)
+    _components_html(_drill_html(nodes), height=640, scrolling=False)
+    st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
 
 
