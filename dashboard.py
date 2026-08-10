@@ -2664,10 +2664,17 @@ def _drill_cells(series):
     return out
 
 
-def _drill_build_tree(df, dims, top_n, impr_only=False):
+def _drill_natstr(s):
+    """자연 정렬용 키: 숫자 구간을 0-패딩해 문자열 비교로도 1<2<…<10<12 가 되게.
+    (예: '더블플래그1월' → '더블플래그000000000001월')"""
+    return re.sub(r"\d+", lambda m: m.group().zfill(12), str(s))
+
+
+def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비"):
     """차원 순서대로 계층 노드 목록을 만든다. 각 노드:
     {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지.
-    impr_only=True면 노출수>0 행만 사용."""
+    impr_only=True면 노출수>0 행만 사용. sort_by: '광고비'(큰 순) | '이름'(기간·가나다순).
+    상위 top_n 선정은 항상 광고비 기준, 표시 순서만 sort_by를 따른다."""
     work = df.copy()
     if impr_only:
         work = work[work["지표_노출수"].fillna(0) > 0]
@@ -2694,6 +2701,10 @@ def _drill_build_tree(df, dims, top_n, impr_only=False):
             g["_rk"] = range(len(g))
         if top_n:
             g = g[g["_rk"] < top_n]
+        # 표시 순서: 이름순이면 부모 내에서 자연정렬(기간/월 순), 아니면 광고비 큰 순 유지
+        if sort_by == "이름":
+            g = g.assign(_sk=g[cols[d - 1]].astype("object").map(_drill_natstr))
+            g = g.sort_values(anc + ["_sk"]) if anc else g.sort_values("_sk")
         new_kept = {}
         for _, r in g.iterrows():
             atuple = tuple(_drill_token(r[c]) for c in anc)
@@ -2839,11 +2850,16 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    o1, o2 = st.columns([1.4, 2])
+    o1, o2, o3 = st.columns([1.3, 1.5, 1.4])
     topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
-    impr_only = o2.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
+    sort_lab = o2.selectbox("정렬 기준", ["광고비 큰 순", "이름 순(기간·가나다)"], index=0,
+                            key="drill_sort",
+                            help="이름 순은 숫자를 인식해 …1월 < …2월 < … < …12월 순으로 정렬합니다. "
+                                 "(상위 N개 선정은 항상 광고비 기준)")
+    sort_by = "이름" if sort_lab.startswith("이름") else "광고비"
+    impr_only = o3.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다.")
 
     if not order:
@@ -2852,7 +2868,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
     st.divider()
-    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only)
+    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by)
     _components_html(_drill_html(nodes), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
