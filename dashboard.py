@@ -1734,10 +1734,12 @@ def _apply_name_search(out, col, query):
 
 
 def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
-                 media_default=None, extra_specs=None) -> pd.DataFrame:
+                 media_default=None, extra_specs=None, col_defaults=None) -> pd.DataFrame:
     """접이식 필터. 선택값을 df에 적용해 반환.
     - 대용량 컬럼(캠페인명 등)은 기본 비움: 검색(타이핑)해서 일부만 클릭 선택, 비우면 전체.
-    - 그 외 컬럼은 기본 전체 선택."""
+    - 그 외 컬럼은 기본 전체 선택.
+    - col_defaults={컬럼: [값,…]}: 해당 컬럼의 최초 기본 선택값 지정(첫 렌더에만 적용).
+      (지정값 중 실제 존재하는 것만 사용, 하나도 없으면 전체 선택으로 폴백)"""
     specs = _PAGE_FILTER_SPECS + list(extra_specs or [])
     name_specs = [(l, c) for (l, c) in specs if c in NAME_SEARCH_COLS and c in df.columns]
     grid_specs = [(l, c) for (l, c) in specs if c not in NAME_SEARCH_COLS]
@@ -1770,6 +1772,10 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                 placeholder = "검색해서 선택 · 비우면 전체" if hi_card else None
                 if label == "매체명" and media_default:
                     d = [m for m in opts if any(x in str(m) for x in media_default)]
+                    if d:
+                        default = d
+                if col_defaults and col in col_defaults:
+                    d = [v for v in opts if str(v) in {str(x) for x in col_defaults[col]}]
                     if d:
                         default = d
                 with c:
@@ -2609,7 +2615,7 @@ DRILL_DIM_OPTS = {
     "기간(주)": "__week__",
     "기간(월)": "__month__",
 }
-DRILL_DEFAULT = ["채널", "매체", "상품", "캠페인", "기간(일)", "—"]
+DRILL_DEFAULT = ["비용출처", "채널", "매체", "상품", "캠페인", "—"]
 DRILL_NONE = "—"
 DRILL_SLOTS = 6                      # 펼치기 단계 최대 개수
 
@@ -2855,7 +2861,8 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         st.warning("데이터가 없습니다.")
         return
 
-    base = page_filters(df, "drillf", expanded=False)
+    base = page_filters(df, "drillf", expanded=False,
+                        col_defaults={"구분_채널": ["포탈"]})
     df = date_range_filter(base, key_prefix="drill", default_preset="이번달")
     if df.empty:
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
