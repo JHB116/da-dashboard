@@ -2609,7 +2609,7 @@ DRILL_DIM_OPTS = {
     "기간(주)": "__week__",
     "기간(월)": "__month__",
 }
-DRILL_DEFAULT = ["채널", "매체", "상품", "—", "—", "기간(일)"]
+DRILL_DEFAULT = ["채널", "매체", "상품", "캠페인", "기간(일)", "—"]
 DRILL_NONE = "—"
 DRILL_SLOTS = 6                      # 펼치기 단계 최대 개수
 
@@ -2652,8 +2652,20 @@ _DETAIL_BY_LABEL = {d[0]: d for d in DETAIL_SPEC}
 DRILL_SHOW = [_DETAIL_BY_LABEL[l] for l in _DRILL_METRIC_LABELS if l in _DETAIL_BY_LABEL]
 
 
-def _drill_cells(series):
+def _drill_daily_avg(series):
+    """합계형 지표를 집행일수로 나눈 '일평균' 시리즈로 변환(비율지표는 자동 유지).
+    합산값을 일수로 나눠 calc_kpi를 다시 태우므로 CTR·ROAS·객단가 등 비율은 그대로."""
+    days = series.get("집행일수", np.nan)
+    if not days or pd.isna(days) or days <= 0:
+        return series
+    base = {c: (series.get(c, np.nan) / days) for c in AGG_COLS}
+    return calc_kpi(pd.DataFrame([base])).iloc[0]
+
+
+def _drill_cells(series, daily_avg=False):
     """DRILL_SHOW 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
+    if daily_avg and series is not None:
+        series = _drill_daily_avg(series)
     out = []
     for _label, col, kind in DRILL_SHOW:
         v = series.get(col, np.nan) if series is not None else np.nan
@@ -2670,10 +2682,11 @@ def _drill_natstr(s):
     return re.sub(r"\d+", lambda m: m.group().zfill(12), str(s))
 
 
-def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비"):
+def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False):
     """차원 순서대로 계층 노드 목록을 만든다. 각 노드:
     {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지.
     impr_only=True면 노출수>0 행만 사용. sort_by: '광고비'(큰 순) | '이름'(기간·가나다순).
+    daily_avg=True면 합계형 지표를 집행일수로 나눈 일평균으로 표시.
     상위 top_n 선정은 항상 광고비 기준, 표시 순서만 sort_by를 따른다."""
     work = df.copy()
     if impr_only:
@@ -2688,7 +2701,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비"):
         cols.append(cn)
 
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-              "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0])}]
+              "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0], daily_avg)}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     for d in range(1, len(dims) + 1):
         g = agg(work, cols[:d])
@@ -2714,7 +2727,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비"):
             tok = _drill_token(r[cols[d - 1]])
             nid = f"{pid}|{d - 1}={tok}"
             nodes.append({"id": nid, "parent": pid, "depth": d,
-                          "name": _drill_disp(r[cols[d - 1]]), "cells": _drill_cells(r)})
+                          "name": _drill_disp(r[cols[d - 1]]),
+                          "cells": _drill_cells(r, daily_avg)})
             new_kept[atuple + (tok,)] = nid
         prev_kept = new_kept
         if not prev_kept:
@@ -2789,8 +2803,8 @@ def _drill_html(nodes):
 <script>
   const NODES=__DATA__, byId={}, kids={}, exp={};
   NODES.forEach(n=>{
-    byId[n.id]=n; exp[n.id]=(n.depth===0);
-    (kids[n.parent]=kids[n.parent]||[]).push(n);   // 부모별 자식(광고비 큰 순 유지)
+    byId[n.id]=n; exp[n.id]=true;                  // 기본: 전부 펼침
+    (kids[n.parent]=kids[n.parent]||[]).push(n);   // 부모별 자식(정렬 순서 유지)
   });
   const tb=document.getElementById('tb');
   function rowHTML(n){
@@ -2850,16 +2864,19 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    o1, o2, o3 = st.columns([1.3, 1.5, 1.4])
+    o1, o2, o3, o4 = st.columns([1.3, 1.6, 1.3, 1.3])
     topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
-    sort_lab = o2.selectbox("정렬 기준", ["광고비 큰 순", "이름 순(기간·가나다)"], index=0,
+    sort_lab = o2.selectbox("정렬 기준", ["이름 순(기간·가나다)", "광고비 큰 순"], index=0,
                             key="drill_sort",
                             help="이름 순은 숫자를 인식해 …1월 < …2월 < … < …12월 순으로 정렬합니다. "
                                  "(상위 N개 선정은 항상 광고비 기준)")
     sort_by = "이름" if sort_lab.startswith("이름") else "광고비"
-    impr_only = o3.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
+    daily_avg = o3.checkbox("일평균으로 보기", value=False, key="drill_daily_avg",
+                            help="합계형 지표(노출·클릭·광고비·거래액 등)를 집행일수로 나눈 "
+                                 "일평균으로 표시합니다. 비율지표(CTR·ROAS·객단가 등)는 그대로.")
+    impr_only = o4.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다.")
 
     if not order:
@@ -2868,7 +2885,8 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
     st.divider()
-    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by)
+    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
+                              daily_avg=daily_avg)
     _components_html(_drill_html(nodes), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
