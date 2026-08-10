@@ -2703,14 +2703,18 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
               "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0], daily_avg)}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
+    # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
+    # (impr_only면 위에서 work를 노출수>0로 이미 걸렀으므로 집행일수·일자행·일평균이
+    #  모두 노출수>0 날짜 기준으로 일관된다.)
+    base_metric = "지표_노출수" if impr_only else "지표_광고비"
     period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
         g = agg(work, cols[:d])
-        # 기간(일/주/월) 단계는 광고비 0인 날짜(전환만 있는 날 등)도 모두 표시해야
+        # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시해야
         # 부모의 '일평균'이 보이는 일자 행들의 평균과 정확히 일치한다.
-        # (그 외 차원은 광고비 0 그룹을 제외해 잡음 방지)
+        # (그 외 차원은 기준 0 그룹을 제외해 잡음 방지)
         if dims[d - 1][1] not in period_cols:
-            g = g[g["지표_광고비"].fillna(0) > 0]
+            g = g[g[base_metric].fillna(0) > 0]
         g = g.sort_values("지표_광고비", ascending=False)
         anc = cols[:d - 1]
         if anc:
@@ -2882,8 +2886,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     daily_avg = o3.checkbox("일평균으로 보기", value=False, key="drill_daily_avg",
                             help="합계형 지표(노출·클릭·광고비·거래액 등)를 집행일수로 나눈 "
                                  "일평균으로 표시합니다. 비율지표(CTR·ROAS·객단가 등)는 그대로.")
-    impr_only = o4.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
-                            help="노출이 있었던(노출수>0) 데이터만 집계합니다.")
+    impr_only = o4.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
+                            help="노출이 있었던(노출수>0) 데이터만 집계합니다. 켜면 그룹 필터와 "
+                                 "일평균(집행일수)도 노출수>0 날짜 기준으로 계산됩니다.")
 
     if not order:
         st.info("‘1단계’에 펼칠 항목을 하나 이상 골라주세요.")
