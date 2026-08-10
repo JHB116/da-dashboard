@@ -2640,33 +2640,40 @@ def _drill_series(df_sub, col):
     return df_sub[col]
 
 
-# 계층 표에 함께 보여줄 실적 지표(표기, 원본컬럼, 종류) — 이름 왼쪽, 지표 오른쪽
-DRILL_SHOW = [
-    ("광고비",      "지표_광고비",              "money"),
-    ("순결제매출",   "지표_순결제거래액",         "money"),
-    ("ROAS",       "순결제ROAS",              "roas"),
-    ("결제고객수",   "지표_순결제고객수",         "num"),
-    ("첫구매수",     "지표_순결제고객수(첫구매)",   "num"),
-    ("노출수",      "지표_노출수",              "num"),
-    ("클릭수",      "지표_클릭수",              "num"),
-    ("CTR",        "CTR",                    "pct2"),
+# 계층 표에 함께 보여줄 실적 지표 — 다른 상세표(DETAIL_SPEC)와 동일 정의를 사용.
+# 표기 순서(사용자 지정):
+_DRILL_METRIC_LABELS = [
+    "노출수", "클릭수", "CTR", "CR", "객단가", "결제고객수", "CPM", "CPC", "CPUV", "UV",
+    "광고비", "거래액", "ROAS", "순결제비중", "거래액(총)", "ROAS(총)", "UV/클릭", "CR(총)",
+    "객단가(총)", "결제고객수(총)", "가입률", "가입수", "가입CPA", "첫구매율", "첫구매수",
+    "첫구매CPA", "첫구매거래액", "신규고객수", "신규거래액",
 ]
+_DETAIL_BY_LABEL = {d[0]: d for d in DETAIL_SPEC}
+DRILL_SHOW = [_DETAIL_BY_LABEL[l] for l in _DRILL_METRIC_LABELS if l in _DETAIL_BY_LABEL]
+
+
 def _drill_cells(series):
     """DRILL_SHOW 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
     out = []
     for _label, col, kind in DRILL_SHOW:
         v = series.get(col, np.nan) if series is not None else np.nan
         txt = _fmt_kind(v, kind)
-        if col == "순결제ROAS" and not pd.isna(v):
+        if kind == "roas" and not pd.isna(v):
             txt = f'<span class="{"up" if v >= 1 else "dn"}">{txt}</span>'
         out.append(txt)
     return out
 
 
-def _drill_build_tree(df, dims, top_n):
+def _drill_build_tree(df, dims, top_n, impr_only=False):
     """차원 순서대로 계층 노드 목록을 만든다. 각 노드:
-    {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지."""
+    {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지.
+    impr_only=True면 노출수>0 행만 사용."""
     work = df.copy()
+    if impr_only:
+        work = work[work["지표_노출수"].fillna(0) > 0]
+        if work.empty:
+            return [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
+                     "cells": _drill_cells(None), "hasChildren": False}]
     cols = []
     for i, (_lab, col) in enumerate(dims):
         cn = f"_d{i}"
@@ -2832,9 +2839,12 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    topn = st.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
+    o1, o2 = st.columns([1.4, 2])
+    topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
+    impr_only = o2.checkbox("노출수 0 초과만 보기", value=False, key="drill_impr_only",
+                            help="노출이 있었던(노출수>0) 데이터만 집계합니다.")
 
     if not order:
         st.info("‘1단계’에 펼칠 항목을 하나 이상 골라주세요.")
@@ -2842,7 +2852,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
     st.divider()
-    nodes = _drill_build_tree(df, dims, top_n)
+    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only)
     _components_html(_drill_html(nodes), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
