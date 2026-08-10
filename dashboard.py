@@ -2769,14 +2769,12 @@ def _drill_html(nodes):
   }
 </style>
 <script>
-  const NODES=__DATA__, byId={}, exp={};
-  NODES.forEach(n=>{byId[n.id]=n; exp[n.id]=(n.depth===0);});
+  const NODES=__DATA__, byId={}, kids={}, exp={};
+  NODES.forEach(n=>{
+    byId[n.id]=n; exp[n.id]=(n.depth===0);
+    (kids[n.parent]=kids[n.parent]||[]).push(n);   // 부모별 자식(광고비 큰 순 유지)
+  });
   const tb=document.getElementById('tb');
-  function visible(n){
-    let p=n;
-    while(p && p.depth>0){ p=byId[p.parent]; if(!p) break; if(!exp[p.id]) return false; }
-    return true;
-  }
   function rowHTML(n){
     const car = n.hasChildren
       ? `<span class="car ${exp[n.id]?'o':''}">▶</span>` : `<span class="car"></span>`;
@@ -2786,8 +2784,14 @@ def _drill_html(nodes):
     const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
     return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${cells}</tr>`;
   }
+  // 트리 깊이우선(DFS): 부모 바로 아래에 그 자식이 오도록. 펼친 노드만 하위 전개.
+  function walk(n, out){
+    out.push(n);
+    if(n.hasChildren && exp[n.id]) (kids[n.id]||[]).forEach(c=>walk(c, out));
+  }
   function render(){
-    tb.innerHTML = NODES.filter(visible).map(rowHTML).join('');
+    const out=[]; walk(byId['ROOT'], out);
+    tb.innerHTML = out.map(rowHTML).join('');
     tb.querySelectorAll('.tw.clk').forEach(el=>el.onclick=()=>{
       const id=el.dataset.id; exp[id]=!exp[id]; render();
     });
