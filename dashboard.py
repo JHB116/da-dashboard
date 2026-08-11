@@ -2682,6 +2682,24 @@ def _drill_cells(series, daily_avg=False):
     return out
 
 
+def _drill_raw(series, daily_avg=False):
+    """DRILL_SHOW 지표를 CSV용 숫자 리스트로. (비율/ROAS는 %, 금액·수치는 원 단위)"""
+    if daily_avg and series is not None:
+        series = _drill_daily_avg(series)
+    out = []
+    for _label, col, kind in DRILL_SHOW:
+        v = series.get(col, np.nan) if series is not None else np.nan
+        if series is None or pd.isna(v):
+            out.append(None)
+        elif kind in ("pct1", "pct2", "roas"):
+            out.append(round(float(v) * 100, 2))
+        elif kind in ("money", "won"):
+            out.append(round(float(v)))
+        else:
+            out.append(round(float(v), 2))
+    return out
+
+
 def _drill_natstr(s):
     """자연 정렬용 키: 숫자 구간을 0-패딩해 문자열 비교로도 1<2<…<10<12 가 되게.
     (예: '더블플래그1월' → '더블플래그000000000001월')"""
@@ -2706,8 +2724,10 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         work[cn] = _drill_series(work, col).astype("object")
         cols.append(cn)
 
+    _root_s = agg(work.assign(_all="_"), ["_all"]).iloc[0]
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-              "cells": _drill_cells(agg(work.assign(_all="_"), ["_all"]).iloc[0], daily_avg)}]
+              "cells": _drill_cells(_root_s, daily_avg),
+              "raw": _drill_raw(_root_s, daily_avg)}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
     # (impr_only면 위에서 work를 노출수>0로 이미 걸렀으므로 집행일수·일자행·일평균이
@@ -2744,7 +2764,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nid = f"{pid}|{d - 1}={tok}"
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
-                          "cells": _drill_cells(r, daily_avg)})
+                          "cells": _drill_cells(r, daily_avg),
+                          "raw": _drill_raw(r, daily_avg)})
             new_kept[atuple + (tok,)] = nid
         prev_kept = new_kept
         if not prev_kept:
@@ -2754,6 +2775,32 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     for n in nodes:
         n["hasChildren"] = n["id"] in parents
     return nodes
+
+
+def _drill_export_df(nodes, dims):
+    """트리 노드를 CSV용 표로. 단계별 차원 컬럼(조상 경로) + 지표 숫자."""
+    dim_labels, seen = [], set()
+    for l, _c in dims:                      # 중복 라벨 방지(안전)
+        base, k = l, l
+        while k in seen:
+            k = f"{base}.{len([s for s in seen if s.startswith(base)]) + 1}"
+        seen.add(k)
+        dim_labels.append(k)
+    metric_labels = [l for l, _c, _k in DRILL_SHOW]
+    by_id = {n["id"]: n for n in nodes}
+    rows = []
+    for n in nodes:
+        rec = {dl: "" for dl in dim_labels}
+        cur = n
+        while cur and cur["depth"] > 0:     # 조상 경로를 각 단계 컬럼에 채움
+            rec[dim_labels[cur["depth"] - 1]] = cur["name"]
+            cur = by_id.get(cur["parent"])
+        if n["depth"] == 0:
+            rec[dim_labels[0]] = "전체 TOTAL" if dim_labels else ""
+        for lbl, val in zip(metric_labels, n.get("raw", [])):
+            rec[lbl] = val
+        rows.append(rec)
+    return pd.DataFrame(rows, columns=dim_labels + metric_labels)
 
 
 def _drill_html(nodes):
@@ -2905,6 +2952,15 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     st.divider()
     nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
                               daily_avg=daily_avg)
+
+    exp_df = _drill_export_df(nodes, dims)
+    avg_tag = "_일평균" if daily_avg else ""
+    st.download_button(
+        "📥 펼쳐보기 실적 CSV 다운로드", key="rawdl_drill",
+        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"펼쳐보기_실적{avg_tag}.csv", mime="text/csv",
+        help="현재 펼침 설정(단계·정렬·일평균·노출필터) 그대로, 모든 단계 소계를 포함해 내려받습니다.")
+
     _components_html(_drill_html(nodes), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
