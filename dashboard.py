@@ -2848,6 +2848,11 @@ def _drill_html(nodes):
   tr.d6 td,tr.d6 td.name{background:#ffffff}
   tr.d7 td,tr.d7 td.name{background:#f4f5f7}
   tbody tr:hover td,tbody tr:hover td.name{background:#eef3ff}
+  /* 맨 하단 고정 합계 행(연한 파랑) */
+  tr.tot td,tr.tot td.name{background:#dbe9fe;font-weight:750;
+    position:sticky;bottom:0;z-index:2;border-top:2px solid #b6d0f5}
+  tr.tot td.name{z-index:4}
+  tbody tr.tot:hover td,tbody tr.tot:hover td.name{background:#dbe9fe}
   .tw{display:inline-flex;align-items:center;gap:6px;cursor:default}
   .tw.clk{cursor:pointer}
   .car{display:inline-block;width:12px;color:#9aa0a6;font-size:10px;transition:transform .12s}
@@ -2873,6 +2878,8 @@ def _drill_html(nodes):
     tr.d6 td,tr.d6 td.name{background:#1a1a19}
     tr.d7 td,tr.d7 td.name{background:#212121}
     tbody tr:hover td,tbody tr:hover td.name{background:#22314a}
+    tr.tot td,tr.tot td.name{background:#16283f;border-top-color:#2b3a52}
+    tbody tr.tot:hover td,tbody tr.tot:hover td.name{background:#16283f}
     .nm{color:#f3f3ee}.car{color:#77766f}
     .up{color:#57cd9a}.dn{color:#f0716d}
   }
@@ -2893,6 +2900,13 @@ def _drill_html(nodes):
     const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
     return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${cells}</tr>`;
   }
+  // 맨 하단 고정 합계(토탈) 행 — 전체 TOTAL과 동일 값
+  function totalRow(){
+    const n=byId['ROOT'];
+    const nm=`<span class="tw"><span class="car"></span><span class="nm">합계</span></span>`;
+    const cells=n.cells.map(c=>`<td>${c}</td>`).join('');
+    return `<tr class="tot"><td class="name">${nm}</td>${cells}</tr>`;
+  }
   // 트리 깊이우선(DFS): 부모 바로 아래에 그 자식이 오도록. 펼친 노드만 하위 전개.
   function walk(n, out){
     out.push(n);
@@ -2900,7 +2914,7 @@ def _drill_html(nodes):
   }
   function render(){
     const out=[]; walk(byId['ROOT'], out);
-    tb.innerHTML = out.map(rowHTML).join('');
+    tb.innerHTML = out.map(rowHTML).join('') + totalRow();
     tb.querySelectorAll('.tw.clk').forEach(el=>el.onclick=()=>{
       const id=el.dataset.id; exp[id]=!exp[id]; render();
     });
