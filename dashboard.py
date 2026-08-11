@@ -2611,6 +2611,7 @@ DRILL_DIM_OPTS = {
     "카테고리": "카테고리",
     "비용출처": "구분_비용출처",
     "디바이스": "구분_디바이스",
+    "기획전번호": "구분_기획전 번호",
     "기간(일)": "__day__",
     "기간(주)": "__week__",
     "기간(월)": "__month__",
@@ -2917,7 +2918,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 
     # ── 펼치는 단계·순서: 단계별 선택칸(1단계 → 2단계 → …)
     st.markdown("**펼치는 단계 순서** — 왼쪽부터 위→아래 순서로 펼쳐집니다.")
-    opts = [DRILL_NONE] + list(DRILL_DIM_OPTS.keys())
+    # 기간(__)은 항상, 그 외 차원은 실제 데이터에 컬럼이 있을 때만 옵션에 노출
+    avail = [k for k, v in DRILL_DIM_OPTS.items() if v.startswith("__") or v in df.columns]
+    opts = [DRILL_NONE] + avail
     slot_cols = st.columns(DRILL_SLOTS)
     order = []
     for i in range(DRILL_SLOTS):
