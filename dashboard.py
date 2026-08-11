@@ -2836,12 +2836,20 @@ def _drill_html(nodes):
   th,td{padding:7px 12px;border-bottom:1px solid #eef0f2;text-align:right;font-weight:500}
   thead th{position:sticky;top:0;background:#f7f8fa;color:#6b7280;font-size:11px;
     font-weight:650;z-index:2}
-  th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1}
-  thead th.name{z-index:3;background:#f7f8fa}
-  tbody tr:hover td{background:#f5f8ff}
-  tbody tr:hover td.name{background:#f5f8ff}
-  tr.d0 td{font-weight:750;background:#fbfbfc}
-  tr.d0 td.name{background:#fbfbfc}
+  th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1;
+    border-left:4px solid transparent}
+  thead th.name{z-index:3;background:#f7f8fa;border-left-color:transparent}
+  tbody tr:hover td{background:#eef3ff}
+  tr.d0 td{font-weight:750}
+  /* 펼침 단계별 색: 이름(구분) 열 배경 + 좌측 강조선 (지표 열은 중립 유지) */
+  tr.d0 td.name{background:#eef1f5;border-left-color:#64748b;font-weight:750}
+  tr.d1 td.name{background:#e8f0fe;border-left-color:#3b82f6}
+  tr.d2 td.name{background:#e7f7ee;border-left-color:#10b981}
+  tr.d3 td.name{background:#fff3e0;border-left-color:#f59e0b}
+  tr.d4 td.name{background:#f3e8fd;border-left-color:#8b5cf6}
+  tr.d5 td.name{background:#fde8ef;border-left-color:#ec4899}
+  tr.d6 td.name{background:#e6f7fa;border-left-color:#06b6d4}
+  tr.d7 td.name{background:#f0f2f4;border-left-color:#94a3b8}
   .tw{display:inline-flex;align-items:center;gap:6px;cursor:default}
   .tw.clk{cursor:pointer}
   .car{display:inline-block;width:12px;color:#9aa0a6;font-size:10px;transition:transform .12s}
@@ -2858,8 +2866,15 @@ def _drill_html(nodes):
     thead th{background:#232322;color:#9a998f}
     th.name,td.name{background:#1a1a19}
     thead th.name{background:#232322}
-    tr.d0 td,tr.d0 td.name{background:#202020}
-    tbody tr:hover td,tbody tr:hover td.name{background:#22314a}
+    tbody tr:hover td{background:#22314a}
+    tr.d0 td.name{background:#2a2f3a;border-left-color:#94a3b8}
+    tr.d1 td.name{background:#14263f;border-left-color:#3b82f6}
+    tr.d2 td.name{background:#10281d;border-left-color:#10b981}
+    tr.d3 td.name{background:#2e2410;border-left-color:#f59e0b}
+    tr.d4 td.name{background:#221833;border-left-color:#8b5cf6}
+    tr.d5 td.name{background:#2e1622;border-left-color:#ec4899}
+    tr.d6 td.name{background:#0f2a2e;border-left-color:#06b6d4}
+    tr.d7 td.name{background:#26282c;border-left-color:#94a3b8}
     .nm{color:#f3f3ee}.car{color:#77766f}
     .up{color:#57cd9a}.dn{color:#f0716d}
   }
