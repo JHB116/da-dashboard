@@ -2618,7 +2618,7 @@ DRILL_DIM_OPTS = {
 }
 DRILL_DEFAULT = ["비용출처", "채널", "매체", "상품", "캠페인", "—"]
 DRILL_NONE = "—"
-DRILL_SLOTS = 6                      # 펼치기 단계 최대 개수
+DRILL_SLOTS = 7                      # 펼치기 단계 최대 개수
 
 
 def _drill_disp(v) -> str:
