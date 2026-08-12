@@ -2658,33 +2658,64 @@ CUSTOM_EXTRA_METRIC_SPEC = [
     ("순결제거래액(SP)", "지표_순결제거래액(SP)", "money"),
 ]
 
-# 계층 표에 함께 보여줄 실적 지표 — 커스텀 실적 시트의 전체 지표를 그대로 반영:
-# DETAIL_SPEC(33종) + 집행일수 + 채널별 순결제거래액 RD~SP(7종).
+# 계층 표에 함께 보여줄 실적 지표 — 커스텀 실적 시트 전체 + 추가 원본지표.
+# DETAIL_SPEC(33) + 집행일수 + RD~SP(7) + 회원/영상/총결제 첫구매·윈백/윈백비중(8).
 DRILL_SHOW = (
     list(DETAIL_SPEC)
     + [("집행일수", "집행일수", "num")]
     + list(CUSTOM_EXTRA_METRIC_SPEC)
+    + [
+        ("회원UV",         "지표_UV(회원)",            "num"),
+        ("회원PV",         "지표_PV(회원)",            "num"),
+        ("영상조회수",      "지표_영상조회수",           "num"),
+        ("첫구매수(총)",    "지표_총결제고객수(첫구매)",   "num"),
+        ("첫구매거래액(총)", "지표_총결제거래액(첫구매)",   "money"),
+        ("윈백고객수(총)",  "지표_총결제고객수(윈백)",     "num"),
+        ("윈백거래액(총)",  "지표_총결제거래액(윈백)",     "money"),
+        ("윈백비중",        "윈백비중",                "pct1"),
+    ]
 )
 
 
-def _drill_daily_avg(series):
+def _drill_metric_spec(df):
+    """표시 지표 스펙 = 기본(DRILL_SHOW) + 업로드 데이터의 미포함 지표_* 컬럼 자동 추가.
+    (미인식 원본지표도 합산해 표에 노출. 이름은 '지표_' 접두 제거, 금액성이면 원 단위.)"""
+    spec = list(DRILL_SHOW)
+    have = {c for _, c, _ in spec}
+    for c in df.columns:
+        cs = str(c)
+        if not cs.startswith("지표_") or c in have:
+            continue
+        lbl = cs[len("지표_"):]
+        kind = "money" if any(k in cs for k in ("거래액", "매출", "비용", "광고비", "금액")) else "num"
+        spec.append((lbl, c, kind))
+        have.add(c)
+    return spec
+
+
+def _drill_daily_avg(series, extra_cols=()):
     """합계형 지표를 집행일수로 나눈 '일평균' 시리즈로 변환(비율지표는 자동 유지).
-    합산값을 일수로 나눠 calc_kpi를 다시 태우므로 CTR·ROAS·객단가 등 비율은 그대로."""
+    합산값(AGG_COLS + 미인식 지표 extra_cols)을 일수로 나눠 calc_kpi를 다시 태워
+    CTR·ROAS·객단가 등 비율은 그대로 유지한다."""
     days = series.get("집행일수", np.nan)
     if not days or pd.isna(days) or days <= 0:
         return series
-    base = {c: (series.get(c, np.nan) / days) for c in AGG_COLS}
-    row = calc_kpi(pd.DataFrame([base])).iloc[0]
+    d = series.to_dict()
+    for c in list(AGG_COLS) + list(extra_cols):
+        v = d.get(c)
+        if v is not None and not pd.isna(v):
+            d[c] = v / days
+    row = calc_kpi(pd.DataFrame([d])).iloc[0]
     row["집행일수"] = days   # 집행일수는 평균이 아니라 실제 일수 유지
     return row
 
 
-def _drill_cells(series, daily_avg=False):
-    """DRILL_SHOW 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
+def _drill_cells(series, spec, daily_avg=False, extra_cols=()):
+    """spec 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
     if daily_avg and series is not None:
-        series = _drill_daily_avg(series)
+        series = _drill_daily_avg(series, extra_cols)
     out = []
-    for _label, col, kind in DRILL_SHOW:
+    for _label, col, kind in spec:
         v = series.get(col, np.nan) if series is not None else np.nan
         txt = _fmt_kind(v, kind)
         if kind == "roas" and not pd.isna(v):
@@ -2693,12 +2724,12 @@ def _drill_cells(series, daily_avg=False):
     return out
 
 
-def _drill_raw(series, daily_avg=False):
-    """DRILL_SHOW 지표를 CSV용 숫자 리스트로. (비율/ROAS는 %, 금액·수치는 원 단위)"""
+def _drill_raw(series, spec, daily_avg=False, extra_cols=()):
+    """spec 지표를 CSV용 숫자 리스트로. (비율/ROAS는 %, 금액·수치는 원 단위)"""
     if daily_avg and series is not None:
-        series = _drill_daily_avg(series)
+        series = _drill_daily_avg(series, extra_cols)
     out = []
-    for _label, col, kind in DRILL_SHOW:
+    for _label, col, kind in spec:
         v = series.get(col, np.nan) if series is not None else np.nan
         if series is None or pd.isna(v):
             out.append(None)
@@ -2718,38 +2749,49 @@ def _drill_natstr(s):
 
 
 def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False):
-    """차원 순서대로 계층 노드 목록을 만든다. 각 노드:
-    {id, parent, depth, name, cells[], hasChildren}. 부모별 상위 top_n만 유지.
-    impr_only=True면 노출수>0 행만 사용. sort_by: '광고비'(큰 순) | '이름'(기간·가나다순).
-    daily_avg=True면 합계형 지표를 집행일수로 나눈 일평균으로 표시.
-    상위 top_n 선정은 항상 광고비 기준, 표시 순서만 sort_by를 따른다."""
+    """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
+    부모별 상위 top_n만 유지. impr_only=True면 노출수>0 행만 사용.
+    sort_by: '광고비'(큰 순) | '이름'(기간·가나다순). daily_avg면 일평균 표시.
+    spec = 표시 지표(기본 + 데이터의 미인식 지표_* 자동 포함)."""
+    spec = _drill_metric_spec(df)
+    # agg가 집계하지 않는(미인식) 원본 지표_ 컬럼 → 별도 합산 대상
+    extra_cols = [c for _l, c, _k in spec
+                  if str(c).startswith("지표_") and c not in AGG_COLS and c in df.columns]
+
     work = df.copy()
     if impr_only:
         work = work[work["지표_노출수"].fillna(0) > 0]
         if work.empty:
-            return [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-                     "cells": _drill_cells(None), "hasChildren": False}]
+            root = {"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
+                    "cells": _drill_cells(None, spec), "hasChildren": False}
+            return [root], spec
+    for c in extra_cols:                 # 미인식 지표 숫자화(합산 대비)
+        work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0)
     cols = []
     for i, (_lab, col) in enumerate(dims):
         cn = f"_d{i}"
         work[cn] = _drill_series(work, col).astype("object")
         cols.append(cn)
 
+    def _augment(g, keys):
+        if extra_cols:
+            ex = work.groupby(keys, dropna=False)[extra_cols].sum().reset_index()
+            g = g.merge(ex, on=keys, how="left")
+        return g
+
     _root_s = agg(work.assign(_all="_"), ["_all"]).iloc[0]
+    for c in extra_cols:                 # 루트(전체)의 미인식 지표 합
+        _root_s[c] = work[c].sum()
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-              "cells": _drill_cells(_root_s, daily_avg),
-              "raw": _drill_raw(_root_s, daily_avg)}]
+              "cells": _drill_cells(_root_s, spec, daily_avg, extra_cols),
+              "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols)}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
-    # (impr_only면 위에서 work를 노출수>0로 이미 걸렀으므로 집행일수·일자행·일평균이
-    #  모두 노출수>0 날짜 기준으로 일관된다.)
     base_metric = "지표_노출수" if impr_only else "지표_광고비"
     period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
-        g = agg(work, cols[:d])
-        # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시해야
-        # 부모의 '일평균'이 보이는 일자 행들의 평균과 정확히 일치한다.
-        # (그 외 차원은 기준 0 그룹을 제외해 잡음 방지)
+        g = _augment(agg(work, cols[:d]), cols[:d])
+        # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시
         if dims[d - 1][1] not in period_cols:
             g = g[g[base_metric].fillna(0) > 0]
         g = g.sort_values("지표_광고비", ascending=False)
@@ -2775,8 +2817,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nid = f"{pid}|{d - 1}={tok}"
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
-                          "cells": _drill_cells(r, daily_avg),
-                          "raw": _drill_raw(r, daily_avg)})
+                          "cells": _drill_cells(r, spec, daily_avg, extra_cols),
+                          "raw": _drill_raw(r, spec, daily_avg, extra_cols)})
             new_kept[atuple + (tok,)] = nid
         prev_kept = new_kept
         if not prev_kept:
@@ -2785,10 +2827,10 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     parents = {n["parent"] for n in nodes if n["parent"]}
     for n in nodes:
         n["hasChildren"] = n["id"] in parents
-    return nodes
+    return nodes, spec
 
 
-def _drill_export_df(nodes, dims):
+def _drill_export_df(nodes, dims, spec):
     """트리 노드를 CSV용 표로. 단계별 차원 컬럼(조상 경로) + 지표 숫자."""
     dim_labels, seen = [], set()
     for l, _c in dims:                      # 중복 라벨 방지(안전)
@@ -2797,7 +2839,7 @@ def _drill_export_df(nodes, dims):
             k = f"{base}.{len([s for s in seen if s.startswith(base)]) + 1}"
         seen.add(k)
         dim_labels.append(k)
-    metric_labels = [l for l, _c, _k in DRILL_SHOW]
+    metric_labels = [l for l, _c, _k in spec]
     by_id = {n["id"]: n for n in nodes}
     rows = []
     for n in nodes:
@@ -2814,9 +2856,9 @@ def _drill_export_df(nodes, dims):
     return pd.DataFrame(rows, columns=dim_labels + metric_labels)
 
 
-def _drill_html(nodes):
+def _drill_html(nodes, spec):
     """계층 노드를 클릭-펼침 가능한 HTML 표로. (펼침/접힘은 브라우저에서 즉시)"""
-    headers = "".join(f"<th>{l}</th>" for l, _c, _k in DRILL_SHOW)
+    headers = "".join(f"<th>{l}</th>" for l, _c, _k in spec)
     data = json.dumps(nodes, ensure_ascii=False)
     return """
 <div class="viz">
@@ -2990,10 +3032,10 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
     st.divider()
-    nodes = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
-                              daily_avg=daily_avg)
+    nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
+                                    daily_avg=daily_avg)
 
-    exp_df = _drill_export_df(nodes, dims)
+    exp_df = _drill_export_df(nodes, dims, spec)
     avg_tag = "_일평균" if daily_avg else ""
     st.download_button(
         "📥 펼쳐보기 실적 CSV 다운로드", key="rawdl_drill",
@@ -3001,7 +3043,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         file_name=f"펼쳐보기_실적{avg_tag}.csv", mime="text/csv",
         help="현재 펼침 설정(단계·정렬·일평균·노출필터) 그대로, 모든 단계 소계를 포함해 내려받습니다.")
 
-    _components_html(_drill_html(nodes), height=640, scrolling=False)
+    _components_html(_drill_html(nodes, spec), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
 
