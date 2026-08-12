@@ -2647,16 +2647,24 @@ def _drill_series(df_sub, col):
     return df_sub[col]
 
 
-# 계층 표에 함께 보여줄 실적 지표 — 다른 상세표(DETAIL_SPEC)와 동일 정의를 사용.
-# 표기 순서(사용자 지정):
-_DRILL_METRIC_LABELS = [
-    "노출수", "클릭수", "CTR", "CR", "객단가", "결제고객수", "CPM", "CPC", "CPUV", "UV",
-    "광고비", "거래액", "ROAS", "순결제비중", "거래액(총)", "ROAS(총)", "UV/클릭", "CR(총)",
-    "객단가(총)", "결제고객수(총)", "가입률", "가입수", "가입CPA", "첫구매율", "첫구매수",
-    "첫구매CPA", "첫구매거래액", "신규고객수", "신규거래액",
+# 커스텀 시트 전용 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
+CUSTOM_EXTRA_METRIC_SPEC = [
+    ("순결제거래액(RD)", "지표_순결제거래액(RD)", "money"),
+    ("순결제거래액(PP)", "지표_순결제거래액(PP)", "money"),
+    ("순결제거래액(BK)", "지표_순결제거래액(BK)", "money"),
+    ("순결제거래액(SV)", "지표_순결제거래액(SV)", "money"),
+    ("순결제거래액(GD)", "지표_순결제거래액(GD)", "money"),
+    ("순결제거래액(PT)", "지표_순결제거래액(PT)", "money"),
+    ("순결제거래액(SP)", "지표_순결제거래액(SP)", "money"),
 ]
-_DETAIL_BY_LABEL = {d[0]: d for d in DETAIL_SPEC}
-DRILL_SHOW = [_DETAIL_BY_LABEL[l] for l in _DRILL_METRIC_LABELS if l in _DETAIL_BY_LABEL]
+
+# 계층 표에 함께 보여줄 실적 지표 — 커스텀 실적 시트의 전체 지표를 그대로 반영:
+# DETAIL_SPEC(33종) + 집행일수 + 채널별 순결제거래액 RD~SP(7종).
+DRILL_SHOW = (
+    list(DETAIL_SPEC)
+    + [("집행일수", "집행일수", "num")]
+    + list(CUSTOM_EXTRA_METRIC_SPEC)
+)
 
 
 def _drill_daily_avg(series):
@@ -2666,7 +2674,9 @@ def _drill_daily_avg(series):
     if not days or pd.isna(days) or days <= 0:
         return series
     base = {c: (series.get(c, np.nan) / days) for c in AGG_COLS}
-    return calc_kpi(pd.DataFrame([base])).iloc[0]
+    row = calc_kpi(pd.DataFrame([base])).iloc[0]
+    row["집행일수"] = days   # 집행일수는 평균이 아니라 실제 일수 유지
+    return row
 
 
 def _drill_cells(series, daily_avg=False):
@@ -3000,16 +3010,6 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 # ───────────────────────────────────────────────
 # 커스텀 실적 (피벗형: 차원/지표/필터를 자유 조합)
 # ───────────────────────────────────────────────
-# 커스텀 시트에서만 노출하는 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
-CUSTOM_EXTRA_METRIC_SPEC = [
-    ("순결제거래액(RD)", "지표_순결제거래액(RD)", "money"),
-    ("순결제거래액(PP)", "지표_순결제거래액(PP)", "money"),
-    ("순결제거래액(BK)", "지표_순결제거래액(BK)", "money"),
-    ("순결제거래액(SV)", "지표_순결제거래액(SV)", "money"),
-    ("순결제거래액(GD)", "지표_순결제거래액(GD)", "money"),
-    ("순결제거래액(PT)", "지표_순결제거래액(PT)", "money"),
-    ("순결제거래액(SP)", "지표_순결제거래액(SP)", "money"),
-]
 
 # 커스텀 실적 행 차원 (표기순 = 결과표 컬럼 순서)
 CUSTOM_DIMS = {
