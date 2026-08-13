@@ -2922,14 +2922,15 @@ def _drill_html(nodes, spec, show_promo=False):
   .bar .hint{font-size:11.5px;color:#6B7280}
   .scroll{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;max-height:560px}
   table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
-  th,td{padding:7px 12px;border-bottom:1px solid #eef0f2;text-align:right;font-weight:500}
+  th,td{padding:7px 11px;border-bottom:1px solid #eef0f2;text-align:right;font-weight:500}
   thead th{position:sticky;top:0;background:#f7f8fa;color:#6b7280;font-size:11px;
     font-weight:650;z-index:2}
-  th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1}
+  th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1;
+    padding-right:2px}
   thead th.name{z-index:3;background:#f7f8fa}
-  /* 기획전번호 열: 구분 바로 오른쪽(일반 열) */
+  /* 기획전번호 열: 구분 바로 오른쪽에 바짝 붙임 */
   th.pno,td.pno{text-align:left;color:#374151;font-variant-numeric:tabular-nums;
-    white-space:nowrap}
+    white-space:nowrap;padding-left:6px}
   /* 펼침 단계별 배경: 흰색 / 연한 회색 교차 (이름+지표 열 동일 적용) */
   tr.d0 td,tr.d0 td.name{background:#edeff2;font-weight:750}
   tr.d1 td,tr.d1 td.name{background:#f4f5f7}
@@ -2987,7 +2988,7 @@ def _drill_html(nodes, spec, show_promo=False):
   function rowHTML(n){
     const car = n.hasChildren
       ? `<span class="car ${exp[n.id]?'o':''}">▶</span>` : `<span class="car"></span>`;
-    const pad = 4 + n.depth*17;
+    const pad = 2 + n.depth*14;
     const nm = `<span class="tw ${n.hasChildren?'clk':''}" data-id="${n.id}"
       style="padding-left:${pad}px">${car}<span class="nm">${n.name}</span></span>`;
     const pcell = PROMO ? `<td class="pno">${n.promo||''}</td>` : '';
