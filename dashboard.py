@@ -2889,14 +2889,13 @@ def _drill_export_df(nodes, dims, spec, show_promo=False):
         for lbl, val in zip(metric_labels, n.get("raw", [])):
             rec[lbl] = val
         rows.append(rec)
-    return pd.DataFrame(rows, columns=promo_cols + dim_labels + metric_labels)
+    return pd.DataFrame(rows, columns=dim_labels + promo_cols + metric_labels)
 
 
 def _drill_html(nodes, spec, show_promo=False):
     """계층 노드를 클릭-펼침 가능한 HTML 표로. (펼침/접힘은 브라우저에서 즉시)"""
     headers = "".join(f"<th>{l}</th>" for l, _c, _k in spec)
     promo_th = '<th class="pno">기획전번호</th>' if show_promo else ""
-    tcls = "haspno" if show_promo else ""
     data = json.dumps(nodes, ensure_ascii=False)
     return """
 <div class="viz">
@@ -2906,8 +2905,8 @@ def _drill_html(nodes, spec, show_promo=False):
     <span class="hint">이름을 클릭하면 그 아래 단계가 펼쳐집니다.</span>
   </div>
   <div class="scroll">
-    <table class="__TCLS__">
-      <thead><tr>__PROMO_TH__<th class="name">구분</th>__HEADERS__</tr></thead>
+    <table>
+      <thead><tr><th class="name">구분</th>__PROMO_TH____HEADERS__</tr></thead>
       <tbody id="tb"></tbody>
     </table>
   </div>
@@ -2928,12 +2927,9 @@ def _drill_html(nodes, spec, show_promo=False):
     font-weight:650;z-index:2}
   th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1}
   thead th.name{z-index:3;background:#f7f8fa}
-  /* 기획전번호 열: 구분 왼쪽에 고정 */
-  th.pno,td.pno{text-align:left;position:sticky;left:0;background:#fff;z-index:1;
-    width:92px;min-width:92px;max-width:92px;color:#374151;
-    font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
-  thead th.pno{z-index:3;background:#f7f8fa}
-  table.haspno th.name,table.haspno td.name{left:92px}
+  /* 기획전번호 열: 구분 바로 오른쪽(일반 열) */
+  th.pno,td.pno{text-align:left;color:#374151;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
   /* 펼침 단계별 배경: 흰색 / 연한 회색 교차 (이름+지표 열 동일 적용) */
   tr.d0 td,tr.d0 td.name{background:#edeff2;font-weight:750}
   tr.d1 td,tr.d1 td.name{background:#f4f5f7}
@@ -2965,8 +2961,7 @@ def _drill_html(nodes, spec, show_promo=False):
     thead th{background:#232322;color:#9a998f}
     th.name,td.name{background:#1a1a19}
     thead th.name{background:#232322}
-    th.pno,td.pno{background:#1a1a19;color:#c3c2b7}
-    thead th.pno{background:#232322}
+    td.pno{color:#c3c2b7}
     tr.d0 td,tr.d0 td.name{background:#2a2d33;font-weight:750}
     tr.d1 td,tr.d1 td.name{background:#212121}
     tr.d2 td,tr.d2 td.name{background:#1a1a19}
@@ -2997,7 +2992,7 @@ def _drill_html(nodes, spec, show_promo=False):
       style="padding-left:${pad}px">${car}<span class="nm">${n.name}</span></span>`;
     const pcell = PROMO ? `<td class="pno">${n.promo||''}</td>` : '';
     const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="d${n.depth}" data-id="${n.id}">${pcell}<td class="name">${nm}</td>${cells}</tr>`;
+    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
   }
   // 맨 하단 고정 합계(토탈) 행 — 전체 TOTAL과 동일 값
   function totalRow(){
@@ -3005,7 +3000,7 @@ def _drill_html(nodes, spec, show_promo=False):
     const nm=`<span class="tw"><span class="car"></span><span class="nm">합계</span></span>`;
     const pcell = PROMO ? `<td class="pno"></td>` : '';
     const cells=n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="tot">${pcell}<td class="name">${nm}</td>${cells}</tr>`;
+    return `<tr class="tot"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
   }
   // 트리 깊이우선(DFS): 부모 바로 아래에 그 자식이 오도록. 펼친 노드만 하위 전개.
   function walk(n, out){
@@ -3025,8 +3020,7 @@ def _drill_html(nodes, spec, show_promo=False):
     NODES.forEach(n=>{exp[n.id]=(n.depth===0);}); render();};
   render();
 </script>
-""".replace("__PROMO_TH__", promo_th).replace("__TCLS__", tcls) \
-   .replace("__HEADERS__", headers) \
+""".replace("__PROMO_TH__", promo_th).replace("__HEADERS__", headers) \
    .replace("__PROMO__", "true" if show_promo else "false").replace("__DATA__", data)
 
 
