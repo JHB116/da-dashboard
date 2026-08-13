@@ -2622,10 +2622,30 @@ DRILL_NONE = "—"
 DRILL_SLOTS = 7                      # 펼치기 단계 최대 개수
 
 
+def _drill_intish(v) -> str:
+    """정수인 실수는 '.0' 없이 정수 문자열로. (기획전번호 등 숫자 차원 표시용)"""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            if float(v).is_integer():
+                return str(int(v))
+        except (ValueError, OverflowError):
+            pass
+    return str(v)
+
+
+_DRILL_PROMO_COL = "구분_기획전 번호"
+
+
+def _drill_promo_of(s):
+    """그룹 내 기획전번호가 하나로 특정되면 그 값(정수 표기), 아니면 빈 문자열."""
+    u = pd.unique(s.dropna())
+    return _drill_intish(u[0]) if len(u) == 1 else ""
+
+
 def _drill_disp(v) -> str:
     if v is None or (not isinstance(v, str) and pd.isna(v)):
         return "(미지정)"
-    s = str(v)
+    s = _drill_intish(v)
     if s.strip() in ("", "nan", "None", "-"):
         return "(미지정)"
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -2750,7 +2770,8 @@ def _drill_natstr(s):
     return re.sub(r"\d+", lambda m: m.group().zfill(12), str(s))
 
 
-def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False):
+def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False,
+                      show_promo=False):
     """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
     부모별 상위 top_n만 유지. impr_only=True면 노출수>0 행만 사용.
     sort_by: '광고비'(큰 순) | '이름'(기간·가나다순). daily_avg면 일평균 표시.
@@ -2760,12 +2781,14 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     extra_cols = [c for _l, c, _k in spec
                   if str(c).startswith("지표_") and c not in AGG_COLS and c in df.columns]
 
+    promo_on = show_promo and _DRILL_PROMO_COL in df.columns
+
     work = df.copy()
     if impr_only:
         work = work[work["지표_노출수"].fillna(0) > 0]
         if work.empty:
             root = {"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-                    "cells": _drill_cells(None, spec), "hasChildren": False}
+                    "cells": _drill_cells(None, spec), "hasChildren": False, "promo": ""}
             return [root], spec
     for c in extra_cols:                 # 미인식 지표 숫자화(합산 대비)
         work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0)
@@ -2779,6 +2802,10 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         if extra_cols:
             ex = work.groupby(keys, dropna=False)[extra_cols].sum().reset_index()
             g = g.merge(ex, on=keys, how="left")
+        if promo_on:
+            pr = (work.groupby(keys, dropna=False)[_DRILL_PROMO_COL]
+                  .agg(_drill_promo_of).reset_index(name="_promo"))
+            g = g.merge(pr, on=keys, how="left")
         return g
 
     _root_s = agg(work.assign(_all="_"), ["_all"]).iloc[0]
@@ -2786,7 +2813,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         _root_s[c] = work[c].sum()
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
               "cells": _drill_cells(_root_s, spec, daily_avg, extra_cols),
-              "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols)}]
+              "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols), "promo": ""}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
     base_metric = "지표_노출수" if impr_only else "지표_광고비"
@@ -2820,7 +2847,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
                           "cells": _drill_cells(r, spec, daily_avg, extra_cols),
-                          "raw": _drill_raw(r, spec, daily_avg, extra_cols)})
+                          "raw": _drill_raw(r, spec, daily_avg, extra_cols),
+                          "promo": (str(r.get("_promo", "")) if promo_on else "")})
             new_kept[atuple + (tok,)] = nid
         prev_kept = new_kept
         if not prev_kept:
@@ -2832,8 +2860,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     return nodes, spec
 
 
-def _drill_export_df(nodes, dims, spec):
-    """트리 노드를 CSV용 표로. 단계별 차원 컬럼(조상 경로) + 지표 숫자."""
+def _drill_export_df(nodes, dims, spec, show_promo=False):
+    """트리 노드를 CSV용 표로. 단계별 차원 컬럼(조상 경로) + [기획전번호] + 지표 숫자."""
     dim_labels, seen = [], set()
     for l, _c in dims:                      # 중복 라벨 방지(안전)
         base, k = l, l
@@ -2842,6 +2870,7 @@ def _drill_export_df(nodes, dims, spec):
         seen.add(k)
         dim_labels.append(k)
     metric_labels = [l for l, _c, _k in spec]
+    promo_cols = ["기획전번호"] if show_promo else []
     by_id = {n["id"]: n for n in nodes}
     rows = []
     for n in nodes:
@@ -2852,15 +2881,18 @@ def _drill_export_df(nodes, dims, spec):
             cur = by_id.get(cur["parent"])
         if n["depth"] == 0:
             rec[dim_labels[0]] = "전체 TOTAL" if dim_labels else ""
+        if show_promo:
+            rec["기획전번호"] = n.get("promo", "")
         for lbl, val in zip(metric_labels, n.get("raw", [])):
             rec[lbl] = val
         rows.append(rec)
-    return pd.DataFrame(rows, columns=dim_labels + metric_labels)
+    return pd.DataFrame(rows, columns=dim_labels + promo_cols + metric_labels)
 
 
-def _drill_html(nodes, spec):
+def _drill_html(nodes, spec, show_promo=False):
     """계층 노드를 클릭-펼침 가능한 HTML 표로. (펼침/접힘은 브라우저에서 즉시)"""
     headers = "".join(f"<th>{l}</th>" for l, _c, _k in spec)
+    promo_th = '<th class="pno">기획전번호</th>' if show_promo else ""
     data = json.dumps(nodes, ensure_ascii=False)
     return """
 <div class="viz">
@@ -2871,7 +2903,7 @@ def _drill_html(nodes, spec):
   </div>
   <div class="scroll">
     <table>
-      <thead><tr><th class="name">구분</th>__HEADERS__</tr></thead>
+      <thead><tr><th class="name">구분</th>__PROMO_TH____HEADERS__</tr></thead>
       <tbody id="tb"></tbody>
     </table>
   </div>
@@ -2892,6 +2924,8 @@ def _drill_html(nodes, spec):
     font-weight:650;z-index:2}
   th.name,td.name{text-align:left;position:sticky;left:0;background:#fff;z-index:1}
   thead th.name{z-index:3;background:#f7f8fa}
+  th.pno,td.pno{text-align:left;color:#6b7280;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
   /* 펼침 단계별 배경: 흰색 / 연한 회색 교차 (이름+지표 열 동일 적용) */
   tr.d0 td,tr.d0 td.name{background:#edeff2;font-weight:750}
   tr.d1 td,tr.d1 td.name{background:#f4f5f7}
@@ -2939,7 +2973,7 @@ def _drill_html(nodes, spec):
   }
 </style>
 <script>
-  const NODES=__DATA__, byId={}, kids={}, exp={};
+  const NODES=__DATA__, PROMO=__PROMO__, byId={}, kids={}, exp={};
   NODES.forEach(n=>{
     byId[n.id]=n; exp[n.id]=true;                  // 기본: 전부 펼침
     (kids[n.parent]=kids[n.parent]||[]).push(n);   // 부모별 자식(정렬 순서 유지)
@@ -2951,15 +2985,17 @@ def _drill_html(nodes, spec):
     const pad = 4 + n.depth*17;
     const nm = `<span class="tw ${n.hasChildren?'clk':''}" data-id="${n.id}"
       style="padding-left:${pad}px">${car}<span class="nm">${n.name}</span></span>`;
+    const pcell = PROMO ? `<td class="pno">${n.promo||''}</td>` : '';
     const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${cells}</tr>`;
+    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
   }
   // 맨 하단 고정 합계(토탈) 행 — 전체 TOTAL과 동일 값
   function totalRow(){
     const n=byId['ROOT'];
     const nm=`<span class="tw"><span class="car"></span><span class="nm">합계</span></span>`;
+    const pcell = PROMO ? `<td class="pno"></td>` : '';
     const cells=n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="tot"><td class="name">${nm}</td>${cells}</tr>`;
+    return `<tr class="tot"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
   }
   // 트리 깊이우선(DFS): 부모 바로 아래에 그 자식이 오도록. 펼친 노드만 하위 전개.
   function walk(n, out){
@@ -2979,7 +3015,8 @@ def _drill_html(nodes, spec):
     NODES.forEach(n=>{exp[n.id]=(n.depth===0);}); render();};
   render();
 </script>
-""".replace("__HEADERS__", headers).replace("__DATA__", data)
+""".replace("__PROMO_TH__", promo_th).replace("__HEADERS__", headers) \
+   .replace("__PROMO__", "true" if show_promo else "false").replace("__DATA__", data)
 
 
 def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
@@ -3027,6 +3064,12 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     impr_only = o4.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다. 켜면 그룹 필터와 "
                                  "일평균(집행일수)도 노출수>0 날짜 기준으로 계산됩니다.")
+    show_promo = False
+    if _DRILL_PROMO_COL in df.columns:
+        show_promo = st.checkbox(
+            "기획전번호 함께 표시", value=False, key="drill_show_promo",
+            help="각 행에 그 행의 기획전번호(하나로 특정될 때)를 별도 열로 함께 보여줍니다. "
+                 "펼치기 단계를 늘리지 않고 캠페인·하위캠페인 옆에서 바로 볼 때 유용합니다.")
 
     if not order:
         st.info("‘1단계’에 펼칠 항목을 하나 이상 골라주세요.")
@@ -3035,9 +3078,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 
     st.divider()
     nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
-                                    daily_avg=daily_avg)
+                                    daily_avg=daily_avg, show_promo=show_promo)
 
-    exp_df = _drill_export_df(nodes, dims, spec)
+    exp_df = _drill_export_df(nodes, dims, spec, show_promo=show_promo)
     avg_tag = "_일평균" if daily_avg else ""
     st.download_button(
         "📥 펼쳐보기 실적 CSV 다운로드", key="rawdl_drill",
@@ -3045,7 +3088,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         file_name=f"펼쳐보기_실적{avg_tag}.csv", mime="text/csv",
         help="현재 펼침 설정(단계·정렬·일평균·노출필터) 그대로, 모든 단계 소계를 포함해 내려받습니다.")
 
-    _components_html(_drill_html(nodes, spec), height=640, scrolling=False)
+    _components_html(_drill_html(nodes, spec, show_promo=show_promo), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
 
