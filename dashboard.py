@@ -686,28 +686,52 @@ VOLUME_COLS = {
 }
 
 
+def _cumulative_frame(d: pd.DataFrame, period_col: str) -> pd.DataFrame:
+    """연도별로 period_col 순서대로 합계(볼륨) 지표를 누적합하고 KPI(비율)를 재계산한다.
+    볼륨 지표는 '누적 합계', 비율 지표(ROAS·CTR·CPA·객단가 등)는 '누적 기준 값'이 된다."""
+    year_col = "연도" if "연도" in d.columns else "_yr"
+    base = [c for c in AGG_COLS if c in d.columns]
+    d = d.sort_values([year_col, period_col]).copy()
+    d[base] = d.groupby(year_col, dropna=False)[base].cumsum()
+    return calc_kpi(d)
+
+
 def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
-                     height: int = 380, tickfmt: str = None) -> go.Figure:
-    """월/주/주(최근10주) 단위 지표 추이 (선형, 연도별 YoY 오버레이).
-    볼륨 지표는 '일평균'(해당 기간 합계 / 집행일수)으로 환산해 표시한다."""
+                     height: int = 380, tickfmt: str = None,
+                     cumulative: bool = False) -> go.Figure:
+    """월/주/주(최근10주)/일 단위 지표 추이 (선형, 연도별 YoY 오버레이).
+    기본: 볼륨 지표는 '일평균'(해당 기간 합계 / 집행일수)으로 환산해 표시한다.
+    cumulative=True: 연도별 시작점부터 '누적'으로 표시한다. 볼륨 지표는 누적 합계,
+    비율 지표(ROAS·CTR·CPA·객단가 등)는 누적 합계 기준으로 재계산한 값을 그린다."""
     lbl_fmt = tickfmt if tickfmt else ",.0f"
     is_vol = val_col in VOLUME_COLS
     if gran == "월":
         d = agg(df, ["연도", "월"]).sort_values(["연도", "월"])
-        if is_vol and "집행일수" in d.columns:
-            d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
         # 당월(부분월)은 전년도 동일월 포인트를 MTD(동요일 -364일 창)로 맞춤.
         data_max = df["기간_일자"].max()
         cy, cm = int(data_max.year), int(data_max.month)
+        mtd_row, ndays = None, 0
         if data_max.day < calendar.monthrange(cy, cm)[1]:
             cur_dates = df[(df["연도"] == cy) & (df["월"] == cm)]["기간_일자"].drop_duplicates()
             prev_dates = cur_dates - pd.Timedelta(days=364)
             sub = df[df["기간_일자"].isin(prev_dates)]
             if not sub.empty:
-                pa = agg(sub, ["연도"])
-                v = pa[val_col].iloc[0]
+                mtd_row = agg(sub, ["연도"])
+                ndays = sub["기간_일자"].nunique()
+        if cumulative:
+            # 전년 동월 base 컬럼을 MTD 창 합계로 대체해 당월(부분월)과 공정 비교
+            if mtd_row is not None:
+                mask = (d["연도"] == cy - 1) & (d["월"] == cm)
+                if mask.any():
+                    for c in (c for c in AGG_COLS if c in d.columns):
+                        d.loc[mask, c] = mtd_row[c].iloc[0]
+            d = _cumulative_frame(d, "월")
+        else:
+            if is_vol and "집행일수" in d.columns:
+                d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
+            if mtd_row is not None:
+                v = mtd_row[val_col].iloc[0]
                 if is_vol:
-                    ndays = sub["기간_일자"].nunique()
                     v = v / ndays if ndays else np.nan
                 mask = (d["연도"] == cy - 1) & (d["월"] == cm)
                 if mask.any():
@@ -720,8 +744,11 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
     elif gran == "일":
         # 일 단위: 연도별 라인을 동요일(-364일×N) 정렬해 같은 x축에 겹쳐 비교.
         # 전년 이전 연도는 현재년도 달력으로 이동시켜 '동요일 일자' 오버레이가 되게 한다.
-        d = agg(df, ["기간_일자"]).sort_values("기간_일자").dropna(subset=[val_col])
+        d = agg(df, ["기간_일자"]).sort_values("기간_일자")
         d["_yr"] = d["기간_일자"].dt.year
+        if cumulative:
+            d = _cumulative_frame(d, "기간_일자")
+        d = d.dropna(subset=[val_col])
         cur_year = int(d["_yr"].max())
         d["_ax"] = d["기간_일자"] + pd.to_timedelta((cur_year - d["_yr"]) * 364, unit="D")
         d = d.sort_values("_ax")
@@ -752,10 +779,8 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
             )
         base_layout(fig, title, height)
     else:
-        # 주 / 주(최근10주): 주 단위 일평균
+        # 주 / 주(최근10주): 주 단위 일평균 (또는 누적)
         d = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
-        if is_vol and "집행일수" in d.columns:
-            d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
         # 당주(부분주)는 전년도 동일 주차 포인트를 MTD(동요일 -364일 창)로 맞춤.
         data_max = df["기간_일자"].max()
         iso = data_max.isocalendar()
@@ -765,15 +790,28 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
             sunday = pd.Timestamp(_dt.date.fromisocalendar(cwy, cw, 7))
         except Exception:
             sunday = data_max
+        mtd_row, nd = None, 0
         if data_max.normalize() < sunday:
             cur_dates = df[df["기간_일자"] > (data_max - pd.Timedelta(days=data_max.weekday()))]["기간_일자"].drop_duplicates()
             prev_dates = cur_dates - pd.Timedelta(days=364)
             sub = df[df["기간_일자"].isin(prev_dates)]
             if not sub.empty:
-                pa = agg(sub, ["연도"])
-                v = pa[val_col].iloc[0]
+                mtd_row = agg(sub, ["연도"])
+                nd = sub["기간_일자"].nunique()
+        if cumulative:
+            # 전년 동주 base 컬럼을 MTD 창 합계로 대체해 당주(부분주)와 공정 비교
+            if mtd_row is not None:
+                mask = (d["연도"] == cwy - 1) & (d["주차번호"] == cw)
+                if mask.any():
+                    for c in (c for c in AGG_COLS if c in d.columns):
+                        d.loc[mask, c] = mtd_row[c].iloc[0]
+            d = _cumulative_frame(d, "주차번호")
+        else:
+            if is_vol and "집행일수" in d.columns:
+                d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
+            if mtd_row is not None:
+                v = mtd_row[val_col].iloc[0]
                 if is_vol:
-                    nd = sub["기간_일자"].nunique()
                     v = v / nd if nd else np.nan
                 mask = (d["연도"] == cwy - 1) & (d["주차번호"] == cw)
                 if mask.any() and not pd.isna(v):
@@ -1680,20 +1718,31 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
 
 
 def _render_trend_grid(df, targets, src="TOTAL"):
-    """지표별 추이 그리드 — 월 단위 일평균만 표시. 비용출처는 상단 선택값(src)을 따른다."""
-    st.markdown(f"#### 📈 지표별 추이 (월 · 일평균) · 비용출처: {src}")
-    st.caption("월별 **일평균**(합계 지표 ÷ 집행일수). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
+    """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
+    '누적으로 보기' 토글로 일평균 ↔ 연초부터의 누적 보기를 전환한다."""
+    cumulative = st.toggle(
+        "📊 누적으로 보기", value=False, key="sum_cumulative",
+        help="켜면 연도별 시작점부터 '누적'으로 표시합니다. 볼륨 지표는 누적 합계, "
+             "비율 지표(ROAS·CTR·CPA·객단가 등)는 누적 기준으로 재계산합니다.")
+    mode = "월 · 누적" if cumulative else "월 · 일평균"
+    st.markdown(f"#### 📈 지표별 추이 ({mode}) · 비용출처: {src}")
+    if cumulative:
+        st.caption("월별 **누적**(연초부터 합계 지표 누적). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
+    else:
+        st.caption("월별 **일평균**(합계 지표 ÷ 집행일수). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
         st.info("해당 비용출처 데이터가 없습니다.")
         return
+    suffix = "월 누적" if cumulative else "월 일평균"
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), 2):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
-                fig = metric_trend_fig(df_tab, col, "월", f"{lbl} (월 일평균)",
-                                       height=300, tickfmt=RATIO_TICKFMT.get(col))
+                fig = metric_trend_fig(df_tab, col, "월", f"{lbl} ({suffix})",
+                                       height=300, tickfmt=RATIO_TICKFMT.get(col),
+                                       cumulative=cumulative)
                 st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
 
 
@@ -2017,9 +2066,17 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
     """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
     당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
     전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다.
-    비용출처는 상단 선택값(src)을 따른다."""
-    avg_note = "" if gran == "일" else " · 일평균"
-    st.markdown(f"#### 📈 지표별 추이 ({gran}{avg_note}) · 비용출처: {src}")
+    비용출처는 상단 선택값(src)을 따른다.
+    '누적으로 보기' 토글로 일평균(일 단위는 일자값) ↔ 누적 보기를 전환한다."""
+    cumulative = st.toggle(
+        "📊 누적으로 보기", value=False, key=f"{key_prefix}_cumulative",
+        help="켜면 연도별 시작점부터 '누적'으로 표시합니다. 볼륨 지표는 누적 합계, "
+             "비율 지표(ROAS·CTR·CPA·객단가 등)는 누적 기준으로 재계산합니다.")
+    if cumulative:
+        mode_note = " · 누적"
+    else:
+        mode_note = "" if gran == "일" else " · 일평균"
+    st.markdown(f"#### 📈 지표별 추이 ({gran}{mode_note}) · 비용출처: {src}")
     st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
     df_tab = _filter_cost(df, src)
     if df_tab.empty:
@@ -2035,14 +2092,18 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
                          & ~prev_tab["기간_일자"].isin(cur_dates)]
         if not extra.empty:
             graph_src = pd.concat([df_tab, extra], ignore_index=True)
-    suffix = "" if gran == "일" else f" ({gran} 일평균)"
+    if cumulative:
+        suffix = f" ({gran} 누적)"
+    else:
+        suffix = "" if gran == "일" else f" ({gran} 일평균)"
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), 2):
         ccols = st.columns(2)
         for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
             with cc:
                 fig = metric_trend_fig(graph_src, col, gran, f"{lbl}{suffix}",
-                                       height=300, tickfmt=RATIO_TICKFMT.get(col))
+                                       height=300, tickfmt=RATIO_TICKFMT.get(col),
+                                       cumulative=cumulative)
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
 
