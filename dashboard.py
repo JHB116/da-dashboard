@@ -792,8 +792,11 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
             d = d[d["_ord"].isin(recent)]
         cur_year = int(df["연도"].max())
         wk_labels = {w: week_of_month_label(cur_year, w) for w in range(1, 54)}
-        fig = yoy_overlay_fig(d, "주차번호", val_col, title,
-                              ticklabels=wk_labels, height=height)
+        # 월 그래프처럼 값 라벨을 함께 표시. 단, 주차 수가 너무 많으면 라벨이
+        # 겹치므로 40개 이하일 때만 노출한다(넘으면 hover로만 표시).
+        show_text = d["주차번호"].nunique() <= 40
+        fig = yoy_overlay_fig(d, "주차번호", val_col, title, ticklabels=wk_labels,
+                              height=height, textfmt=(lbl_fmt if show_text else None))
     if tickfmt:
         fig.update_yaxes(tickformat=tickfmt)
     return fig
