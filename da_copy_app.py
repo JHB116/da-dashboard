@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 
 import da_copy_dashboard as C
 import drive_fetch as D
+import vision_attrs as V
 
 st.set_page_config(page_title="DA 카피 분석·제안", page_icon="📝", layout="wide")
 
@@ -31,6 +32,13 @@ def load_perf(media):
     raw, meta = D.fetch_latest_perf(get_svc(), return_meta=True)
     perf = C.add_perf_kpis(C.load_da_perf_bytes(raw, media=media))
     return perf, meta
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="이미지 비전 분석 중… (배너 추출 + 속성화, 다소 느림)")
+def load_vision(media, weeks, use_gemini):
+    key = st.secrets.get("gemini_api_key") if use_gemini else None
+    return V.build_vision_cache(get_svc(), media=media, weeks=weeks,
+                                use_gemini=use_gemini, api_key=key)
 
 
 @st.cache_data(ttl=3600, show_spinner="소재안(카피) 수집 중…")
@@ -99,6 +107,13 @@ def main():
     max_weeks = st.sidebar.number_input("소재안 수집 주차 수", 1, 30,
                                         int(os.getenv("DA_COPY_MAX_WEEKS", "6")),
                                         help="최근 N개 주차 폴더의 소재안을 수집(파일이 커서 바운드)")
+    st.sidebar.markdown("---")
+    use_vision = st.sidebar.checkbox("🎨 이미지 비전 분석 (느림)", value=False,
+                                     help="최종 배너를 추출해 배경톤·밝기(무료) + 인물·상품표현·뱃지·타이포·레이아웃(Gemini) 분석")
+    use_gemini = False
+    if use_vision:
+        use_gemini = st.sidebar.checkbox("Gemini 의미분석 포함", value=("gemini_api_key" in st.secrets),
+                                         help="인물수·상품표현·가격뱃지·타이포·레이아웃 (Gemini 키 필요)")
     if st.sidebar.button("🔄 새로 불러오기"):
         st.cache_data.clear()
 
@@ -109,6 +124,16 @@ def main():
 
     tagged = C.derive_attrs(C.add_tags(sojae))
     joined = C.join_sojae_perf(tagged, perf)
+
+    vision_cols = []
+    if use_vision and not joined.empty:
+        try:
+            vdf = load_vision(media, int(max_weeks), use_gemini)
+            if not vdf.empty:
+                joined = joined.merge(vdf, on=["기획전번호", "소재N"], how="left")
+                vision_cols = [c for c in vdf.columns if c not in ("기획전번호", "소재N", "배경밝기값")]
+        except Exception as e:
+            st.sidebar.error(f"비전 분석 실패: {str(e)[:80]}")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("조인된 소재", f"{len(joined):,}")
@@ -194,10 +219,19 @@ def main():
 
     with tab3:
         st.subheader(f"이미지속성별 {metric}")
-        st.caption("소재안 컬럼 기반(이미지유형·상품수·로고). 인물·상품표현·배경톤·타이포 등은 Vision 연동(v2)에서 추가.")
         cat_table("이미지유형", "이미지유형")
         cat_table("상품수구간", "노출 상품 수")
         cat_table("로고구분", "로고 종류")
+        if vision_cols:
+            st.markdown("---")
+            st.markdown("#### 🎨 최종 배너 비전 속성")
+            order = ["상품표현", "인물수", "인물성별", "레이아웃", "가격뱃지", "타이포강조", "배경톤", "밝기"]
+            for col in [c for c in order if c in joined.columns]:
+                cat_table(col, col)
+        elif use_vision:
+            st.info("비전 속성이 아직 없어요. (배너 추출 중이거나 매칭 0)")
+        else:
+            st.caption("👈 사이드바 '🎨 이미지 비전 분석'을 켜면 최종 배너에서 인물·상품표현·뱃지·타이포·레이아웃·배경톤을 추가로 봅니다.")
 
     with taba:
         st.subheader("🔬 심화분석")

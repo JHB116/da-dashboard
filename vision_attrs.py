@@ -172,6 +172,35 @@ def gemini_attrs(img, api_key=None, model="gemini-2.5-flash"):
 # ══════════════════════════════════════════════════════════════════════
 # 4. 배치 → DataFrame
 # ══════════════════════════════════════════════════════════════════════
+def build_vision_cache(svc, media="비즈보드", weeks=8, use_gemini=False, api_key=None,
+                       sojae_root=None, progress=None):
+    """SA로 최근 weeks 주차의 최종운영안(최신 파일) 배너를 추출→속성화→(기획전,소재N) 캐시 DataFrame.
+    무겁다(파일당 non-readonly 로드 + 다수 이미지 + 선택적 Gemini) → 앱에선 캐시/버튼으로."""
+    import pandas as pd
+    import drive_fetch as D
+    root = sojae_root or D.SOJAE_ROOT_ID
+    weeks_f = sorted(D.list_children(svc, root, mime=D.FOLDER_MIME),
+                     key=lambda x: x.get("createdTime", ""), reverse=True)[:weeks]
+    frames = []
+    for wk in weeks_f:
+        sub = D.find_subfolder(svc, wk["id"], media)
+        if not sub:
+            continue
+        xls = D._latest(D.list_children(svc, sub["id"], mime=D.XLSX_MIME), key="createdTime")
+        if not xls:
+            continue
+        try:
+            imgs = extract_creative_images(D.download_bytes(svc, xls["id"]))
+        except Exception:
+            continue
+        if imgs:
+            frames.append(analyze_images(imgs, use_gemini=use_gemini, api_key=api_key, progress=progress))
+    if not frames:
+        return pd.DataFrame()
+    cat = pd.concat(frames, ignore_index=True).drop_duplicates(["기획전번호", "소재N"], keep="last")
+    return cat.reset_index(drop=True)
+
+
 def analyze_images(images, use_gemini=True, api_key=None, progress=None):
     """{(pid,N): PIL} → DataFrame[기획전번호,소재N,배경톤,밝기,인물수,상품표현,가격뱃지,타이포강조,레이아웃,인물성별]."""
     import pandas as pd
