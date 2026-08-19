@@ -117,10 +117,24 @@ def main():
     if st.sidebar.button("🔄 새로 불러오기"):
         st.cache_data.clear()
 
-    perf, pmeta = load_perf(media)
-    sojae, files_used = load_sojae_all(media, int(max_weeks))
+    try:
+        perf, pmeta = load_perf(media)
+        sojae, files_used = load_sojae_all(media, int(max_weeks))
+    except Exception as e:
+        msg = str(e)
+        if "PEM" in msg or "padding" in msg or "Invalid symbol" in msg or "private_key" in msg:
+            st.error("🔑 **서비스계정 키(private_key) 형식이 잘못됐어요.** "
+                     "Secrets의 `private_key` 값은 한 줄로 `\"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n\"` "
+                     "형태여야 합니다. 붙여넣을 때 줄바꿈/특수문자가 끼지 않았는지 확인하세요.")
+        elif "403" in msg or "permission" in msg.lower() or "notFound" in msg or "404" in msg:
+            st.error("🔒 **Drive 접근 권한 문제.** 서비스계정 이메일을 소재/실적 상위 폴더(DA)에 "
+                     "뷰어로 공유했는지, Drive API가 켜져 있는지 확인하세요.")
+        else:
+            st.error(f"데이터를 불러오지 못했어요: {msg[:300]}")
+        st.info("Secrets 수정 후 좌측 '🔄 새로 불러오기' 또는 앱 재부팅(Manage app → Reboot)하세요.")
+        st.stop()
     if sojae.empty or perf.empty:
-        st.info("소재안 또는 실적 데이터가 비어 있어요."); st.stop()
+        st.info("소재안 또는 실적 데이터가 비어 있어요. (해당 매체 파일이 없거나 아직 집행 전일 수 있어요)"); st.stop()
 
     tagged = C.derive_attrs(C.add_tags(sojae))
     joined = C.join_sojae_perf(tagged, perf)
