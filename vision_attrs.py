@@ -147,26 +147,36 @@ def _gemini_key():
     return os.getenv("GEMINI_API_KEY")
 
 
-def gemini_attrs(img, api_key=None, model="gemini-2.5-flash"):
-    """이미지 → 의미 속성 dict. 실패 시 {}. (google-genai 필요)"""
+def gemini_attrs(img, api_key=None, model="gemini-3.6-flash", tries=4):
+    """이미지 → 의미 속성 dict. 429(쿼터)면 지수백오프 재시도. 실패 시 {_error}."""
+    import time
     key = api_key or _gemini_key()
     if not key:
         return {}
     try:
         from google import genai
         from google.genai import types
-        client = genai.Client(api_key=key)
-        buf = io.BytesIO(); img.convert("RGB").save(buf, format="JPEG", quality=85)
-        resp = client.models.generate_content(
-            model=model,
-            contents=[types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"),
-                      _VISION_PROMPT],
-        )
-        txt = resp.text.strip()
-        m = re.search(r"\{.*\}", txt, re.S)
-        return json.loads(m.group(0)) if m else {}
     except Exception as e:
-        return {"_error": str(e)[:120]}
+        return {"_error": f"google-genai 미설치: {e}"}
+    client = genai.Client(api_key=key)
+    buf = io.BytesIO(); img.convert("RGB").save(buf, format="JPEG", quality=85)
+    data = buf.getvalue()
+    last = ""
+    for attempt in range(tries):
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=[types.Part.from_bytes(data=data, mime_type="image/jpeg"), _VISION_PROMPT],
+            )
+            m = re.search(r"\{.*\}", (resp.text or "").strip(), re.S)
+            return json.loads(m.group(0)) if m else {"_error": "JSON 파싱 실패"}
+        except Exception as e:
+            last = str(e)
+            if "429" in last or "RESOURCE_EXHAUSTED" in last:
+                time.sleep(min(2 ** attempt * 5, 40))   # 5,10,20,40s 백오프
+                continue
+            return {"_error": last[:150]}
+    return {"_error": "429 재시도 초과: " + last[:100]}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -201,17 +211,21 @@ def build_vision_cache(svc, media="비즈보드", weeks=8, use_gemini=False, api
     return cat.reset_index(drop=True)
 
 
-def analyze_images(images, use_gemini=True, api_key=None, progress=None):
-    """{(pid,N): PIL} → DataFrame[기획전번호,소재N,배경톤,밝기,인물수,상품표현,가격뱃지,타이포강조,레이아웃,인물성별]."""
-    import pandas as pd
+def analyze_images(images, use_gemini=True, api_key=None, model="gemini-3.6-flash",
+                   throttle=4.0, progress=None):
+    """{(pid,N): PIL} → DataFrame[기획전번호,소재N,배경톤,밝기,인물수,상품표현,가격뱃지,타이포강조,레이아웃,인물성별].
+    throttle: Gemini 콜 사이 최소 간격(초) — 무료 티어 RPM 제한 회피."""
+    import pandas as pd, time
     rows = []
     items = list(images.items())
     for i, ((pid, N), img) in enumerate(items):
         rec = {"기획전번호": pid, "소재N": N}
         rec.update(cv_attrs(img))
         if use_gemini:
-            g = gemini_attrs(img, api_key=api_key)
+            g = gemini_attrs(img, api_key=api_key, model=model)
             rec.update({k: v for k, v in g.items() if not k.startswith("_")})
+            if throttle and i < len(items) - 1:
+                time.sleep(throttle)
         rows.append(rec)
         if progress:
             progress(i + 1, len(items))
