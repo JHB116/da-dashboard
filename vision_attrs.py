@@ -23,7 +23,9 @@ _CODE = None  # lazy
 # 1. 임베드 이미지 추출 + 소재 매핑
 # ══════════════════════════════════════════════════════════════════════
 _PID_COL = 11   # K 기획전번호 (1-based)
-_IMG_ANCHOR_COL = 22  # 0-based col 22 = '이미지' 컬럼
+# 이미지 앵커 컬럼(0-based) 우선순위: 최종소재안(31=완성 배너) > 이미지 피드백(30) > 이미지(22=구성컷).
+# 최종운영안 파일엔 col31에 완성 배너(카피·로고·뱃지 포함)가 소재 행마다 들어있다.
+_IMG_COL_PREF = [31, 30, 22]
 
 
 def _sojae_row_map(ws, header_row=3):
@@ -44,31 +46,42 @@ def _sojae_row_map(ws, header_row=3):
     return out
 
 
-def extract_creative_images(file_bytes, header_row=3, min_px=120):
-    """xlsx bytes → {(기획전번호, 소재N): PIL.Image}. 행별 가장 큰 이미지를 대표컷으로."""
+def extract_creative_images(file_bytes, header_row=3, min_px=200):
+    """xlsx bytes → {(기획전번호, 소재N): PIL.Image}. 최종 배너(col31) 우선, 행별 대표 1장.
+    같은 행에 여러 배너(A/B)면 가장 큰 것. col31 없으면 col30→col22 폴백."""
     import openpyxl
     from PIL import Image
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)  # 이미지 로드 위해 non-readonly
     ws = wb[wb.sheetnames[0]]
     rowmap = _sojae_row_map(ws, header_row)
-    best = {}  # excel_row -> (area, PIL.Image)
+    # excel_row -> {col: (area, PIL)}
+    per_row = {}
     for im in getattr(ws, "_images", []):
         try:
-            arow = im.anchor._from.row + 1          # 0-based → 엑셀행
+            col = im.anchor._from.col
+            arow = im.anchor._from.row + 1
             data = im._data() if callable(getattr(im, "_data", None)) else im.ref
             pil = Image.open(io.BytesIO(data)).convert("RGB")
         except Exception:
             continue
-        area = pil.width * pil.height
         if pil.width < min_px and pil.height < min_px:
-            continue                                 # 로고 조각 등 소형 제외
-        if arow not in best or area > best[arow][0]:
-            best[arow] = (area, pil)
+            continue
+        d = per_row.setdefault(arow, {})
+        area = pil.width * pil.height
+        if col not in d or area > d[col][0]:
+            d[col] = (area, pil)
     wb.close()
     out = {}
-    for r, (pid_n) in rowmap.items():
-        if r in best:
-            out[pid_n] = best[r][1]
+    for r, key in rowmap.items():
+        cols = per_row.get(r)
+        if not cols:
+            continue
+        for pref in _IMG_COL_PREF:                   # 최종소재안 우선
+            if pref in cols:
+                out[key] = cols[pref][1]
+                break
+        else:
+            out[key] = max(cols.values(), key=lambda t: t[0])[1]
     return out
 
 
