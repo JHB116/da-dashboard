@@ -252,7 +252,7 @@ def main():
         st.markdown(f"**① 교차: 소구형 × 이미지유형 — {metric}** (셀=가중 성과, 표본 부족은 빈칸)")
         cx = C.cross_perf(joined, list(C.DA_KW), "이미지유형", metric, min_n=int(min_n))
         if not cx.empty:
-            disp = cx.applymap(lambda v: fmt_metric(v, metric) if pd.notna(v) else "–")
+            disp = cx.map(lambda v: fmt_metric(v, metric) if pd.notna(v) else "–")
             st.dataframe(disp, use_container_width=True)
         st.markdown("**② 소구개수 효과** (소구를 많이 담을수록?)")
         cat_table("소구개수", "소재당 소구 개수")
