@@ -27,7 +27,7 @@ def get_svc():
     return D.drive_service(dict(st.secrets["gcp_service_account"]))
 
 
-@st.cache_data(ttl=3600, show_spinner="실적(DA로우) 불러오는 중…")
+@st.cache_data(ttl=6*3600, show_spinner="실적(DA로우) 불러오는 중… (최초 1회 45MB, 이후 캐시)")
 def load_perf(media):
     raw, meta = D.fetch_latest_perf(get_svc(), return_meta=True)
     perf = C.add_perf_kpis(C.load_da_perf_bytes(raw, media=media))
@@ -41,7 +41,7 @@ def load_vision(media, weeks, use_gemini):
                                 use_gemini=use_gemini, api_key=key)
 
 
-@st.cache_data(ttl=3600, show_spinner="소재안(카피) 수집 중…")
+@st.cache_data(ttl=6*3600, show_spinner="소재안(카피) 수집 중… (최초 1회, 이후 캐시)")
 def load_sojae_all(media, max_weeks):
     """최근 max_weeks 주차 폴더의 해당 매체 소재안을 모아 소재 카탈로그로.
     (기획전번호, 소재N) 중복은 최신 파일 우선. 소재안은 15~40MB라 주차 수를 바운드한다."""
@@ -105,7 +105,7 @@ def main():
     metric = st.sidebar.selectbox("성과 주지표", list(C.METRICS), index=0)
     min_n = st.sidebar.number_input("최소 표본(소재 수)", 3, 100, 5)
     max_weeks = st.sidebar.number_input("소재안 수집 주차 수", 1, 30,
-                                        int(os.getenv("DA_COPY_MAX_WEEKS", "6")),
+                                        int(os.getenv("DA_COPY_MAX_WEEKS", "3")),
                                         help="최근 N개 주차 폴더의 소재안을 수집(파일이 커서 바운드)")
     st.sidebar.markdown("---")
     use_vision = st.sidebar.checkbox("🎨 이미지 비전 분석 (느림)", value=False,
@@ -191,9 +191,9 @@ def main():
         cp2["노출"] = cp["노출"].map(lambda v: f"{v:,.0f}")
         st.dataframe(cp2, use_container_width=True, hide_index=True)
 
-    tab1, tab2, tabc, tab3, taba, tab4, tab5 = st.tabs(
+    tab1, tab2, tabc, tab3, taba, tab4, tab5, tabg = st.tabs(
         ["🏷 소구형별", "✍️ 표현형식별", "🔤 카피심화", "🖼 이미지속성별",
-         "🔬 심화분석", "🥇 리더보드", "💡 제안"])
+         "🔬 심화분석", "🥇 리더보드", "💡 제안", "🤖 AI 카피생성"])
 
     with tab1:
         st.subheader(f"소구형(카피 멀티라벨)별 {metric}")
@@ -293,6 +293,35 @@ def main():
             for _, r in ap.head(4).iterrows():
                 d = fmt_metric(r["차이"], metric) if metric == "ROAS" else f"{r['차이']*100:+.2f}%p"
                 st.markdown(f"- {r['태그']} — {metric} {d} (소재 {int(r['보유n'])}건)")
+
+    with tabg:
+        st.subheader("🤖 AI 카피 생성 — 인사이트 기반 신규 배너 카피")
+        if "gemini_api_key" not in st.secrets:
+            st.info("Gemini 키가 필요해요. Secrets에 `gemini_api_key` 를 넣으면 활성화됩니다.")
+        else:
+            with st.expander(f"이번 생성에 쓰는 인사이트 요약 ({metric})", expanded=False):
+                st.text(C.build_insight_summary(joined, metric))
+            colA, colB = st.columns([3, 1])
+            context = colA.text_input("맥락 (선택) — 브랜드/기획전/상품/타겟/시즌",
+                                      placeholder="예: 헤지스 골프 8월 여름 세일, 남성 타겟")
+            n = colB.number_input("개수", 3, 10, 5)
+            if st.button("✨ 카피 생성", type="primary"):
+                with st.spinner("Gemini가 인사이트를 반영해 카피 작성 중…"):
+                    ideas, err = C.suggest_copy(joined, metric, context=context, n=int(n),
+                                                api_key=st.secrets.get("gemini_api_key"))
+                if err:
+                    st.error(f"생성 실패: {err}")
+                elif not ideas:
+                    st.warning("결과가 비었어요. 다시 시도해 주세요.")
+                else:
+                    for i, it in enumerate(ideas, 1):
+                        st.markdown(
+                            f"**{i}. {it.get('메인카피','')}**  \n"
+                            f"　{it.get('서브카피','')}  \n"
+                            f"　<span style='color:#2E68B0'>패턴: {it.get('활용패턴','')}</span>  ·  "
+                            f"<span style='color:#64748b'>{it.get('기대효과','')}</span>",
+                            unsafe_allow_html=True)
+                    st.caption("실제 성과 인사이트(잘 되는 소구형·단어·이미지·조합)를 반영해 생성했습니다. A/B로 검증하세요.")
 
 
 if __name__ == "__main__":

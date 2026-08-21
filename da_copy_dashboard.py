@@ -421,6 +421,97 @@ def sig_label(q):
     return f"q={q:.2f} · 유의하지않음"
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 5. 인사이트 요약 → Gemini 카피 제안
+# ══════════════════════════════════════════════════════════════════════
+def build_insight_summary(joined, metric_label, min_n=4):
+    """조인 데이터에서 '이기는 패턴'을 요약 텍스트로. (카피 제안 프롬프트용)"""
+    higher = METRICS[metric_label][2]
+    lines = [f"[성과 지표: {metric_label} · 분석 소재 {len(joined)}건]"]
+
+    ap = appeal_perf(joined, metric_label, tags=list(DA_KW), min_n=min_n)
+    if len(ap):
+        win = ap[(ap["차이"] > 0) == higher].head(4)["태그"].tolist()
+        lose = ap[(ap["차이"] > 0) != higher].tail(3)["태그"].tolist()
+        if win:  lines.append("· 잘 되는 소구형: " + ", ".join(win))
+        if lose: lines.append("· 약한 소구형: " + ", ".join(lose))
+
+    kp = keyword_perf(joined, metric_label, min_n=max(5, min_n), top=10)
+    if len(kp):
+        goodw = kp[(kp["차이"] > 0) == higher]["단어"].head(8).tolist()
+        if goodw: lines.append("· 성과 좋은 단어: " + ", ".join(goodw))
+
+    for col, lab in [("이미지유형", "이미지유형"), ("문장형", "카피 문장형"),
+                     ("할인율구간", "할인율"), ("브랜드구성", "브랜드 노출")]:
+        if col in joined.columns:
+            cp = cat_perf(joined, col, metric_label, min_n=min_n)
+            if len(cp):
+                lines.append(f"· 잘 되는 {lab}: {cp.iloc[0][col]}")
+
+    cx = cross_perf(joined, list(DA_KW), "이미지유형", metric_label, min_n=3)
+    if not cx.empty:
+        stacked = cx.stack()
+        if len(stacked):
+            best = stacked.idxmax() if higher else stacked.idxmin()
+            lines.append(f"· 최고 조합: 소구 '{best[0]}' × 이미지 '{best[1]}'")
+    return "\n".join(lines)
+
+
+def gemini_text(prompt, api_key=None, model="gemini-3.6-flash", tries=4):
+    """텍스트 생성 (카피 제안용). 429 백오프. google-genai 필요."""
+    import time
+    key = api_key
+    if not key:
+        try:
+            import streamlit as st
+            key = st.secrets.get("gemini_api_key")
+        except Exception:
+            key = None
+    if not key:
+        return None, "Gemini 키가 없습니다 (secrets: gemini_api_key)."
+    try:
+        from google import genai
+    except Exception as e:
+        return None, f"google-genai 미설치: {e}"
+    client = genai.Client(api_key=key)
+    for attempt in range(tries):
+        try:
+            r = client.models.generate_content(model=model, contents=[prompt])
+            return (r.text or ""), None
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                time.sleep(min(2 ** attempt * 5, 40)); continue
+            return None, msg[:180]
+    return None, "429 재시도 초과"
+
+
+def suggest_copy(joined, metric_label, context="", n=5, api_key=None, model="gemini-3.6-flash"):
+    """인사이트 기반 신규 배너 카피 n개 제안. 반환: (list[dict], error)."""
+    import json as _json
+    summary = build_insight_summary(joined, metric_label)
+    prompt = (
+        "너는 LF몰 디스플레이(비즈보드) 광고의 시니어 카피라이터다.\n"
+        "아래는 최근 실제 성과 데이터에서 뽑은 '이기는 패턴' 요약이다:\n\n"
+        f"{summary}\n\n"
+        f"[추가 조건] {context or '특정 브랜드/기획전 지정 없음 — 범용 제안'}\n\n"
+        f"이 인사이트(잘 되는 소구형·단어·이미지패턴)를 적극 반영해 신규 비즈보드 배너 카피 {n}개를 제안하라.\n"
+        "규칙: 메인카피는 14자 이내, 서브카피는 18자 이내(한글 기준), 실제 광고 문구처럼 자연스럽게.\n"
+        "JSON 배열만 출력(설명 금지):\n"
+        '[{"메인카피":"..","서브카피":"..","활용패턴":"반영한 소구형/단어/이미지","기대효과":"왜 잘 될지 한줄"}]'
+    )
+    txt, err = gemini_text(prompt, api_key=api_key, model=model)
+    if err:
+        return [], err
+    m = re.search(r"\[.*\]", txt, re.S)
+    if not m:
+        return [], "카피 JSON 파싱 실패"
+    try:
+        return _json.loads(m.group(0)), None
+    except Exception as e:
+        return [], f"JSON 파싱 오류: {e}"
+
+
 # ── 단어 단위 성과 (발송 대시보드 keyword_perf 이식) ──────────────
 _STOP = set(["외", "및", "the", "of", "up", "to", "for", "with", "and", "LF몰", "LFmall",
              "지금", "더", "이", "그", "저", "수", "것", "때", "안"])
