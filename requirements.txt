@@ -9,3 +9,4 @@ google-auth
 scipy
 pillow
 google-genai
+pyarrow

@@ -27,8 +27,24 @@ def get_svc():
     return D.drive_service(dict(st.secrets["gcp_service_account"]))
 
 
-@st.cache_data(ttl=6*3600, show_spinner="실적(DA로우) 불러오는 중… (최초 1회 45MB, 이후 캐시)")
-def load_perf(media):
+def _cache_meta(media):
+    import json
+    p = f"cache/meta_{media}.json"
+    if os.path.exists(p):
+        try:
+            return json.load(open(p, encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+@st.cache_data(ttl=6*3600, show_spinner="실적 불러오는 중…")
+def load_perf(media, use_cache=True):
+    cpath = f"cache/perf_{media}.parquet"
+    if use_cache and os.path.exists(cpath):
+        m = _cache_meta(media)
+        return pd.read_parquet(cpath), {"file": m.get("perf_file", "(캐시)"),
+                                        "createdTime": m.get("perf_date", "")}
     raw, meta = D.fetch_latest_perf(get_svc(), return_meta=True)
     perf = C.add_perf_kpis(C.load_da_perf_bytes(raw, media=media))
     return perf, meta
@@ -41,10 +57,13 @@ def load_vision(media, weeks, use_gemini):
                                 use_gemini=use_gemini, api_key=key)
 
 
-@st.cache_data(ttl=6*3600, show_spinner="소재안(카피) 수집 중… (최초 1회, 이후 캐시)")
-def load_sojae_all(media, max_weeks):
-    """최근 max_weeks 주차 폴더의 해당 매체 소재안을 모아 소재 카탈로그로.
-    (기획전번호, 소재N) 중복은 최신 파일 우선. 소재안은 15~40MB라 주차 수를 바운드한다."""
+@st.cache_data(ttl=6*3600, show_spinner="소재안(카피) 수집 중…")
+def load_sojae_all(media, max_weeks, use_cache=True):
+    """캐시(cache/sojae_<media>.parquet)가 있으면 즉시 로드(전 주차), 없으면 라이브로 최근 max_weeks 수집."""
+    cpath = f"cache/sojae_{media}.parquet"
+    if use_cache and os.path.exists(cpath):
+        m = _cache_meta(media)
+        return pd.read_parquet(cpath), [f"캐시 {m.get('sojae_files','?')}개 파일"]
     svc = get_svc()
     frames, files_used = [], []
     weeks = sorted(D.list_children(svc, D.SOJAE_ROOT_ID, mime=D.FOLDER_MIME),
@@ -114,12 +133,19 @@ def main():
     if use_vision:
         use_gemini = st.sidebar.checkbox("Gemini 의미분석 포함", value=("gemini_api_key" in st.secrets),
                                          help="인물수·상품표현·가격뱃지·타이포·레이아웃 (Gemini 키 필요)")
+    has_cache = os.path.exists(f"cache/perf_{media}.parquet")
+    use_cache = True
+    if has_cache:
+        use_cache = st.sidebar.checkbox("⚡ 캐시 사용 (빠름·전체기간)", value=True,
+                                        help="미리 구운 캐시를 읽어 즉시 로딩. 끄면 Drive에서 라이브로 받음(느림).")
+    else:
+        st.sidebar.caption("💡 캐시 미생성 — 라이브 로딩(느림). build_cache.py로 캐시를 구우면 빨라집니다.")
     if st.sidebar.button("🔄 새로 불러오기"):
         st.cache_data.clear()
 
     try:
-        perf, pmeta = load_perf(media)
-        sojae, files_used = load_sojae_all(media, int(max_weeks))
+        perf, pmeta = load_perf(media, use_cache)
+        sojae, files_used = load_sojae_all(media, int(max_weeks), use_cache)
     except Exception as e:
         msg = str(e)
         if "PEM" in msg or "padding" in msg or "Invalid symbol" in msg or "private_key" in msg:

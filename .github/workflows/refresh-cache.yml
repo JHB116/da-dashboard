@@ -1,0 +1,40 @@
+name: refresh-cache
+
+# 매일 새벽(KST 03:00 = UTC 18:00) 캐시를 다시 구워 커밋한다.
+# 무거운 Drive 다운로드/파싱을 CI에서 미리 수행 → 앱은 작은 cache/*.parquet 만 읽어 즉시 로딩.
+# 수동 실행도 가능(Actions 탭 → Run workflow).
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/lf-dashboard-streamlit-link-39qq9d
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Build cache (비즈보드)
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python build_cache.py 비즈보드
+      - name: Commit cache
+        run: |
+          git config user.name "cache-bot"
+          git config user.email "cache-bot@users.noreply.github.com"
+          git add cache/
+          if git diff --cached --quiet; then
+            echo "변경 없음"
+          else
+            git commit -m "chore: refresh 캐시 [skip ci]"
+            git push
+          fi
