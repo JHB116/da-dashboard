@@ -1,6 +1,8 @@
 # 현재 정상 동작 확인된 버전으로 고정(재부팅 시 자동 업그레이드로 인한 갑작스런 breakage 방지)
+# 주의: numpy 2.5.x는 Python 3.12+ 전용이라 Streamlit Cloud(Python 3.11)에서 설치 실패 →
+#       앱이 "Oh no. Error running app"으로 크래시함. Python 3.11/3.12/3.13 모두 호환되는 2.4.6으로 고정.
 streamlit==1.59.2
 pandas==3.0.3
 plotly==6.9.0
-numpy==2.5.1
+numpy==2.4.6
 openpyxl==3.1.5
