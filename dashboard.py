@@ -495,6 +495,18 @@ def fmt_roas(v):
     if pd.isna(v): return "–"
     return f"{v*100:.0f}%"
 
+def money_tip(v, formatter=fmt_money):
+    """축약 금액에 마우스를 올리면 정확한 원 단위가 보이도록 <span title>로 감싼다.
+    st.markdown(..., unsafe_allow_html=True)로 그리는 HTML 카드 안에서만 사용한다.
+    (Plotly 차트는 이미 hover에 원 단위 전체 숫자를 표시하고, st.dataframe 표는
+     '원본 숫자 CSV 다운로드'로 정확한 값을 제공한다.)"""
+    label = formatter(v)
+    if pd.isna(v):
+        return label
+    exact = f"{int(round(v)):,}원"
+    return (f'<span title="{exact}" '
+            f'style="border-bottom:1px dotted #CBD5E1;cursor:help;">{label}</span>')
+
 # 증감률 통일 표기: 증가 → +초록, 감소 → △빨강
 def signed_pct(v, decimals=1):
     """증감률 문자열: 증가는 '+', 감소는 '△'. (색상은 Styler chg_style로)"""
@@ -1332,13 +1344,13 @@ def render_goal_bar(targets: dict, cur_spend: float, cur_rev: float, cur_roas: f
     """목표 KPI 한줄 요약 바."""
     items = []
     if targets.get("spend", 0) > 0:
-        items.append(("월 광고비 목표", fmt_money(targets["spend"]),
+        items.append(("월 광고비 목표", money_tip(targets["spend"]),
                        cur_spend / targets["spend"] if cur_spend else None))
     if targets.get("roas", 0) > 0:
         items.append(("ROAS 목표", fmt_roas(targets["roas"]),
                        cur_roas / targets["roas"] if cur_roas else None))
     if targets.get("rev", 0) > 0:
-        items.append(("월 거래액 목표", fmt_money(targets["rev"]),
+        items.append(("월 거래액 목표", money_tip(targets["rev"]),
                        cur_rev / targets["rev"] if cur_rev else None))
     if not items:
         return
@@ -1409,7 +1421,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
         for rank, (_, row) in enumerate(top3.iterrows(), 1):
             name = str(row["구분_캠페인명"])[:35]
             roas = row["순결제ROAS"]
-            spend = fmt_money(row["지표_광고비"])
+            spend = money_tip(row["지표_광고비"])
             badge_color = ["#F59E0B", "#94A3B8", "#CD7F32", "#64748B", "#94A3B8"][rank - 1]
             st.markdown(f"""
             <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
@@ -1426,7 +1438,7 @@ def render_top3_section(df: pd.DataFrame, targets: dict):
         for rank, (_, row) in enumerate(bot3.iterrows(), 1):
             name = str(row["구분_캠페인명"])[:35]
             roas = row["순결제ROAS"]
-            spend = fmt_money(row["지표_광고비"])
+            spend = money_tip(row["지표_광고비"])
             gap_html = ""
             if t_roas > 0:
                 gap = roas - t_roas
@@ -1487,9 +1499,9 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
 
     # 11개 지표 (요청 순서): 광고비, 거래액, ROAS, UV, CR(총), CTR, CPC, 가입률, 가입CPA, 첫구매CPA, 신규거래액
     metrics = [
-        ("💰 광고비",       fmt_money(spend),                        "지표_광고비",
+        ("💰 광고비",       money_tip(spend),                        "지표_광고비",
          targets.get("spend", 0), spend),
-        ("🛒 거래액(순결제)", fmt_money(rev),                         "지표_순결제거래액",
+        ("🛒 거래액(순결제)", money_tip(rev),                         "지표_순결제거래액",
          targets.get("rev", 0), rev),
         ("📈 ROAS(순결제)",  fmt_roas(roas),                          "순결제ROAS",
          None, None),
@@ -1501,15 +1513,15 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
          None, None),
         ("📊 CTR",           fmt_pct(tot["CTR"]),                     "CTR",
          None, None),
-        ("🖱️ CPC",          fmt_money(tot["CPC"]),                   "CPC",
+        ("🖱️ CPC",          money_tip(tot["CPC"]),                   "CPC",
          None, None),
         ("👤 가입률",        fmt_pct(tot["가입률"], 3),               "가입률",
          None, None),
-        ("💸 가입CPA",       fmt_money(tot["가입CPA"]),               "가입CPA",
+        ("💸 가입CPA",       money_tip(tot["가입CPA"]),               "가입CPA",
          None, None),
-        ("🧾 첫구매CPA",     fmt_money(tot["첫구매CPA"]),             "첫구매CPA",
+        ("🧾 첫구매CPA",     money_tip(tot["첫구매CPA"]),             "첫구매CPA",
          None, None),
-        ("🆕 신규거래액",    fmt_money(tot["지표_당년신규순결제거래액"]), "지표_당년신규순결제거래액",
+        ("🆕 신규거래액",    money_tip(tot["지표_당년신규순결제거래액"]), "지표_당년신규순결제거래액",
          None, None),
     ]
 
