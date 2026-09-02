@@ -2730,6 +2730,17 @@ def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> pd.Da
                        errors="ignore")
 
 
+def _has_prev_year_data(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> bool:
+    """현재 선택 기간의 -364일 동요일에 해당하는 전년 데이터가 하나라도 있는지."""
+    if prev_source is None or prev_source.empty or cur_df.empty \
+            or "기간_일자" not in prev_source.columns:
+        return False
+    prev_dates = set(pd.to_datetime(prev_source["기간_일자"].dropna().unique()))
+    cur_dates = pd.to_datetime(cur_df["기간_일자"].dropna().unique())
+    return any((pd.Timestamp(d) - pd.Timedelta(days=364)) in prev_dates
+               for d in cur_dates)
+
+
 # 커스텀 시트 전용 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
 CUSTOM_EXTRA_METRIC_SPEC = [
     ("순결제거래액(RD)", "지표_순결제거래액(RD)", "money"),
@@ -3207,6 +3218,11 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     show_promo = (_DRILL_PROMO_COL in df.columns
                   and any(dc in ("구분_캠페인", "구분_하위캠페인") for _l, dc in dims))
 
+    if show_yoy and not _has_prev_year_data(df, base):
+        st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년비가 "
+                   "모두 ‘전년 –’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**"
+                   "(예: 전년 실적이 존재하는 월)으로 바꾸면 전년비가 채워집니다.")
+
     st.divider()
     nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
                                     daily_avg=daily_avg,
@@ -3347,6 +3363,10 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
+    if prev_src.empty:
+        st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년·비교가 "
+                   "모두 ‘–’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**으로 "
+                   "바꾸면 채워집니다.")
 
     def _map(dfx, cols):
         if dfx is None or dfx.empty:
@@ -3410,7 +3430,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
                "증감률(+초록/△빨강). 전년 데이터가 없으면 ‘–’. 비율·ROAS 등도 같은 증감률 규칙.")
     st.download_button("📄 CSV 다운로드 (원본 숫자)",
                        data=raw_table.to_csv(index=False).encode("utf-8-sig"),
-                       file_name="전년비_리포트.csv", mime="text/csv", key="yoy_csv")
+                       file_name="전년비_리포트.csv", mime="text/csv", key="rawdl_yoy")
 
 
 # ───────────────────────────────────────────────
