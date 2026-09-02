@@ -2702,6 +2702,34 @@ def _drill_series(df_sub, col):
     return df_sub[col]
 
 
+# ── 전년 동기(-364일 동요일) 정렬 헬퍼 ──────────────────────────
+# 대시보드 전역 규칙과 동일하게 '동요일 -364일' 기준으로 전년 데이터를 잡되,
+# 각 전년 행을 '현재 기간 컬럼값'으로 재라벨해 (매체·상품 등) 차원 단위 전년비를
+# 그대로 계산·매칭할 수 있게 한다. 구분_* 차원은 전년 행 값 그대로 두고,
+# 기간 파생 컬럼(연도·월·연월·기간_주·주차번호·기간_일자)만 현재 동요일 일자로 대체.
+_PY_PERIOD_COLS = ["기간_일자", "연도", "월", "연월", "기간_주", "주차번호"]
+
+
+def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> pd.DataFrame:
+    """현재 기간(cur_df)의 -364일 동요일에 해당하는 전년 행을 prev_source에서 뽑아,
+    기간 컬럼을 현재값으로 치환한 프레임으로 반환. 매칭 없으면 빈 프레임."""
+    empty = (prev_source if prev_source is not None else cur_df).iloc[0:0]
+    if prev_source is None or prev_source.empty or cur_df.empty \
+            or "기간_일자" not in prev_source.columns:
+        return empty
+    pcols = [c for c in _PY_PERIOD_COLS if c in cur_df.columns]
+    cmap = cur_df[pcols].drop_duplicates().copy()
+    cmap["_pdate"] = cmap["기간_일자"] - pd.Timedelta(days=364)
+    # suffixes=("_py","")로 겹치는 기간 컬럼은 '현재값(오른쪽)'이 이기게 한다.
+    merged = prev_source.merge(cmap, left_on="기간_일자", right_on="_pdate",
+                               how="inner", suffixes=("_py", ""))
+    if merged.empty:
+        return empty
+    return merged.drop(columns=[c for c in merged.columns
+                                if c == "_pdate" or str(c).endswith("_py")],
+                       errors="ignore")
+
+
 # 커스텀 시트 전용 추가 지표(채널별 순결제거래액 RD~SP) — 표기 순서대로 맨 끝에
 CUSTOM_EXTRA_METRIC_SPEC = [
     ("순결제거래액(RD)", "지표_순결제거래액(RD)", "money"),
@@ -2766,16 +2794,33 @@ def _drill_daily_avg(series, extra_cols=()):
     return row
 
 
-def _drill_cells(series, spec, daily_avg=False, extra_cols=()):
-    """spec 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)"""
+def _drill_yoy_badge(cur_v, prev_v):
+    """전년비 배지 HTML. cur/prev로 (cur-prev)/|prev| 증감률(다른 표와 동일 규칙)."""
+    if prev_v is None or pd.isna(prev_v) or prev_v == 0 or pd.isna(cur_v):
+        return '<span class="yoy na">전년 –</span>'
+    chg = (cur_v - prev_v) / abs(prev_v)
+    cls = "up" if chg >= 0 else "dn"
+    sym = "▲" if chg >= 0 else "▼"
+    return f'<span class="yoy {cls}">{sym}{abs(chg) * 100:.1f}%</span>'
+
+
+def _drill_cells(series, spec, daily_avg=False, extra_cols=(),
+                 prev=None, show_yoy=False):
+    """spec 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)
+    show_yoy=True면 각 셀 아래에 전년 동기(-364일 동요일) 대비 증감률 배지를 붙인다."""
     if daily_avg and series is not None:
         series = _drill_daily_avg(series, extra_cols)
+    if daily_avg and prev is not None:
+        prev = _drill_daily_avg(prev, extra_cols)
     out = []
     for _label, col, kind in spec:
         v = series.get(col, np.nan) if series is not None else np.nan
         txt = _fmt_kind(v, kind)
         if kind == "roas" and not pd.isna(v):
             txt = f'<span class="{"up" if v >= 1 else "dn"}">{txt}</span>'
+        if show_yoy:
+            pv = prev.get(col, np.nan) if prev is not None else np.nan
+            txt = f"{txt}<br>{_drill_yoy_badge(v, pv)}"
         out.append(txt)
     return out
 
@@ -2804,10 +2849,13 @@ def _drill_natstr(s):
     return re.sub(r"\d+", lambda m: m.group().zfill(12), str(s))
 
 
-def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False):
+def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False,
+                      prev_source=None, show_yoy=False):
     """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
     부모별 상위 top_n만 유지. impr_only=True면 노출수>0 행만 사용.
     sort_by: '광고비'(큰 순) | '이름'(기간·가나다순). daily_avg면 일평균 표시.
+    show_yoy=True면 prev_source(날짜 미필터 동일필터 소스)에서 전년 동기(-364일
+    동요일) 집계를 계층별로 매칭해 각 셀에 전년비 배지를 붙인다.
     캠페인·하위캠페인 단계는 기획전번호를 이름 앞에 붙여 표시."""
     spec = _drill_metric_spec(df)
     # agg가 집계하지 않는(미인식) 원본 지표_ 컬럼 → 별도 합산 대상
@@ -2833,6 +2881,20 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         work[cn] = _drill_series(work, col).astype("object")
         cols.append(cn)
 
+    # ── 전년 동기(-364일 동요일) 소스: 현재 기간 컬럼으로 정렬 후 동일 토큰 컬럼 부여
+    pwork = None
+    if show_yoy and prev_source is not None:
+        pw = _prev_year_aligned(df, prev_source)
+        if impr_only and not pw.empty:
+            pw = pw[pw["지표_노출수"].fillna(0) > 0]
+        if not pw.empty:
+            pw = pw.copy()
+            for c in extra_cols:
+                pw[c] = pd.to_numeric(pw[c], errors="coerce").fillna(0)
+            for i, (_lab, col) in enumerate(dims):
+                pw[cols[i]] = _drill_series(pw, col).astype("object")
+            pwork = pw
+
     def _augment(g, keys):
         if extra_cols:
             ex = work.groupby(keys, dropna=False)[extra_cols].sum().reset_index()
@@ -2843,11 +2905,29 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             g = g.merge(pr, on=keys, how="left")
         return g
 
+    def _prev_lookup(dep):
+        """깊이 dep의 전년 집계를 {토큰튜플: Series}로. pwork 없으면 빈 dict."""
+        if pwork is None:
+            return {}
+        keys = cols[:dep]
+        pg = agg(pwork, keys)
+        if extra_cols:
+            ex = pwork.groupby(keys, dropna=False)[extra_cols].sum().reset_index()
+            pg = pg.merge(ex, on=keys, how="left")
+        return {tuple(_drill_token(r[c]) for c in keys): r for _, r in pg.iterrows()}
+
+    _proot = None
+    if pwork is not None:
+        _proot = agg(pwork.assign(_all="_"), ["_all"]).iloc[0]
+        for c in extra_cols:
+            _proot[c] = pwork[c].sum()
+
     _root_s = agg(work.assign(_all="_"), ["_all"]).iloc[0]
     for c in extra_cols:                 # 루트(전체)의 미인식 지표 합
         _root_s[c] = work[c].sum()
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-              "cells": _drill_cells(_root_s, spec, daily_avg, extra_cols),
+              "cells": _drill_cells(_root_s, spec, daily_avg, extra_cols,
+                                    prev=_proot, show_yoy=show_yoy),
               "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols), "promo": ""}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
@@ -2855,6 +2935,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
         g = _augment(agg(work, cols[:d]), cols[:d])
+        plook = _prev_lookup(d)
         # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시
         if dims[d - 1][1] not in period_cols:
             g = g[g[base_metric].fillna(0) > 0]
@@ -2881,9 +2962,11 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nid = f"{pid}|{d - 1}={tok}"
             promo = (str(r.get("_promo", "")).strip()
                      if (promo_on and dims[d - 1][1] in promo_prefix_cols) else "")
+            pr_s = plook.get(atuple + (tok,))
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
-                          "cells": _drill_cells(r, spec, daily_avg, extra_cols),
+                          "cells": _drill_cells(r, spec, daily_avg, extra_cols,
+                                                prev=pr_s, show_yoy=show_yoy),
                           "raw": _drill_raw(r, spec, daily_avg, extra_cols),
                           "promo": promo})
             new_kept[atuple + (tok,)] = nid
@@ -2988,6 +3071,11 @@ def _drill_html(nodes, spec, show_promo=False):
   .tw.clk:hover .nm{color:#2563EB}
   .up{color:#0f7a52;font-weight:650}
   .dn{color:#c0392b;font-weight:650}
+  .yoy{display:inline-block;margin-top:2px;font-size:10.5px;font-weight:650;
+    line-height:1.1}
+  .yoy.up{color:#0f7a52}
+  .yoy.dn{color:#c0392b}
+  .yoy.na{color:#9aa0a6;font-weight:500}
   @media (prefers-color-scheme:dark){
     .viz{color:#e8e8e3}
     .bar button{background:#232322;border-color:#3a3a37;color:#c3c2b7}
@@ -3010,6 +3098,7 @@ def _drill_html(nodes, spec, show_promo=False):
     tbody tr.tot:hover td,tbody tr.tot:hover td.name{background:#16283f}
     .nm{color:#f3f3ee}.car{color:#77766f}
     .up{color:#57cd9a}.dn{color:#f0716d}
+    .yoy.up{color:#57cd9a}.yoy.dn{color:#f0716d}.yoy.na{color:#77766f}
   }
 </style>
 <script>
@@ -3089,7 +3178,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    o1, o2, o3, o4 = st.columns([1.3, 1.6, 1.3, 1.3])
+    o1, o2, o3, o4, o5 = st.columns([1.3, 1.5, 1.2, 1.3, 1.4])
     topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
@@ -3104,6 +3193,10 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     impr_only = o4.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다. 켜면 그룹 필터와 "
                                  "일평균(집행일수)도 노출수>0 날짜 기준으로 계산됩니다.")
+    show_yoy = o5.checkbox("전년비 표시", value=False, key="drill_yoy",
+                           help="각 단계·각 지표 값 아래에 전년 동기(-364일 동요일) 대비 "
+                                "증감률(▲증가·▼감소)을 배지로 표시합니다. 현재 화면의 필터·"
+                                "날짜 범위를 그대로 1년 전 같은 요일 구간과 비교합니다.")
 
     if not order:
         st.info("‘1단계’에 펼칠 항목을 하나 이상 골라주세요.")
@@ -3116,7 +3209,12 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 
     st.divider()
     nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
-                                    daily_avg=daily_avg)
+                                    daily_avg=daily_avg,
+                                    prev_source=(base if show_yoy else None),
+                                    show_yoy=show_yoy)
+    if show_yoy:
+        st.caption("🟢▲ 전년 대비 증가 · 🔴▼ 감소 · '전년 –'은 전년 동기 데이터가 "
+                   "없어 비교 불가. 증감률은 (당기−전년)/|전년| 기준입니다.")
 
     exp_df = _drill_export_df(nodes, dims, spec, show_promo=show_promo)
     avg_tag = "_일평균" if daily_avg else ""
@@ -3130,6 +3228,189 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
                "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
 
+
+
+# ───────────────────────────────────────────────
+# 전년비 리포트 (보고서 포맷: 분류별 당년/전년/비교 3줄)
+#   비용출처·매체·상품 등 분류 단위로, 각 그룹마다 당년·전년·비교(전년비)
+#   3줄을 세워 보고서(전년도 비용출처 비교) 포맷 그대로 한 화면에 본다.
+# ───────────────────────────────────────────────
+YOY_GROUP_DIMS = {
+    "비용출처": "구분_비용출처",
+    "채널": "구분_채널",
+    "매체명": "구분_매체명",
+    "상품명": "구분_상품",
+    "부서(BPU)": "구분_부서명",
+    "캠페인": "구분_캠페인",
+    "디바이스": "구분_디바이스",
+}
+
+# 핵심 지표 묶음(보고서 표와 유사한 순서). '전체'는 상세표(DETAIL_SPEC) 전 지표.
+_YOY_CORE_LABELS = [
+    "노출수", "클릭수", "CTR", "CPC", "광고비", "UV", "CPUV",
+    "가입수", "가입CPA", "첫구매수", "첫구매CPA", "결제고객수", "CR",
+    "거래액", "ROAS", "객단가", "순결제비중", "거래액(총)", "ROAS(총)",
+]
+YOY_CORE_SPEC = [s for lbl in _YOY_CORE_LABELS for s in DETAIL_SPEC if s[0] == lbl]
+
+
+def _yoy_period_labels(cur: pd.DataFrame):
+    """현재 선택 기간 → (당년 라벨, 전년 라벨). 예: ('26년 8월','25년 8월')."""
+    yms = sorted(cur["연월"].dropna().unique()) if "연월" in cur.columns else []
+    if not yms:
+        return "당년", "전년"
+    y1, m1 = int(yms[0][:4]), int(yms[0][5:7])
+    y2, m2 = int(yms[-1][:4]), int(yms[-1][5:7])
+
+    def lab(a1, b1, a2, b2):
+        if (a1, b1) == (a2, b2):
+            return f"{a1 % 100:02d}년 {b1}월"
+        if a1 == a2:
+            return f"{a1 % 100:02d}년 {b1}~{b2}월"
+        return f"{a1 % 100:02d}.{b1}~{a2 % 100:02d}.{b2}"
+    return lab(y1, m1, y2, m2), lab(y1 - 1, m1, y2 - 1, m2)
+
+
+def _yoy_num(s, col, kind):
+    """CSV용 원본 숫자(비율·ROAS는 %, 금액·수치는 원 단위)."""
+    v = s.get(col, np.nan) if s is not None else np.nan
+    if pd.isna(v):
+        return None
+    if kind in ("pct1", "pct2", "roas"):
+        return round(float(v) * 100, 2)
+    if kind in ("money", "won"):
+        return round(float(v))
+    return round(float(v), 2)
+
+
+def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec):
+    """한 그룹의 (당년/전년/비교) 3행. 반환: (표시행 3, 원본행 3)."""
+    disp, raw = [], []
+    for i, (tag, s) in enumerate(((cur_lab, cur_s), (prev_lab, prev_s))):
+        lb = label if i == 0 else ""
+        d = {"분류": lb, "기간": tag}
+        r = {"분류": lb, "기간": tag}
+        for lab_, col, kind in spec:
+            v = s.get(col, np.nan) if s is not None else np.nan
+            d[lab_] = _fmt_kind(v, kind)
+            r[lab_] = _yoy_num(s, col, kind)
+        disp.append(d)
+        raw.append(r)
+    dcmp = {"분류": "", "기간": "비교"}
+    rcmp = {"분류": "", "기간": "비교"}
+    for lab_, col, kind in spec:
+        cv = cur_s.get(col, np.nan) if cur_s is not None else np.nan
+        pv = prev_s.get(col, np.nan) if prev_s is not None else np.nan
+        chg = ((cv - pv) / abs(pv)
+               if (prev_s is not None and pd.notna(pv) and pv != 0 and pd.notna(cv))
+               else np.nan)
+        dcmp[lab_] = signed_pct(chg)
+        rcmp[lab_] = round(float(chg) * 100, 2) if pd.notna(chg) else None
+    disp.append(dcmp)
+    raw.append(rcmp)
+    return disp, raw
+
+
+def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
+    st.header("🆚 전년비 리포트")
+    st.caption("비용출처·매체·상품 등 **원하는 분류 단위**로 **당년·전년·비교(전년비)** 3줄을 "
+               "한 표에 세워 봅니다. 보고서(전년도 비용출처 비교) 포맷 그대로예요. "
+               "전년비는 대시보드 공통 규칙인 **동요일 기준(-364일)** 동기간 비교입니다.")
+    if df.empty:
+        st.warning("데이터가 없습니다.")
+        return
+
+    base = page_filters(df, "yoyf", expanded=False)
+    cur = date_range_filter(base, key_prefix="yoy", default_preset="이번달")
+    if cur.empty:
+        st.warning("선택한 날짜 범위에 데이터가 없습니다.")
+        return
+
+    avail = {k: v for k, v in YOY_GROUP_DIMS.items() if v in cur.columns}
+    if not avail:
+        st.info("분류로 쓸 차원 컬럼이 데이터에 없습니다.")
+        return
+    c1, c2, c3 = st.columns([1.4, 1.4, 1.2])
+    dim1 = c1.selectbox("분류(1단계)", list(avail.keys()),
+                        index=(list(avail).index("비용출처") if "비용출처" in avail else 0),
+                        key="yoy_dim1",
+                        help="이 차원 값마다 당년·전년·비교 3줄 블록을 만듭니다.")
+    dim2_opts = ["(없음)"] + [k for k in avail if k != dim1]
+    dim2 = c2.selectbox("세부(2단계)", dim2_opts, index=0, key="yoy_dim2",
+                        help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
+                             "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
+    metric_grp = c3.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
+                              help="핵심=보고서형 주요 지표만, 전체=상세표 전 지표.")
+    col1 = avail[dim1]
+    col2 = avail.get(dim2) if dim2 != "(없음)" else None
+    spec = YOY_CORE_SPEC if metric_grp == "핵심" else list(DETAIL_SPEC)
+
+    cur_lab, prev_lab = _yoy_period_labels(cur)
+    prev_src = _prev_year_aligned(cur, base)
+
+    def _map(dfx, cols):
+        if dfx is None or dfx.empty:
+            return {}
+        gg = agg(dfx, cols)
+        return {tuple(str(r[c]) for c in cols): r for _, r in gg.iterrows()}
+
+    cur1, prv1 = _map(cur, [col1]), _map(prev_src, [col1])
+    cur2 = _map(cur, [col1, col2]) if col2 else {}
+    prv2 = _map(prev_src, [col1, col2]) if col2 else {}
+
+    # 1단계 값: 광고비 큰 순
+    order1 = sorted(cur1, key=lambda k: -(cur1[k].get("지표_광고비", 0) or 0))
+
+    disp_rows, raw_rows = [], []
+
+    def _add(label, cs, ps):
+        d, r = _yoy_block(label, cs, ps, cur_lab, prev_lab, spec)
+        disp_rows.extend(d)
+        raw_rows.extend(r)
+
+    tot_c = agg(cur.assign(_a="_"), ["_a"]).iloc[0]
+    tot_p = agg(prev_src.assign(_a="_"), ["_a"]).iloc[0] if not prev_src.empty else None
+    _add("전체 TOTAL", tot_c, tot_p)
+    for k1 in order1:
+        v1 = k1[0]
+        _add(f"{v1}_TOTAL" if col2 else v1, cur1.get(k1), prv1.get(k1))
+        if col2:
+            subs = sorted([k for k in cur2 if k[0] == v1],
+                          key=lambda k: -(cur2[k].get("지표_광고비", 0) or 0))
+            for k in subs:
+                _add(f"└ {k[1]}", cur2.get(k), prv2.get(k))
+
+    cols = ["분류", "기간"] + [s[0] for s in spec]
+    table = pd.DataFrame(disp_rows, columns=cols)
+    raw_table = pd.DataFrame(raw_rows, columns=cols)
+    metric_cols = [s[0] for s in spec]
+
+    def _style_row(row):
+        out = [""] * len(row)
+        is_total = str(row["분류"]).endswith("TOTAL")
+        is_cmp = row["기간"] == "비교"
+        for i, c in enumerate(row.index):
+            css = []
+            if is_total:
+                css.append("background-color:#EEF2FF")
+                if c in ("분류", "기간"):
+                    css.append("font-weight:700")
+            if is_cmp and c in metric_cols:
+                css.append(chg_style(row[c]))
+            out[i] = ";".join([x for x in css if x])
+        return out
+
+    st.markdown(f"##### 📊 {dim1}"
+                + (f" → {dim2}" if col2 else "")
+                + f" 전년비 · {cur_lab} vs {prev_lab}")
+    styled = table.style.apply(_style_row, axis=1) if table.size <= 200_000 else table
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 height=_fit_height(min(len(table), 24)))
+    st.caption("각 그룹은 **당년 / 전년 / 비교(전년비)** 3줄입니다. 비교줄은 (당기−전년)/|전년| "
+               "증감률(+초록/△빨강). 전년 데이터가 없으면 ‘–’. 비율·ROAS 등도 같은 증감률 규칙.")
+    st.download_button("📄 CSV 다운로드 (원본 숫자)",
+                       data=raw_table.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="전년비_리포트.csv", mime="text/csv", key="yoy_csv")
 
 
 # ───────────────────────────────────────────────
@@ -3586,7 +3867,8 @@ def main():
     with page_box:
         st.subheader("📄 페이지")
         page = st.radio("페이지", [
-            "📊 전체 요약", "🌳 펼쳐보기 실적", "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적",
+            "📊 전체 요약", "🌳 펼쳐보기 실적", "🆚 전년비 리포트",
+            "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적",
             "📡 매체별 실적", "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
         ], label_visibility="collapsed")
         st.caption("필터는 페이지를 옮겨도 유지됩니다.")
@@ -3599,6 +3881,8 @@ def main():
         page_summary(pre_date_filtered, targets, report_targets)
     elif page == "🌳 펼쳐보기 실적":
         page_drilldown(pre_date_filtered, targets, report_targets)
+    elif page == "🆚 전년비 리포트":
+        page_yoy(pre_date_filtered, targets, report_targets)
     elif page == "🗓️ 월별 실적":
         page_monthly(pre_date_filtered, targets, report_targets)
     elif page == "📅 주차별 실적":
