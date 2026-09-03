@@ -3327,6 +3327,119 @@ def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec):
     return disp, raw
 
 
+def _yoy_cmp_cls(v):
+    """비교 셀 색상 클래스(+초록/△빨강/– 회색)."""
+    if isinstance(v, str):
+        if v.startswith("+"):
+            return "up"
+        if v.startswith("△"):
+            return "dn"
+    return "na"
+
+
+def _yoy_html(blocks, spec, cur_lab, prev_lab):
+    """전년비 리포트 표를 그룹 블록형 HTML로. 각 그룹=당년/전년/비교 3줄,
+    분류·기간 열 고정, 당년 강조·전년 흐리게·비교 색상."""
+    metric_labels = [s[0] for s in spec]
+    heads = "".join(f"<th>{l}</th>" for l in metric_labels)
+    role_lab = {"cur": cur_lab, "prev": prev_lab, "cmp": "비교"}
+    trs = []
+    for bi, blk in enumerate(blocks):
+        kind, label, rows = blk["kind"], blk["label"], blk["rows"]
+        alt = "alt" if bi % 2 else ""
+        safe = (str(label).replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))
+        for ri, role in enumerate(("cur", "prev", "cmp")):
+            r = rows[ri]
+            cells = []
+            if ri == 0:
+                cells.append(f'<td class="nm" rowspan="3">{safe}</td>')
+            cells.append(f'<td class="pd">{role_lab[role]}</td>')
+            for lb in metric_labels:
+                v = r.get(lb, "")
+                v = "" if v is None else v
+                if role == "cmp":
+                    cells.append(f'<td class="{_yoy_cmp_cls(v)}">{v}</td>')
+                else:
+                    cells.append(f"<td>{v}</td>")
+            trs.append(f'<tr class="{kind} {role} {alt}">' + "".join(cells) + "</tr>")
+    body = "".join(trs)
+    return """
+<div class="yv">
+  <div class="scroll">
+    <table>
+      <thead><tr><th class="nm">구분</th><th class="pd">기간</th>__HEADS__</tr></thead>
+      <tbody>__BODY__</tbody>
+    </table>
+  </div>
+</div>
+<style>
+  :root{color-scheme:light dark}
+  .yv{font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+    font-variant-numeric:tabular-nums;color:#1f2328}
+  .scroll{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;max-height:__H__px}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;
+    white-space:nowrap}
+  th,td{padding:6px 11px;text-align:right;border-bottom:1px solid #f0f1f3}
+  thead th{position:sticky;top:0;background:#f7f8fa;color:#6b7280;font-size:11px;
+    font-weight:650;z-index:3;border-bottom:1px solid #e5e7eb}
+  td.nm,th.nm{position:sticky;left:0;text-align:left;background:#fff;z-index:2;
+    min-width:132px;max-width:132px;white-space:normal;word-break:keep-all;
+    vertical-align:middle;border-right:1px solid #eceef1}
+  td.pd,th.pd{position:sticky;left:132px;text-align:left;background:#fff;
+    min-width:86px;color:#8a9099;font-size:11.5px;z-index:2;
+    border-right:1px solid #eceef1}
+  thead th.nm,thead th.pd{z-index:4;background:#f7f8fa;color:#6b7280}
+  /* 역할별 강약 */
+  tr.cur td{font-weight:650;color:#1f2328}
+  tr.prev td{color:#9099a1;font-weight:500}
+  tr.cmp td{font-size:11px;font-weight:650}
+  tr.cmp td.pd{color:#6b7280;font-weight:600}
+  .up{color:#0f7a52}.dn{color:#c0392b}.na{color:#b7bcc3;font-weight:500}
+  /* 그룹 블록 구분선(각 블록 첫 줄 위) */
+  tr.cur td{border-top:2px solid #e6e8ec}
+  /* 블록 종류별 배경 */
+  tr.grand td{background:#e6efff}
+  tr.grand td.nm{background:#dbe8ff;font-weight:800;color:#1e40af}
+  tr.grand td.pd{background:#e6efff}
+  tr.grand.cur td{border-top:2px solid #b9d0f7}
+  tr.group td.nm{background:#eef1f7;font-weight:750}
+  tr.sub td.nm{padding-left:20px;color:#4b5563}
+  tr.alt td{background:#fbfcfd}
+  tr.alt td.nm{background:#f6f8fb}
+  tr.alt td.pd{background:#f6f8fb}
+  tr.alt.grand td,tr.alt.group td.nm{background:inherit}
+  tbody tr:hover td{background:#eef3ff}
+  tbody tr:hover td.nm,tbody tr:hover td.pd{background:#e6efff}
+  @media (prefers-color-scheme:dark){
+    .yv{color:#e8e8e3}
+    .scroll{border-color:#33332f}
+    th,td{border-bottom-color:#2a2a27}
+    thead th{background:#232322;color:#9a998f;border-bottom-color:#3a3a37}
+    td.nm,th.nm,td.pd,th.pd{background:#1a1a19;border-right-color:#2f2f2b}
+    thead th.nm,thead th.pd{background:#232322;color:#9a998f}
+    tr.cur td{color:#f3f3ee;border-top-color:#33332f}
+    tr.prev td{color:#8b8a80}
+    .up{color:#57cd9a}.dn{color:#f0716d}.na{color:#6b6a63}
+    tr.grand td{background:#182338}
+    tr.grand td.nm{background:#1e2c47;color:#8fb4ff}
+    tr.grand td.pd{background:#182338}
+    tr.grand.cur td{border-top-color:#2b3a52}
+    tr.group td.nm{background:#262623}
+    tr.sub td.nm{color:#b9b8ae}
+    tr.alt td{background:#1e1e1c}
+    tr.alt td.nm,tr.alt td.pd{background:#201f1d}
+    tbody tr:hover td{background:#22314a}
+    tbody tr:hover td.nm,tbody tr:hover td.pd{background:#1e2c47}
+  }
+</style>
+""".replace("__HEADS__", heads).replace("__BODY__", body) \
+   .replace("__H__", str(_YOY_TABLE_MAXH))
+
+
+_YOY_TABLE_MAXH = 620
+
+
 def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
     st.header("🆚 전년비 리포트")
     st.caption("비용출처·매체·상품 등 **원하는 분류 단위**로 **당년·전년·비교(전년비)** 3줄을 "
@@ -3381,53 +3494,38 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     # 1단계 값: 광고비 큰 순
     order1 = sorted(cur1, key=lambda k: -(cur1[k].get("지표_광고비", 0) or 0))
 
-    disp_rows, raw_rows = [], []
+    blocks, raw_rows = [], []
 
-    def _add(label, cs, ps):
+    def _add(label, cs, ps, kind):
         d, r = _yoy_block(label, cs, ps, cur_lab, prev_lab, spec)
-        disp_rows.extend(d)
+        blocks.append({"label": label, "kind": kind, "rows": d})
         raw_rows.extend(r)
 
     tot_c = agg(cur.assign(_a="_"), ["_a"]).iloc[0]
     tot_p = agg(prev_src.assign(_a="_"), ["_a"]).iloc[0] if not prev_src.empty else None
-    _add("전체 TOTAL", tot_c, tot_p)
+    _add("전체 TOTAL", tot_c, tot_p, "grand")
     for k1 in order1:
         v1 = k1[0]
-        _add(f"{v1}_TOTAL" if col2 else v1, cur1.get(k1), prv1.get(k1))
+        _add(f"{v1}_TOTAL" if col2 else v1, cur1.get(k1), prv1.get(k1), "group")
         if col2:
             subs = sorted([k for k in cur2 if k[0] == v1],
                           key=lambda k: -(cur2[k].get("지표_광고비", 0) or 0))
             for k in subs:
-                _add(f"└ {k[1]}", cur2.get(k), prv2.get(k))
+                _add(f"└ {k[1]}", cur2.get(k), prv2.get(k), "sub")
 
     cols = ["분류", "기간"] + [s[0] for s in spec]
-    table = pd.DataFrame(disp_rows, columns=cols)
     raw_table = pd.DataFrame(raw_rows, columns=cols)
-    metric_cols = [s[0] for s in spec]
-
-    def _style_row(row):
-        out = [""] * len(row)
-        is_total = str(row["분류"]).endswith("TOTAL")
-        is_cmp = row["기간"] == "비교"
-        for i, c in enumerate(row.index):
-            css = []
-            if is_total:
-                css.append("background-color:#EEF2FF")
-                if c in ("분류", "기간"):
-                    css.append("font-weight:700")
-            if is_cmp and c in metric_cols:
-                css.append(chg_style(row[c]))
-            out[i] = ";".join([x for x in css if x])
-        return out
 
     st.markdown(f"##### 📊 {dim1}"
                 + (f" → {dim2}" if col2 else "")
                 + f" 전년비 · {cur_lab} vs {prev_lab}")
-    styled = table.style.apply(_style_row, axis=1) if table.size <= 200_000 else table
-    st.dataframe(styled, use_container_width=True, hide_index=True,
-                 height=_fit_height(min(len(table), 24)))
-    st.caption("각 그룹은 **당년 / 전년 / 비교(전년비)** 3줄입니다. 비교줄은 (당기−전년)/|전년| "
-               "증감률(+초록/△빨강). 전년 데이터가 없으면 ‘–’. 비율·ROAS 등도 같은 증감률 규칙.")
+    n_rows = len(blocks) * 3
+    height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
+    _components_html(_yoy_html(blocks, spec, cur_lab, prev_lab),
+                     height=height, scrolling=False)
+    st.caption("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
+               "(당기−전년)/|전년| 증감률(초록=증가·빨강=감소). 전년 데이터가 없으면 ‘–’. "
+               "**분류·기간 열은 좌측 고정**이라 가로 스크롤해도 붙어 있습니다.")
     st.download_button("📄 CSV 다운로드 (원본 숫자)",
                        data=raw_table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="전년비_리포트.csv", mime="text/csv", key="rawdl_yoy")
