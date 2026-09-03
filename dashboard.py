@@ -2655,6 +2655,9 @@ DRILL_DEFAULT = ["비용출처", "채널", "매체", "상품", "캠페인", "—
 DRILL_NONE = "—"
 DRILL_SLOTS = 7                      # 펼치기 단계 최대 개수
 
+# 전년비 배지를 표시하지 않는 단계(매년 기획전·캠페인·하위캠페인이 바뀌어 비교 무의미)
+_DRILL_NO_YOY_DIMS = {"구분_캠페인", "구분_하위캠페인", "구분_기획전 번호"}
+
 
 def _drill_intish(v) -> str:
     """정수인 실수는 '.0' 없이 정수 문자열로. (기획전번호 등 숫자 차원 표시용)"""
@@ -2806,13 +2809,13 @@ def _drill_daily_avg(series, extra_cols=()):
 
 
 def _drill_yoy_badge(cur_v, prev_v):
-    """전년비 배지 HTML. cur/prev로 (cur-prev)/|prev| 증감률(다른 표와 동일 규칙)."""
+    """전년비 배지 HTML. cur/prev로 (cur-prev)/|prev| 증감률.
+    표기는 전년비 리포트와 동일(signed_pct): 증가 +초록 / 감소 △빨강."""
     if prev_v is None or pd.isna(prev_v) or prev_v == 0 or pd.isna(cur_v):
         return '<span class="yoy na">전년 –</span>'
     chg = (cur_v - prev_v) / abs(prev_v)
     cls = "up" if chg >= 0 else "dn"
-    sym = "▲" if chg >= 0 else "▼"
-    return f'<span class="yoy {cls}">{sym}{abs(chg) * 100:.1f}%</span>'
+    return f'<span class="yoy {cls}">{signed_pct(chg)}</span>'
 
 
 def _drill_cells(series, spec, daily_avg=False, extra_cols=(),
@@ -2946,7 +2949,9 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
     period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
         g = _augment(agg(work, cols[:d]), cols[:d])
-        plook = _prev_lookup(d)
+        # 캠페인·하위캠페인·기획전 단계는 매년 값이 달라져 전년비 의미가 없음 → 배지 미표시
+        depth_show_yoy = show_yoy and dims[d - 1][1] not in _DRILL_NO_YOY_DIMS
+        plook = _prev_lookup(d) if depth_show_yoy else {}
         # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시
         if dims[d - 1][1] not in period_cols:
             g = g[g[base_metric].fillna(0) > 0]
@@ -2977,7 +2982,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
                           "cells": _drill_cells(r, spec, daily_avg, extra_cols,
-                                                prev=pr_s, show_yoy=show_yoy),
+                                                prev=pr_s, show_yoy=depth_show_yoy),
                           "raw": _drill_raw(r, spec, daily_avg, extra_cols),
                           "promo": promo})
             new_kept[atuple + (tok,)] = nid
@@ -3229,8 +3234,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
                                     prev_source=(base if show_yoy else None),
                                     show_yoy=show_yoy)
     if show_yoy:
-        st.caption("🟢▲ 전년 대비 증가 · 🔴▼ 감소 · '전년 –'은 전년 동기 데이터가 "
-                   "없어 비교 불가. 증감률은 (당기−전년)/|전년| 기준입니다.")
+        st.caption("🟢+ 전년 대비 증가 · 🔴△ 감소 · '전년 –'은 전년 동기 데이터가 "
+                   "없어 비교 불가. 증감률은 (당기−전년)/|전년| 기준입니다. "
+                   "캠페인·하위캠페인·기획전 단계는 매년 값이 달라져 전년비를 표시하지 않습니다.")
 
     exp_df = _drill_export_df(nodes, dims, spec, show_promo=show_promo)
     avg_tag = "_일평균" if daily_avg else ""
@@ -3263,9 +3269,11 @@ YOY_GROUP_DIMS = {
 
 # 핵심 지표 묶음(보고서 표와 유사한 순서). '전체'는 상세표(DETAIL_SPEC) 전 지표.
 _YOY_CORE_LABELS = [
-    "노출수", "클릭수", "CTR", "CPC", "광고비", "UV", "CPUV",
-    "가입수", "가입CPA", "첫구매수", "첫구매CPA", "결제고객수", "CR",
-    "거래액", "ROAS", "객단가", "순결제비중", "거래액(총)", "ROAS(총)",
+    "노출수", "클릭수", "CTR", "CPC", "CPUV", "광고비", "UV",
+    "거래액", "ROAS", "거래액(총)", "ROAS(총)",
+    "가입수", "가입CPA", "첫구매수", "첫구매CPA",
+    "결제고객수", "CR", "객단가", "순결제비중",
+    "결제고객수(총)", "CR(총)", "객단가(총)",
 ]
 YOY_CORE_SPEC = [s for lbl in _YOY_CORE_LABELS for s in DETAIL_SPEC if s[0] == lbl]
 
