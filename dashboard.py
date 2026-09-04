@@ -3507,6 +3507,7 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
   tr.grand.cur td{border-top:2px solid #b9d0f7}
   tr.group td.nm{background:#eef1f7;font-weight:750}
   tr.sub td.nm{padding-left:20px;color:#4b5563}
+  tr.sub2 td.nm{padding-left:34px;color:#6b7280}
   tr.alt td{background:#fbfcfd}
   tr.alt td.nm{background:#f6f8fb}
   tr.alt td.pd{background:#f6f8fb}
@@ -3529,6 +3530,7 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     tr.grand.cur td{border-top-color:#2b3a52}
     tr.group td.nm{background:#262623}
     tr.sub td.nm{color:#b9b8ae}
+    tr.sub2 td.nm{color:#9a998f}
     tr.alt td{background:#1e1e1c}
     tr.alt td.nm,tr.alt td.pd{background:#201f1d}
     tbody tr:hover td{background:#22314a}
@@ -3609,7 +3611,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     if not avail:
         st.info("분류로 쓸 차원 컬럼이 데이터에 없습니다.")
         return
-    c1, c2, c3 = st.columns([1.4, 1.4, 1.2])
+    c1, c2, c3, c4 = st.columns([1.3, 1.3, 1.3, 1.1])
     dim1 = c1.selectbox("분류(1단계)", list(avail.keys()),
                         index=(list(avail).index("비용출처") if "비용출처" in avail else 0),
                         key="yoy_dim1",
@@ -3618,12 +3620,19 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     dim2 = c2.selectbox("세부(2단계)", dim2_opts, index=0, key="yoy_dim2",
                         help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
                              "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
-    metric_grp = c3.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
+    dim3_opts = (["(없음)"] + [k for k in avail if k not in (dim1, dim2)]
+                 if dim2 != "(없음)" else ["(없음)"])
+    dim3 = c3.selectbox("세부(3단계)", dim3_opts, index=0, key="yoy_dim3",
+                        disabled=(dim2 == "(없음)"),
+                        help="2단계를 고른 경우에만 활성화. 2단계 각 소계(◯◯_TOTAL) 아래로 "
+                             "3단계 항목이 ‘└─’로 더 들여써져 나옵니다. 예: 비용출처 → 매체 → 상품.")
+    metric_grp = c4.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
                               help="핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
                                    "RD~SP 등 전 지표(정규 순서). "
                                    "표의 지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요.")
     col1 = avail[dim1]
     col2 = avail.get(dim2) if dim2 != "(없음)" else None
+    col3 = avail.get(dim3) if (col2 and dim3 != "(없음)") else None
     # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
     spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
 
@@ -3643,9 +3652,14 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     cur1, prv1 = _map(cur, [col1]), _map(prev_src, [col1])
     cur2 = _map(cur, [col1, col2]) if col2 else {}
     prv2 = _map(prev_src, [col1, col2]) if col2 else {}
+    cur3 = _map(cur, [col1, col2, col3]) if col3 else {}
+    prv3 = _map(prev_src, [col1, col2, col3]) if col3 else {}
+
+    def _spend_desc(mp):
+        return lambda k: -(mp[k].get("지표_광고비", 0) or 0)
 
     # 1단계 값: 광고비 큰 순
-    order1 = sorted(cur1, key=lambda k: -(cur1[k].get("지표_광고비", 0) or 0))
+    order1 = sorted(cur1, key=_spend_desc(cur1))
 
     blocks, raw_rows = [], []
 
@@ -3660,17 +3674,26 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     for k1 in order1:
         v1 = k1[0]
         _add(f"{v1}_TOTAL" if col2 else v1, cur1.get(k1), prv1.get(k1), "group")
-        if col2:
-            subs = sorted([k for k in cur2 if k[0] == v1],
-                          key=lambda k: -(cur2[k].get("지표_광고비", 0) or 0))
-            for k in subs:
-                _add(f"└ {k[1]}", cur2.get(k), prv2.get(k), "sub")
+        if not col2:
+            continue
+        subs2 = sorted([k for k in cur2 if k[0] == v1], key=_spend_desc(cur2))
+        for k2 in subs2:
+            v2 = k2[1]
+            _add(f"└ {v2}_TOTAL" if col3 else f"└ {v2}",
+                 cur2.get(k2), prv2.get(k2), "sub")
+            if not col3:
+                continue
+            subs3 = sorted([k for k in cur3 if k[0] == v1 and k[1] == v2],
+                           key=_spend_desc(cur3))
+            for k3 in subs3:
+                _add(f"└─ {k3[2]}", cur3.get(k3), prv3.get(k3), "sub2")
 
     cols = ["분류", "기간"] + [s[0] for s in spec]
     raw_table = pd.DataFrame(raw_rows, columns=cols)
 
     st.markdown(f"##### 📊 {dim1}"
                 + (f" → {dim2}" if col2 else "")
+                + (f" → {dim3}" if col3 else "")
                 + f" 전년비 · {cur_lab} vs {prev_lab}")
     n_rows = len(blocks) * 3
     height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
