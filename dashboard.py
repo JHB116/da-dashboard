@@ -3066,7 +3066,9 @@ def _drill_export_df(nodes, dims, spec, show_promo=False):
 
 def _drill_html(nodes, spec, show_promo=False):
     """계층 노드를 클릭-펼침 가능한 HTML 표로. (펼침/접힘은 브라우저에서 즉시)"""
-    headers = "".join(f"<th>{l}</th>" for l, _c, _k in spec)
+    headers = "".join(
+        f'<th data-col="{i}" draggable="true" title="머리글을 끌어 열 순서 이동">{l}</th>'
+        for i, (l, _c, _k) in enumerate(spec))
     promo_th = '<th class="pno">기획전번호</th>' if show_promo else ""
     data = json.dumps(nodes, ensure_ascii=False)
     return """
@@ -3131,6 +3133,11 @@ def _drill_html(nodes, spec, show_promo=False):
   .yoy.up{color:#0f7a52}
   .yoy.dn{color:#c0392b}
   .yoy.na{color:#9aa0a6;font-weight:500}
+  /* 지표 머리글: 드래그해 열 순서 변경 */
+  thead th[data-col]{cursor:grab}
+  thead th[data-col]:hover{color:#2563EB}
+  thead th[data-col].dragging{opacity:.45;cursor:grabbing}
+  thead th[data-col].dragover{box-shadow:inset 3px 0 0 #2563EB;color:#2563EB}
   @media (prefers-color-scheme:dark){
     .viz{color:#e8e8e3}
     .bar button{background:#232322;border-color:#3a3a37;color:#c3c2b7}
@@ -3154,6 +3161,8 @@ def _drill_html(nodes, spec, show_promo=False):
     .nm{color:#f3f3ee}.car{color:#77766f}
     .up{color:#57cd9a}.dn{color:#f0716d}
     .yoy.up{color:#57cd9a}.yoy.dn{color:#f0716d}.yoy.na{color:#77766f}
+    thead th[data-col]:hover{color:#8fb4ff}
+    thead th[data-col].dragover{box-shadow:inset 3px 0 0 #8fb4ff;color:#8fb4ff}
   }
 </style>
 <script>
@@ -3163,6 +3172,13 @@ def _drill_html(nodes, spec, show_promo=False):
     (kids[n.parent]=kids[n.parent]||[]).push(n);   // 부모별 자식(정렬 순서 유지)
   });
   const tb=document.getElementById('tb');
+  const thead=document.querySelector('thead tr');
+  // 지표 열 표시 순서(원본 인덱스의 나열). 머리글 드래그로 바뀌며 재렌더에도 유지.
+  let colOrder=Array.prototype.slice.call(thead.querySelectorAll('th[data-col]'))
+                    .map(th=>+th.getAttribute('data-col'));
+  function metricCells(cells){
+    return colOrder.map(ci=>`<td data-col="${ci}">${cells[ci]}</td>`).join('');
+  }
   function rowHTML(n){
     const car = n.hasChildren
       ? `<span class="car ${exp[n.id]?'o':''}">▶</span>` : `<span class="car"></span>`;
@@ -3170,17 +3186,47 @@ def _drill_html(nodes, spec, show_promo=False):
     const nm = `<span class="tw ${n.hasChildren?'clk':''}" data-id="${n.id}"
       style="padding-left:${pad}px">${car}<span class="nm">${n.name}</span></span>`;
     const pcell = PROMO ? `<td class="pno">${n.promo||''}</td>` : '';
-    const cells = n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
+    return `<tr class="d${n.depth}" data-id="${n.id}"><td class="name">${nm}</td>${pcell}${metricCells(n.cells)}</tr>`;
   }
   // 맨 하단 고정 합계(토탈) 행 — 전체 TOTAL과 동일 값
   function totalRow(){
     const n=byId['ROOT'];
     const nm=`<span class="tw"><span class="car"></span><span class="nm">합계</span></span>`;
     const pcell = PROMO ? `<td class="pno"></td>` : '';
-    const cells=n.cells.map(c=>`<td>${c}</td>`).join('');
-    return `<tr class="tot"><td class="name">${nm}</td>${pcell}${cells}</tr>`;
+    return `<tr class="tot"><td class="name">${nm}</td>${pcell}${metricCells(n.cells)}</tr>`;
   }
+  // 머리글 드래그로 지표 열 순서 변경(대상 열 앞에 삽입). 분류·기획전 열은 제외.
+  function applyHeadOrder(){
+    const map={};
+    thead.querySelectorAll('th[data-col]').forEach(th=>map[+th.getAttribute('data-col')]=th);
+    colOrder.forEach(ci=>thead.appendChild(map[ci]));   // 이름/기획전 th 뒤로 순서대로
+  }
+  let dragCol=null;
+  thead.addEventListener('dragstart',e=>{
+    const th=e.target.closest('th[data-col]'); if(!th) return;
+    dragCol=+th.getAttribute('data-col'); th.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+    try{e.dataTransfer.setData('text/plain',String(dragCol));}catch(_){}
+  });
+  thead.addEventListener('dragend',()=>{
+    thead.querySelectorAll('th[data-col]').forEach(t=>t.classList.remove('dragging','dragover'));
+    dragCol=null;
+  });
+  thead.addEventListener('dragover',e=>{
+    const th=e.target.closest('th[data-col]'); if(!th||dragCol===null) return;
+    e.preventDefault();
+    thead.querySelectorAll('th.dragover').forEach(t=>t.classList.remove('dragover'));
+    if(+th.getAttribute('data-col')!==dragCol) th.classList.add('dragover');
+  });
+  thead.addEventListener('drop',e=>{
+    const th=e.target.closest('th[data-col]'); if(!th||dragCol===null) return;
+    e.preventDefault();
+    const to=+th.getAttribute('data-col'); if(to===dragCol) return;
+    const arr=colOrder.filter(c=>c!==dragCol);
+    let ti=arr.indexOf(to); if(ti<0) ti=arr.length;
+    arr.splice(ti,0,dragCol); colOrder=arr;
+    applyHeadOrder(); render();
+  });
   // 트리 깊이우선(DFS): 부모 바로 아래에 그 자식이 오도록. 펼친 노드만 하위 전개.
   function walk(n, out){
     out.push(n);
@@ -3287,7 +3333,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 
     _components_html(_drill_html(nodes, spec, show_promo=show_promo), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
-               "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산.")
+               "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산. "
+               "🖱️ **지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요**(대상 열 앞에 삽입, "
+               "펼침/접힘에도 유지 · 새로고침하면 원래 순서).")
 
 
 
