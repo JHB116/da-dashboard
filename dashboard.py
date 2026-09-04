@@ -3388,7 +3388,9 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     """전년비 리포트 표를 그룹 블록형 HTML로. 각 그룹=당년/전년/비교 3줄,
     분류·기간 열 고정, 당년 강조·전년 흐리게·비교 색상."""
     metric_labels = [s[0] for s in spec]
-    heads = "".join(f"<th>{l}</th>" for l in metric_labels)
+    heads = "".join(
+        f'<th data-col="{j}" draggable="true" title="머리글을 끌어 열 순서 이동">{l}</th>'
+        for j, l in enumerate(metric_labels))
     role_lab = {"cur": cur_lab, "prev": prev_lab, "cmp": "비교"}
     trs = []
     for bi, blk in enumerate(blocks):
@@ -3402,13 +3404,13 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
             if ri == 0:
                 cells.append(f'<td class="nm" rowspan="3">{safe}</td>')
             cells.append(f'<td class="pd">{role_lab[role]}</td>')
-            for lb in metric_labels:
+            for j, lb in enumerate(metric_labels):
                 v = r.get(lb, "")
                 v = "" if v is None else v
                 if role == "cmp":
-                    cells.append(f'<td class="{_yoy_cmp_cls(v)}">{v}</td>')
+                    cells.append(f'<td data-col="{j}" class="{_yoy_cmp_cls(v)}">{v}</td>')
                 else:
-                    cells.append(f"<td>{v}</td>")
+                    cells.append(f'<td data-col="{j}">{v}</td>')
             trs.append(f'<tr class="{kind} {role} {alt}">' + "".join(cells) + "</tr>")
     body = "".join(trs)
     return """
@@ -3437,6 +3439,11 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     min-width:86px;color:#8a9099;font-size:11.5px;z-index:2;
     border-right:1px solid #eceef1}
   thead th.nm,thead th.pd{z-index:4;background:#f7f8fa;color:#6b7280}
+  /* 지표 머리글: 드래그해 열 순서 변경 */
+  thead th[data-col]{cursor:grab}
+  thead th[data-col]:hover{color:#2563EB}
+  thead th[data-col].dragging{opacity:.45;cursor:grabbing}
+  thead th[data-col].dragover{box-shadow:inset 3px 0 0 #2563EB;color:#2563EB}
   /* 역할별 강약 */
   tr.cur td{font-weight:650;color:#1f2328}
   tr.prev td{color:#9099a1;font-weight:500}
@@ -3478,8 +3485,56 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     tr.alt td.nm,tr.alt td.pd{background:#201f1d}
     tbody tr:hover td{background:#22314a}
     tbody tr:hover td.nm,tbody tr:hover td.pd{background:#1e2c47}
+    thead th[data-col]:hover{color:#8fb4ff}
+    thead th[data-col].dragover{box-shadow:inset 3px 0 0 #8fb4ff;color:#8fb4ff}
   }
 </style>
+<script>
+(function(){
+  var table=document.querySelector('.yv table'); if(!table) return;
+  var dragCol=null;
+  function heads(){return Array.prototype.slice.call(
+      table.tHead.rows[0].querySelectorAll('th[data-col]')); }
+  function applyOrder(order){
+    var head=table.tHead.rows[0], hc={};
+    head.querySelectorAll('th[data-col]').forEach(function(th){hc[th.getAttribute('data-col')]=th;});
+    order.forEach(function(c){head.appendChild(hc[c]);});          // nm/pd 뒤로 순서대로 재배치
+    Array.prototype.forEach.call(table.tBodies[0].rows,function(row){
+      var cc={}; row.querySelectorAll('td[data-col]').forEach(function(td){cc[td.getAttribute('data-col')]=td;});
+      order.forEach(function(c){ if(cc[c]) row.appendChild(cc[c]); });
+    });
+  }
+  function reorder(from,to){
+    if(from===to) return;
+    var cur=heads().map(function(th){return th.getAttribute('data-col');});
+    var arr=cur.filter(function(c){return c!==from;});
+    var ti=arr.indexOf(to); if(ti<0) ti=arr.length;
+    arr.splice(ti,0,from);                                          // 대상 머리글 자리 '앞'에 삽입
+    applyOrder(arr);
+  }
+  table.addEventListener('dragstart',function(e){
+    var th=e.target.closest('th[data-col]'); if(!th) return;
+    dragCol=th.getAttribute('data-col'); th.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+    try{e.dataTransfer.setData('text/plain',dragCol);}catch(_){}
+  });
+  table.addEventListener('dragend',function(e){
+    heads().forEach(function(th){th.classList.remove('dragging','dragover');});
+    dragCol=null;
+  });
+  table.addEventListener('dragover',function(e){
+    var th=e.target.closest('th[data-col]'); if(!th||dragCol===null) return;
+    e.preventDefault();
+    heads().forEach(function(t){t.classList.remove('dragover');});
+    if(th.getAttribute('data-col')!==dragCol) th.classList.add('dragover');
+  });
+  table.addEventListener('drop',function(e){
+    var th=e.target.closest('th[data-col]'); if(!th||dragCol===null) return;
+    e.preventDefault();
+    reorder(dragCol, th.getAttribute('data-col'));
+  });
+})();
+</script>
 """.replace("__HEADS__", heads).replace("__BODY__", body) \
    .replace("__H__", str(_YOY_TABLE_MAXH))
 
@@ -3515,34 +3570,14 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     dim2 = c2.selectbox("세부(2단계)", dim2_opts, index=0, key="yoy_dim2",
                         help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
                              "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
-    metric_grp = c3.selectbox("지표 묶음(기본값)", ["핵심", "전체"], index=0, key="yoy_mets",
-                              help="아래 '지표' 칸의 기본 구성을 정합니다. "
-                                   "핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
-                                   "RD~SP 등 전 지표(정규 순서).")
+    metric_grp = c3.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
+                              help="핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
+                                   "RD~SP 등 전 지표(정규 순서). "
+                                   "표의 지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요.")
     col1 = avail[dim1]
     col2 = avail.get(dim2) if dim2 != "(없음)" else None
-
-    # 지표: 커스텀 실적처럼 칩을 드래그해 순서를 바꾸거나 빼고 넣을 수 있다.
-    # 전체 지표 풀(펼쳐보기 세트, 정규순서) + 라벨→스펙 매핑.
-    _all_specs = _order_metrics(DRILL_SHOW)
-    spec_by_label = {}
-    for s in _all_specs:
-        spec_by_label.setdefault(s[0], s)
-    all_labels = list(spec_by_label.keys())
-    default_labels = ([s[0] for s in YOY_CORE_SPEC] if metric_grp == "핵심"
-                      else all_labels)
-    # 프리셋별로 위젯 키를 분리 → '핵심/전체' 전환 시 각자 기본구성으로 시작하고
-    # 사용자가 드래그한 순서는 프리셋별로 따로 기억된다.
-    mets = st.multiselect(
-        "지표 (칩을 마우스로 드래그해 앞뒤로 순서 변경 · 빼고 넣기 가능)",
-        all_labels, default=default_labels, key=f"yoy_metsel_{metric_grp}",
-        help="선택한 순서가 곧 표의 지표 열 순서입니다. 예: UV 옆에 회원UV·회원UV비중을 "
-             "끌어다 놓으면 그 순서로 나옵니다. (기본값을 다시 쓰려면 지표 묶음을 바꿨다 "
-             "되돌리거나 필터 초기화)")
-    spec = [spec_by_label[m] for m in mets if m in spec_by_label]
-    if not spec:
-        st.info("지표를 1개 이상 선택하세요.")
-        return
+    # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
+    spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
@@ -3595,7 +3630,9 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
                      height=height, scrolling=False)
     st.caption("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
                "(당기−전년)/|전년| 증감률(초록=증가·빨강=감소). 전년 데이터가 없으면 ‘–’. "
-               "**분류·기간 열은 좌측 고정**이라 가로 스크롤해도 붙어 있습니다.")
+               "**분류·기간 열은 좌측 고정**이라 가로 스크롤해도 붙어 있습니다. "
+               "🖱️ **지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요**(대상 열 앞에 삽입, "
+               "화면상 임시 이동 — 새로고침하면 원래 순서).")
     st.download_button("📄 CSV 다운로드 (원본 숫자)",
                        data=raw_table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="전년비_리포트.csv", mime="text/csv", key="rawdl_yoy")
