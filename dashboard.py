@@ -3366,20 +3366,13 @@ YOY_CORE_SPEC = [s for lbl in _YOY_CORE_LABELS for s in DETAIL_SPEC if s[0] == l
 
 
 def _yoy_period_labels(cur: pd.DataFrame):
-    """현재 선택 기간 → (당년 라벨, 전년 라벨). 예: ('26년 8월','25년 8월')."""
-    yms = sorted(cur["연월"].dropna().unique()) if "연월" in cur.columns else []
-    if not yms:
+    """현재 선택 기간 → (당년 라벨, 전년 라벨). 선택 월은 노출하지 않고 연도만 표기.
+    예: ('26년', '25년'). 연도 정보가 없으면 ('당년','전년')."""
+    years = sorted(cur["연도"].dropna().unique()) if "연도" in cur.columns else []
+    if not years:
         return "당년", "전년"
-    y1, m1 = int(yms[0][:4]), int(yms[0][5:7])
-    y2, m2 = int(yms[-1][:4]), int(yms[-1][5:7])
-
-    def lab(a1, b1, a2, b2):
-        if (a1, b1) == (a2, b2):
-            return f"{a1 % 100:02d}년 {b1}월"
-        if a1 == a2:
-            return f"{a1 % 100:02d}년 {b1}~{b2}월"
-        return f"{a1 % 100:02d}.{b1}~{a2 % 100:02d}.{b2}"
-    return lab(y1, m1, y2, m2), lab(y1 - 1, m1, y2 - 1, m2)
+    y = int(years[-1])          # 여러 해가 섞여도 최신 연도 기준
+    return f"{y % 100:02d}년", f"{(y - 1) % 100:02d}년"
 
 
 def _yoy_num(s, col, kind):
@@ -3447,7 +3440,7 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     for blk in blocks:
         label, rows = blk["label"], blk["rows"]
         depth = blk.get("depth", 0)          # 0=전체TOTAL, 1=1단계, 2=2단계 …
-        pad = 8 + depth * 14                  # 단계 깊이만큼 분류 셀 들여쓰기
+        pad = 8 + depth * 12                  # 단계 깊이만큼 분류 셀 들여쓰기
         dp = f"dp{min(depth, 7)}"            # 배경색은 단계(depth)별로 고정
         nrows = len(rows)
         roles = ("cur", "prev", "cmp") if nrows == 3 else ("cur",)
@@ -3485,16 +3478,18 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
   .scroll{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;max-height:__H__px}
   table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;
     white-space:nowrap}
-  th,td{padding:6px 11px;text-align:right;border-bottom:1px solid #f0f1f3}
+  th,td{box-sizing:border-box;padding:6px 11px;text-align:right;
+    border-bottom:1px solid #f0f1f3}
   thead th{position:sticky;top:0;background:#f7f8fa;color:#6b7280;font-size:11px;
     font-weight:650;z-index:3;border-bottom:1px solid #e5e7eb}
-  td.nm,th.nm{position:sticky;left:0;text-align:left;background:#fff;z-index:2;
-    min-width:132px;max-width:132px;white-space:normal;word-break:keep-all;
+  /* 좌측 고정 2열: box-sizing:border-box라 폭(패딩 포함)과 left 오프셋이 정확히 맞음 */
+  td.nm,th.nm{position:sticky;left:0;text-align:left;background:#fff;z-index:5;
+    width:150px;min-width:150px;max-width:150px;white-space:normal;word-break:keep-all;
     vertical-align:middle;border-right:1px solid #eceef1}
-  td.pd,th.pd{position:sticky;left:132px;text-align:left;background:#fff;
-    min-width:86px;color:#8a9099;font-size:11.5px;z-index:2;
+  td.pd,th.pd{position:sticky;left:150px;text-align:left;background:#fff;
+    width:64px;min-width:64px;max-width:64px;color:#8a9099;font-size:11.5px;z-index:5;
     border-right:1px solid #eceef1}
-  thead th.nm,thead th.pd{z-index:4;background:#f7f8fa;color:#6b7280}
+  thead th.nm,thead th.pd{z-index:6;background:#f7f8fa;color:#6b7280}
   /* 지표 머리글: 드래그해 열 순서 변경 */
   thead th[data-col]{cursor:grab}
   thead th[data-col]:hover{color:#2563EB}
