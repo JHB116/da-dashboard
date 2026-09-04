@@ -3515,13 +3515,34 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     dim2 = c2.selectbox("세부(2단계)", dim2_opts, index=0, key="yoy_dim2",
                         help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
                              "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
-    metric_grp = c3.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
-                              help="핵심=보고서형 주요 지표만, 전체=상세표+집행일수·회원UV·"
+    metric_grp = c3.selectbox("지표 묶음(기본값)", ["핵심", "전체"], index=0, key="yoy_mets",
+                              help="아래 '지표' 칸의 기본 구성을 정합니다. "
+                                   "핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
                                    "RD~SP 등 전 지표(정규 순서).")
     col1 = avail[dim1]
     col2 = avail.get(dim2) if dim2 != "(없음)" else None
-    # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
-    spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
+
+    # 지표: 커스텀 실적처럼 칩을 드래그해 순서를 바꾸거나 빼고 넣을 수 있다.
+    # 전체 지표 풀(펼쳐보기 세트, 정규순서) + 라벨→스펙 매핑.
+    _all_specs = _order_metrics(DRILL_SHOW)
+    spec_by_label = {}
+    for s in _all_specs:
+        spec_by_label.setdefault(s[0], s)
+    all_labels = list(spec_by_label.keys())
+    default_labels = ([s[0] for s in YOY_CORE_SPEC] if metric_grp == "핵심"
+                      else all_labels)
+    # 프리셋별로 위젯 키를 분리 → '핵심/전체' 전환 시 각자 기본구성으로 시작하고
+    # 사용자가 드래그한 순서는 프리셋별로 따로 기억된다.
+    mets = st.multiselect(
+        "지표 (칩을 마우스로 드래그해 앞뒤로 순서 변경 · 빼고 넣기 가능)",
+        all_labels, default=default_labels, key=f"yoy_metsel_{metric_grp}",
+        help="선택한 순서가 곧 표의 지표 열 순서입니다. 예: UV 옆에 회원UV·회원UV비중을 "
+             "끌어다 놓으면 그 순서로 나옵니다. (기본값을 다시 쓰려면 지표 묶음을 바꿨다 "
+             "되돌리거나 필터 초기화)")
+    spec = [spec_by_label[m] for m in mets if m in spec_by_label]
+    if not spec:
+        st.info("지표를 1개 이상 선택하세요.")
+        return
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
