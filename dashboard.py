@@ -3394,10 +3394,12 @@ def _yoy_num(s, col, kind):
     return round(float(v), 2)
 
 
-def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec):
-    """한 그룹의 (당년/전년/비교) 3행. 반환: (표시행 3, 원본행 3)."""
+def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True):
+    """한 그룹의 행. show_yoy=True면 (당년/전년/비교) 3행, False면 (당년) 1행.
+    반환: (표시행, 원본행)."""
     disp, raw = [], []
-    for i, (tag, s) in enumerate(((cur_lab, cur_s), (prev_lab, prev_s))):
+    pairs = [(cur_lab, cur_s)] + ([(prev_lab, prev_s)] if show_yoy else [])
+    for i, (tag, s) in enumerate(pairs):
         lb = label if i == 0 else ""
         d = {"분류": lb, "기간": tag}
         r = {"분류": lb, "기간": tag}
@@ -3407,18 +3409,19 @@ def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec):
             r[lab_] = _yoy_num(s, col, kind)
         disp.append(d)
         raw.append(r)
-    dcmp = {"분류": "", "기간": "비교"}
-    rcmp = {"분류": "", "기간": "비교"}
-    for lab_, col, kind in spec:
-        cv = cur_s.get(col, np.nan) if cur_s is not None else np.nan
-        pv = prev_s.get(col, np.nan) if prev_s is not None else np.nan
-        chg = ((cv - pv) / abs(pv)
-               if (prev_s is not None and pd.notna(pv) and pv != 0 and pd.notna(cv))
-               else np.nan)
-        dcmp[lab_] = signed_pct(chg)
-        rcmp[lab_] = round(float(chg) * 100, 2) if pd.notna(chg) else None
-    disp.append(dcmp)
-    raw.append(rcmp)
+    if show_yoy:
+        dcmp = {"분류": "", "기간": "비교"}
+        rcmp = {"분류": "", "기간": "비교"}
+        for lab_, col, kind in spec:
+            cv = cur_s.get(col, np.nan) if cur_s is not None else np.nan
+            pv = prev_s.get(col, np.nan) if prev_s is not None else np.nan
+            chg = ((cv - pv) / abs(pv)
+                   if (prev_s is not None and pd.notna(pv) and pv != 0 and pd.notna(cv))
+                   else np.nan)
+            dcmp[lab_] = signed_pct(chg)
+            rcmp[lab_] = round(float(chg) * 100, 2) if pd.notna(chg) else None
+        disp.append(dcmp)
+        raw.append(rcmp)
     return disp, raw
 
 
@@ -3441,18 +3444,20 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
         for j, l in enumerate(metric_labels))
     role_lab = {"cur": cur_lab, "prev": prev_lab, "cmp": "비교"}
     trs = []
-    for bi, blk in enumerate(blocks):
-        kind, label, rows = blk["kind"], blk["label"], blk["rows"]
+    for blk in blocks:
+        label, rows = blk["label"], blk["rows"]
         depth = blk.get("depth", 0)          # 0=전체TOTAL, 1=1단계, 2=2단계 …
         pad = 8 + depth * 14                  # 단계 깊이만큼 분류 셀 들여쓰기
-        alt = "alt" if bi % 2 else ""
+        dp = f"dp{min(depth, 7)}"            # 배경색은 단계(depth)별로 고정
+        nrows = len(rows)
+        roles = ("cur", "prev", "cmp") if nrows == 3 else ("cur",)
         safe = (str(label).replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))
-        for ri, role in enumerate(("cur", "prev", "cmp")):
+        for ri, role in enumerate(roles):
             r = rows[ri]
             cells = []
             if ri == 0:
-                cells.append(f'<td class="nm" rowspan="3" '
+                cells.append(f'<td class="nm" rowspan="{nrows}" '
                              f'style="padding-left:{pad}px">{safe}</td>')
             cells.append(f'<td class="pd">{role_lab[role]}</td>')
             for j, lb in enumerate(metric_labels):
@@ -3462,7 +3467,7 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
                     cells.append(f'<td data-col="{j}" class="{_yoy_cmp_cls(v)}">{v}</td>')
                 else:
                     cells.append(f'<td data-col="{j}">{v}</td>')
-            trs.append(f'<tr class="{kind} {role} {alt}">' + "".join(cells) + "</tr>")
+            trs.append(f'<tr class="{dp} {role}">' + "".join(cells) + "</tr>")
     body = "".join(trs)
     return """
 <div class="yv">
@@ -3503,18 +3508,18 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
   .up{color:#0f7a52}.dn{color:#c0392b}.na{color:#b7bcc3;font-weight:500}
   /* 그룹 블록 구분선(각 블록 첫 줄 위) */
   tr.cur td{border-top:2px solid #e6e8ec}
-  /* 블록 종류별 배경 */
-  tr.grand td{background:#e6efff}
-  tr.grand td.nm{background:#dbe8ff;font-weight:800;color:#1e40af}
-  tr.grand td.pd{background:#e6efff}
-  tr.grand.cur td{border-top:2px solid #b9d0f7}
-  tr.group td.nm{background:#eef1f7;font-weight:750}
-  tr.sub td.nm{padding-left:20px;color:#4b5563}
-  tr.sub2 td.nm{padding-left:34px;color:#6b7280}
-  tr.alt td{background:#fbfcfd}
-  tr.alt td.nm{background:#f6f8fb}
-  tr.alt td.pd{background:#f6f8fb}
-  tr.alt.grand td,tr.alt.group td.nm{background:inherit}
+  /* 배경색은 단계(depth)별로 고정 — 같은 단계는 같은 색(교차 없음) */
+  tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#e6efff}
+  tr.dp0 td.nm{background:#dbe8ff;font-weight:800;color:#1e40af}
+  tr.dp0.cur td{border-top:2px solid #b9d0f7}
+  tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#eaeefb}
+  tr.dp1 td.nm{font-weight:750;color:#1f2937}
+  tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#f2f4f9}
+  tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#f8f9fb}
+  tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#ffffff}
+  tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#f8f9fb}
+  tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#ffffff}
+  tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#f8f9fb}
   tbody tr:hover td{background:#eef3ff}
   tbody tr:hover td.nm,tbody tr:hover td.pd{background:#e6efff}
   @media (prefers-color-scheme:dark){
@@ -3527,15 +3532,17 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     tr.cur td{color:#f3f3ee;border-top-color:#33332f}
     tr.prev td{color:#8b8a80}
     .up{color:#57cd9a}.dn{color:#f0716d}.na{color:#6b6a63}
-    tr.grand td{background:#182338}
-    tr.grand td.nm{background:#1e2c47;color:#8fb4ff}
-    tr.grand td.pd{background:#182338}
-    tr.grand.cur td{border-top-color:#2b3a52}
-    tr.group td.nm{background:#262623}
-    tr.sub td.nm{color:#b9b8ae}
-    tr.sub2 td.nm{color:#9a998f}
-    tr.alt td{background:#1e1e1c}
-    tr.alt td.nm,tr.alt td.pd{background:#201f1d}
+    tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#182338}
+    tr.dp0 td.nm{background:#1e2c47;color:#8fb4ff}
+    tr.dp0.cur td{border-top-color:#2b3a52}
+    tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#22252c}
+    tr.dp1 td.nm{color:#e6e6df}
+    tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#1e1e1d}
+    tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#191918}
+    tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#141413}
+    tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#191918}
+    tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#141413}
+    tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#191918}
     tbody tr:hover td{background:#22314a}
     tbody tr:hover td.nm,tbody tr:hover td.pd{background:#1e2c47}
     thead th[data-col]:hover{color:#8fb4ff}
@@ -3610,13 +3617,16 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         st.warning("선택한 날짜 범위에 데이터가 없습니다.")
         return
 
-    avail = {k: v for k, v in YOY_GROUP_DIMS.items() if v in cur.columns}
+    # 분류 차원 = 펼쳐보기와 동일(하위캠페인·기획전·카테고리·기간 일/주/월 포함).
+    # 기간(__day__/__week__/__month__)은 항상, 그 외는 실제 컬럼이 있을 때만 노출.
+    avail = {k: v for k, v in DRILL_DIM_OPTS.items()
+             if v.startswith("__") or v in cur.columns}
     if not avail:
         st.info("분류로 쓸 차원 컬럼이 데이터에 없습니다.")
         return
     YOY_SLOTS = 7
-    st.markdown("**분류 단계 순서** — 왼쪽부터 바깥→안쪽. 각 단계마다 당년·전년·비교 3줄이 "
-                "만들어지고, 하위 단계가 있으면 상위는 소계(◯◯_TOTAL)가 됩니다. 최대 7단계.")
+    st.markdown("**분류 단계 순서** — 왼쪽부터 바깥→안쪽. 하위 단계가 있으면 상위는 "
+                "소계(◯◯_TOTAL)가 됩니다. 최대 7단계(기간·하위캠페인 등 포함).")
     avail_keys = list(avail.keys())
     opts = ["(없음)"] + avail_keys
     yoy_default = ["비용출처"] if "비용출처" in avail else avail_keys[:1]
@@ -3629,10 +3639,20 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
             index=opts.index(dft) if dft in opts else 0, key=f"yoy_slot_{i}")
         if sel != "(없음)" and sel not in order:
             order.append(sel)
-    metric_grp = st.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
+
+    o1, o2, o3, o4 = st.columns([1.4, 1.2, 1.4, 1.2])
+    metric_grp = o1.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
                               help="핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
                                    "RD~SP 등 전 지표(정규 순서). "
                                    "표의 지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요.")
+    daily_avg = o2.checkbox("일평균으로 보기", value=False, key="yoy_daily_avg",
+                            help="합계형 지표(노출·클릭·광고비·거래액 등)를 집행일수로 나눈 "
+                                 "일평균으로 표시. 비율지표(CTR·ROAS·객단가 등)는 그대로.")
+    impr_only = o3.checkbox("노출수 0 초과만 보기", value=True, key="yoy_impr_only",
+                            help="노출이 있었던(노출수>0) 데이터만 집계합니다. 집행일수·일평균도 "
+                                 "노출수>0 기준으로 계산됩니다.")
+    show_yoy = o4.checkbox("전년비 표시", value=True, key="yoy_show_yoy",
+                           help="켜면 당년/전년/비교 3줄, 끄면 당년 값만 1줄로 표시(펼쳐보기처럼).")
     if not order:
         st.info("‘1단계’에 분류를 하나 이상 골라주세요.")
         return
@@ -3643,10 +3663,27 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
-    if prev_src.empty:
+    if show_yoy and prev_src.empty:
         st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년·비교가 "
                    "모두 ‘–’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**으로 "
                    "바꾸면 채워집니다.")
+
+    # 기간 파생 차원(__day__/__week__/__month__)을 실제 컬럼으로 만들고, 노출0초과 필터 적용
+    period_tokens = {"__day__", "__week__", "__month__"}
+    need_period = [c for c in cols_list if c in period_tokens]
+    work_cur = cur.copy() if need_period else cur
+    work_prev = prev_src.copy() if (need_period and not prev_src.empty) else prev_src
+    for c in need_period:
+        work_cur[c] = _drill_series(work_cur, c)
+        if not work_prev.empty:
+            work_prev[c] = _drill_series(work_prev, c)
+    if impr_only:
+        work_cur = work_cur[work_cur["지표_노출수"].fillna(0) > 0]
+        if not work_prev.empty:
+            work_prev = work_prev[work_prev["지표_노출수"].fillna(0) > 0]
+
+    def _davg(s):
+        return _drill_daily_avg(s) if (daily_avg and s is not None) else s
 
     def _map(dfx, cols):
         if dfx is None or dfx.empty:
@@ -3655,19 +3692,20 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         return {tuple(str(r[c]) for c in cols): r for _, r in gg.iterrows()}
 
     # 단계별 집계: cur_maps[d] = (앞 d+1개 차원값 튜플) → 집계 시리즈
-    cur_maps = [_map(cur, cols_list[:d + 1]) for d in range(L)]
-    prv_maps = [_map(prev_src, cols_list[:d + 1]) for d in range(L)]
+    cur_maps = [_map(work_cur, cols_list[:d + 1]) for d in range(L)]
+    prv_maps = [_map(work_prev, cols_list[:d + 1]) for d in range(L)]
 
     blocks, raw_rows = [], []
 
-    def _add(label, cs, ps, kind, depth):
-        d, r = _yoy_block(label, cs, ps, cur_lab, prev_lab, spec)
-        blocks.append({"label": label, "kind": kind, "depth": depth, "rows": d})
+    def _add(label, cs, ps, depth):
+        d, r = _yoy_block(label, _davg(cs), _davg(ps), cur_lab, prev_lab, spec,
+                          show_yoy=show_yoy)
+        blocks.append({"label": label, "depth": depth, "rows": d})
         raw_rows.extend(r)
 
-    tot_c = agg(cur.assign(_a="_"), ["_a"]).iloc[0]
-    tot_p = agg(prev_src.assign(_a="_"), ["_a"]).iloc[0] if not prev_src.empty else None
-    _add("전체 TOTAL", tot_c, tot_p, "grand", 0)
+    tot_c = agg(work_cur.assign(_a="_"), ["_a"]).iloc[0] if not work_cur.empty else None
+    tot_p = agg(work_prev.assign(_a="_"), ["_a"]).iloc[0] if not work_prev.empty else None
+    _add("전체 TOTAL", tot_c, tot_p, 0)
 
     def _emit(level, parent_key):
         cmap = cur_maps[level]
@@ -3677,8 +3715,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         for k in keys:
             v = k[level]
             label = v if is_leaf else f"{v}_TOTAL"
-            kind = "group" if level == 0 else "sub"
-            _add(label, cmap[k], prv_maps[level].get(k), kind, level + 1)
+            _add(label, cmap[k], prv_maps[level].get(k), level + 1)
             if not is_leaf:
                 _emit(level + 1, k)
 
@@ -3689,15 +3726,17 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
     st.markdown("##### 📊 " + " → ".join(order)
                 + f" 전년비 · {cur_lab} vs {prev_lab}")
-    n_rows = len(blocks) * 3
+    n_rows = sum(len(b["rows"]) for b in blocks)
     height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
     _components_html(_yoy_html(blocks, spec, cur_lab, prev_lab),
                      height=height, scrolling=False)
-    st.caption("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
+    cap = ("배경색은 **단계(depth)별로 고정**이고, 같은 단계는 같은 색입니다. "
+           "**분류·기간 열은 좌측 고정** · 🖱️ **지표 머리글을 끌어 열 순서 변경**(임시).")
+    if show_yoy:
+        cap = ("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
                "(당기−전년)/|전년| 증감률(초록=증가·빨강=감소). 전년 데이터가 없으면 ‘–’. "
-               "**분류·기간 열은 좌측 고정**이라 가로 스크롤해도 붙어 있습니다. "
-               "🖱️ **지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요**(대상 열 앞에 삽입, "
-               "화면상 임시 이동 — 새로고침하면 원래 순서).")
+               ) + cap
+    st.caption(cap)
     st.download_button("📄 CSV 다운로드 (원본 숫자)",
                        data=raw_table.to_csv(index=False).encode("utf-8-sig"),
                        file_name="전년비_리포트.csv", mime="text/csv", key="rawdl_yoy")
