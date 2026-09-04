@@ -3443,6 +3443,8 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     trs = []
     for bi, blk in enumerate(blocks):
         kind, label, rows = blk["kind"], blk["label"], blk["rows"]
+        depth = blk.get("depth", 0)          # 0=전체TOTAL, 1=1단계, 2=2단계 …
+        pad = 8 + depth * 14                  # 단계 깊이만큼 분류 셀 들여쓰기
         alt = "alt" if bi % 2 else ""
         safe = (str(label).replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))
@@ -3450,7 +3452,8 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
             r = rows[ri]
             cells = []
             if ri == 0:
-                cells.append(f'<td class="nm" rowspan="3">{safe}</td>')
+                cells.append(f'<td class="nm" rowspan="3" '
+                             f'style="padding-left:{pad}px">{safe}</td>')
             cells.append(f'<td class="pd">{role_lab[role]}</td>')
             for j, lb in enumerate(metric_labels):
                 v = r.get(lb, "")
@@ -3611,28 +3614,30 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     if not avail:
         st.info("분류로 쓸 차원 컬럼이 데이터에 없습니다.")
         return
-    c1, c2, c3, c4 = st.columns([1.3, 1.3, 1.3, 1.1])
-    dim1 = c1.selectbox("분류(1단계)", list(avail.keys()),
-                        index=(list(avail).index("비용출처") if "비용출처" in avail else 0),
-                        key="yoy_dim1",
-                        help="이 차원 값마다 당년·전년·비교 3줄 블록을 만듭니다.")
-    dim2_opts = ["(없음)"] + [k for k in avail if k != dim1]
-    dim2 = c2.selectbox("세부(2단계)", dim2_opts, index=0, key="yoy_dim2",
-                        help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
-                             "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
-    dim3_opts = (["(없음)"] + [k for k in avail if k not in (dim1, dim2)]
-                 if dim2 != "(없음)" else ["(없음)"])
-    dim3 = c3.selectbox("세부(3단계)", dim3_opts, index=0, key="yoy_dim3",
-                        disabled=(dim2 == "(없음)"),
-                        help="2단계를 고른 경우에만 활성화. 2단계 각 소계(◯◯_TOTAL) 아래로 "
-                             "3단계 항목이 ‘└─’로 더 들여써져 나옵니다. 예: 비용출처 → 매체 → 상품.")
-    metric_grp = c4.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
+    YOY_SLOTS = 7
+    st.markdown("**분류 단계 순서** — 왼쪽부터 바깥→안쪽. 각 단계마다 당년·전년·비교 3줄이 "
+                "만들어지고, 하위 단계가 있으면 상위는 소계(◯◯_TOTAL)가 됩니다. 최대 7단계.")
+    avail_keys = list(avail.keys())
+    opts = ["(없음)"] + avail_keys
+    yoy_default = ["비용출처"] if "비용출처" in avail else avail_keys[:1]
+    slot_cols = st.columns(YOY_SLOTS)
+    order = []
+    for i in range(YOY_SLOTS):
+        dft = yoy_default[i] if i < len(yoy_default) else "(없음)"
+        sel = slot_cols[i].selectbox(
+            f"{i + 1}단계", opts,
+            index=opts.index(dft) if dft in opts else 0, key=f"yoy_slot_{i}")
+        if sel != "(없음)" and sel not in order:
+            order.append(sel)
+    metric_grp = st.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
                               help="핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
                                    "RD~SP 등 전 지표(정규 순서). "
                                    "표의 지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요.")
-    col1 = avail[dim1]
-    col2 = avail.get(dim2) if dim2 != "(없음)" else None
-    col3 = avail.get(dim3) if (col2 and dim3 != "(없음)") else None
+    if not order:
+        st.info("‘1단계’에 분류를 하나 이상 골라주세요.")
+        return
+    cols_list = [avail[k] for k in order]
+    L = len(cols_list)
     # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
     spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
 
@@ -3649,51 +3654,40 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         gg = agg(dfx, cols)
         return {tuple(str(r[c]) for c in cols): r for _, r in gg.iterrows()}
 
-    cur1, prv1 = _map(cur, [col1]), _map(prev_src, [col1])
-    cur2 = _map(cur, [col1, col2]) if col2 else {}
-    prv2 = _map(prev_src, [col1, col2]) if col2 else {}
-    cur3 = _map(cur, [col1, col2, col3]) if col3 else {}
-    prv3 = _map(prev_src, [col1, col2, col3]) if col3 else {}
-
-    def _spend_desc(mp):
-        return lambda k: -(mp[k].get("지표_광고비", 0) or 0)
-
-    # 1단계 값: 광고비 큰 순
-    order1 = sorted(cur1, key=_spend_desc(cur1))
+    # 단계별 집계: cur_maps[d] = (앞 d+1개 차원값 튜플) → 집계 시리즈
+    cur_maps = [_map(cur, cols_list[:d + 1]) for d in range(L)]
+    prv_maps = [_map(prev_src, cols_list[:d + 1]) for d in range(L)]
 
     blocks, raw_rows = [], []
 
-    def _add(label, cs, ps, kind):
+    def _add(label, cs, ps, kind, depth):
         d, r = _yoy_block(label, cs, ps, cur_lab, prev_lab, spec)
-        blocks.append({"label": label, "kind": kind, "rows": d})
+        blocks.append({"label": label, "kind": kind, "depth": depth, "rows": d})
         raw_rows.extend(r)
 
     tot_c = agg(cur.assign(_a="_"), ["_a"]).iloc[0]
     tot_p = agg(prev_src.assign(_a="_"), ["_a"]).iloc[0] if not prev_src.empty else None
-    _add("전체 TOTAL", tot_c, tot_p, "grand")
-    for k1 in order1:
-        v1 = k1[0]
-        _add(f"{v1}_TOTAL" if col2 else v1, cur1.get(k1), prv1.get(k1), "group")
-        if not col2:
-            continue
-        subs2 = sorted([k for k in cur2 if k[0] == v1], key=_spend_desc(cur2))
-        for k2 in subs2:
-            v2 = k2[1]
-            _add(f"└ {v2}_TOTAL" if col3 else f"└ {v2}",
-                 cur2.get(k2), prv2.get(k2), "sub")
-            if not col3:
-                continue
-            subs3 = sorted([k for k in cur3 if k[0] == v1 and k[1] == v2],
-                           key=_spend_desc(cur3))
-            for k3 in subs3:
-                _add(f"└─ {k3[2]}", cur3.get(k3), prv3.get(k3), "sub2")
+    _add("전체 TOTAL", tot_c, tot_p, "grand", 0)
+
+    def _emit(level, parent_key):
+        cmap = cur_maps[level]
+        keys = [k for k in cmap if k[:level] == parent_key]
+        keys.sort(key=lambda k: -(cmap[k].get("지표_광고비", 0) or 0))
+        is_leaf = (level == L - 1)
+        for k in keys:
+            v = k[level]
+            label = v if is_leaf else f"{v}_TOTAL"
+            kind = "group" if level == 0 else "sub"
+            _add(label, cmap[k], prv_maps[level].get(k), kind, level + 1)
+            if not is_leaf:
+                _emit(level + 1, k)
+
+    _emit(0, ())
 
     cols = ["분류", "기간"] + [s[0] for s in spec]
     raw_table = pd.DataFrame(raw_rows, columns=cols)
 
-    st.markdown(f"##### 📊 {dim1}"
-                + (f" → {dim2}" if col2 else "")
-                + (f" → {dim3}" if col3 else "")
+    st.markdown("##### 📊 " + " → ".join(order)
                 + f" 전년비 · {cur_lab} vs {prev_lab}")
     n_rows = len(blocks) * 3
     height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
