@@ -3516,10 +3516,12 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
                         help="선택하면 1단계 각 그룹(◯◯_TOTAL) 아래로 세부 항목이 "
                              "‘└’로 들여써져 함께 나옵니다. 예: 매체 → 상품.")
     metric_grp = c3.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
-                              help="핵심=보고서형 주요 지표만, 전체=상세표 전 지표.")
+                              help="핵심=보고서형 주요 지표만, 전체=상세표+집행일수·회원UV·"
+                                   "RD~SP 등 전 지표(정규 순서).")
     col1 = avail[dim1]
     col2 = avail.get(dim2) if dim2 != "(없음)" else None
-    spec = YOY_CORE_SPEC if metric_grp == "핵심" else list(DETAIL_SPEC)
+    # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
+    spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
