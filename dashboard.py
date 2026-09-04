@@ -558,6 +558,39 @@ _DETAIL_FMT = {
 }
 
 # 소재 상세 첨부(Excel) 컬럼 양식 (업로드 예시 파일 순서). col=None → 빈 컬럼
+# ───────────────────────────────────────────────
+# 지표(컬럼) 정규 노출 순서 — 모든 상세표가 이 순서를 공유한다.
+# 표마다 라벨이 달라도(예: '거래액' vs '순결제매출') 실제 컬럼은 같으므로
+# '컬럼' 기준으로 순서를 정의해 일괄 정렬한다. 캐논에 없는 컬럼은 뒤로 보낸다.
+# ───────────────────────────────────────────────
+_METRIC_CANON_COLS = [
+    "지표_노출수", "지표_클릭수", "CTR", "CR(순)", "객단가(순)", "지표_순결제고객수",
+    "CPM", "CPC", "CPUV", "지표_UV(전체)", "지표_광고비",
+    "지표_순결제거래액", "순결제ROAS", "순결제비중", "지표_총결제거래액", "총결제ROAS",
+    "UV/클릭", "CR(총)", "객단가(총)", "지표_총결제고객수",
+    "가입률", "지표_가입회원", "가입CPA",
+    "지표_순결제고객수(첫구매)", "첫구매CPA", "지표_순결제거래액(첫구매)", "첫구매율", "첫구매비중",
+    "지표_당년신규순결제고객수", "지표_당년신규순결제거래액", "신규비중",
+    "지표_순결제고객수(윈백)", "지표_순결제거래액(윈백)", "윈백비중",
+    "집행일수", "지표_UV(회원)", "회원UV비중", "지표_PV(전체)", "지표_PV(회원)",
+    "지표_총결제고객수(첫구매)", "지표_총결제거래액(첫구매)",
+    "지표_총결제고객수(윈백)", "지표_총결제거래액(윈백)",
+    "지표_상품상세UV(전체)", "지표_상품상세UV(회원)", "지표_상품상세UV(상품별)",
+    "지표_당월신규순결제고객수", "지표_당월신규순결제거래액", "지표_영상조회수",
+    "지표_순결제거래액(RD)", "지표_순결제거래액(PP)", "지표_순결제거래액(BK)",
+    "지표_순결제거래액(SV)", "지표_순결제거래액(GD)", "지표_순결제거래액(PT)",
+    "지표_순결제거래액(SP)",
+]
+_MCANON = {c: i for i, c in enumerate(_METRIC_CANON_COLS)}
+
+
+def _order_metrics(spec, col_idx=1):
+    """지표 스펙을 정규 컬럼 순서로 안정 정렬. 캐논에 없는 항목은 원래 상대순서로 맨 뒤."""
+    return [e for _, e in sorted(
+        enumerate(spec),
+        key=lambda t: (_MCANON.get(t[1][col_idx], len(_MCANON)), t[0]))]
+
+
 CREATIVE_EXPORT_SPEC = [
     ("비용출처", "구분_비용출처"), ("카테고리", "카테고리"), ("기획전번호", None),
     ("AF코드", "구분_AF코드"), ("AF코드명", "구분_AF코드이름"), ("상세내역", None),
@@ -575,6 +608,10 @@ CREATIVE_EXPORT_SPEC = [
     ("신규고객수", "지표_당년신규순결제고객수"), ("신규거래액", "지표_당년신규순결제거래액"),
     ("신규비중", "신규비중"), ("윈백고객수", "지표_순결제고객수(윈백)"), ("윈백거래액", "지표_순결제거래액(윈백)"),
 ]
+# 식별(ID) 컬럼은 앞에 그대로 두고, 지표 부분만 정규 순서로 재정렬
+CREATIVE_EXPORT_SPEC = (
+    [e for e in CREATIVE_EXPORT_SPEC if e[1] not in _MCANON]
+    + _order_metrics([e for e in CREATIVE_EXPORT_SPEC if e[1] in _MCANON]))
 
 
 def week_of_month_label(year: int, week: int) -> str:
@@ -983,6 +1020,7 @@ DETAIL_SPEC = [
     ("윈백고객수",     "지표_순결제고객수(윈백)",     "num"),
     ("윈백거래액",     "지표_순결제거래액(윈백)",     "money"),
 ]
+DETAIL_SPEC = _order_metrics(DETAIL_SPEC)   # 정규 지표 순서로 정렬
 DETAIL_COLS = [d[0] for d in DETAIL_SPEC]
 
 
@@ -2267,6 +2305,7 @@ CAMP_METRIC_SPEC = [
     ("신규비중", "신규비중", "pct1"), ("윈백고객수", "지표_순결제고객수(윈백)", "num"),
     ("윈백거래액", "지표_순결제거래액(윈백)", "won"),
 ]
+CAMP_METRIC_SPEC = _order_metrics(CAMP_METRIC_SPEC)   # 정규 지표 순서로 정렬
 
 # 부서(BPU) 고정 표기 순서
 BPU_ORDER = ["e-영업1 BPU", "e-영업2 BPU", "e-영업3 BPU", "e-영업4 BPU",
@@ -2788,7 +2827,7 @@ def _drill_metric_spec(df):
         kind = "money" if any(k in cs for k in ("거래액", "매출", "비용", "광고비", "금액")) else "num"
         spec.append((lbl, c, kind))
         have.add(c)
-    return spec
+    return _order_metrics(spec)   # 정규 지표 순서로 정렬(캐논 밖 자동컬럼은 뒤로)
 
 
 def _drill_daily_avg(series, extra_cols=()):
@@ -3579,8 +3618,11 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
     spec_by_label = {d[0]: d for d in DETAIL_SPEC}
     spec_by_label["집행일수"] = ("집행일수", "집행일수", "num")
     spec_by_label.update({m[0]: m for m in CUSTOM_EXTRA_METRIC_SPEC})
-    met_opts = ([d[0] for d in DETAIL_SPEC] + ["집행일수"]
-                + [m[0] for m in CUSTOM_EXTRA_METRIC_SPEC])
+    # 지표 노출 순서: 상세표(DETAIL) + 집행일수 + RD~SP를 정규 컬럼 순서로 통일
+    _cu_specs = _order_metrics(
+        list(DETAIL_SPEC) + [("집행일수", "집행일수", "num")]
+        + list(CUSTOM_EXTRA_METRIC_SPEC))
+    met_opts = [s[0] for s in _cu_specs]
 
     def _dim_has_data(col):
         if col not in d.columns:
