@@ -3503,20 +3503,20 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
   .up{color:#0f7a52}.dn{color:#c0392b}.na{color:#b7bcc3;font-weight:500}
   /* 그룹 블록 구분선(각 블록 첫 줄 위) */
   tr.cur td{border-top:2px solid #e6e8ec}
-  /* 배경색은 단계(depth)별로 고정 — 같은 단계는 같은 색(교차 없음) */
-  tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#e6efff}
-  tr.dp0 td.nm{background:#dbe8ff;font-weight:800;color:#1e40af}
-  tr.dp0.cur td{border-top:2px solid #b9d0f7}
-  tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#eaeefb}
-  tr.dp1 td.nm{font-weight:750;color:#1f2937}
-  tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#f2f4f9}
-  tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#f8f9fb}
-  tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#ffffff}
-  tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#f8f9fb}
-  tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#ffffff}
-  tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#f8f9fb}
-  tbody tr:hover td{background:#eef3ff}
-  tbody tr:hover td.nm,tbody tr:hover td.pd{background:#e6efff}
+  /* 배경색은 단계(depth)별로 고정 — 단계마다 뚜렷이 차등(파랑 그라데이션) */
+  tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#aecbf3}
+  tr.dp0 td.nm{background:#95b9ef;font-weight:800;color:#123f8a}
+  tr.dp0.cur td{border-top:2px solid #6f9ee4}
+  tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#c7dbf7}
+  tr.dp1 td.nm{font-weight:750;color:#1e3a6e}
+  tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#dbe8fb}
+  tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#eaf1fd}
+  tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#f5f8fe}
+  tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#ffffff}
+  tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#eaf1fd}
+  tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#f5f8fe}
+  tbody tr:hover td{background:#fff6d8}
+  tbody tr:hover td.nm,tbody tr:hover td.pd{background:#ffeeb0}
   @media (prefers-color-scheme:dark){
     .yv{color:#e8e8e3}
     .scroll{border-color:#33332f}
@@ -3527,19 +3527,19 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     tr.cur td{color:#f3f3ee;border-top-color:#33332f}
     tr.prev td{color:#8b8a80}
     .up{color:#57cd9a}.dn{color:#f0716d}.na{color:#6b6a63}
-    tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#182338}
-    tr.dp0 td.nm{background:#1e2c47;color:#8fb4ff}
-    tr.dp0.cur td{border-top-color:#2b3a52}
-    tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#22252c}
-    tr.dp1 td.nm{color:#e6e6df}
-    tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#1e1e1d}
-    tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#191918}
-    tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#141413}
-    tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#191918}
-    tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#141413}
-    tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#191918}
-    tbody tr:hover td{background:#22314a}
-    tbody tr:hover td.nm,tbody tr:hover td.pd{background:#1e2c47}
+    tr.dp0 td,tr.dp0 td.nm,tr.dp0 td.pd{background:#2b4670}
+    tr.dp0 td.nm{background:#345486;color:#cfe0ff}
+    tr.dp0.cur td{border-top-color:#4a6699}
+    tr.dp1 td,tr.dp1 td.nm,tr.dp1 td.pd{background:#243b5b}
+    tr.dp1 td.nm{color:#dbe6f7}
+    tr.dp2 td,tr.dp2 td.nm,tr.dp2 td.pd{background:#1f2c40}
+    tr.dp3 td,tr.dp3 td.nm,tr.dp3 td.pd{background:#1a2130}
+    tr.dp4 td,tr.dp4 td.nm,tr.dp4 td.pd{background:#161a22}
+    tr.dp5 td,tr.dp5 td.nm,tr.dp5 td.pd{background:#121316}
+    tr.dp6 td,tr.dp6 td.nm,tr.dp6 td.pd{background:#1a2130}
+    tr.dp7 td,tr.dp7 td.nm,tr.dp7 td.pd{background:#161a22}
+    tbody tr:hover td{background:#3a3320}
+    tbody tr:hover td.nm,tbody tr:hover td.pd{background:#4a4022}
     thead th[data-col]:hover{color:#8fb4ff}
     thead th[data-col].dragover{box-shadow:inset 3px 0 0 #8fb4ff;color:#8fb4ff}
   }
