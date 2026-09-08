@@ -3636,7 +3636,9 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
                 "소계(◯◯_TOTAL)가 됩니다. 최대 7단계(기간·하위캠페인 등 포함).")
     avail_keys = list(avail.keys())
     opts = ["(없음)"] + avail_keys
-    yoy_default = ["비용출처"] if "비용출처" in avail else avail_keys[:1]
+    # 기본 분류 순서: 비용출처 > 채널 > 매체 > 상품 > 캠페인 (데이터에 있는 차원만).
+    _yoy_default_dims = ["비용출처", "채널", "매체", "상품", "캠페인"]
+    yoy_default = [d for d in _yoy_default_dims if d in avail] or avail_keys[:1]
     slot_cols = st.columns(YOY_SLOTS)
     order = []
     for i in range(YOY_SLOTS):
