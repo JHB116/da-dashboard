@@ -2914,6 +2914,24 @@ def _drill_natstr(s):
     return re.sub(r"\d+", lambda m: m.group().zfill(12), str(s))
 
 
+# 세부 행 유지 판정에 쓰는 '활동' 지표: 이 중 하나라도 0이 아니면 실적이 있는 행이다.
+# (광고비만 보면 서비스비용·정산제외처럼 광고비 0/음수인 매출성 행이 빠진다.)
+_DRILL_ACTIVITY_COLS = (
+    "지표_광고비", "지표_노출수", "지표_클릭수",
+    "지표_순결제거래액", "지표_총결제거래액", "지표_UV(전체)",
+)
+
+
+def _drill_has_activity(g):
+    """빈 행(활동 지표가 모두 0)만 걸러내기 위한 불리언 마스크.
+    광고비가 0이거나 음수(정산 차감)여도 매출·노출 등이 있으면 True로 유지한다."""
+    mask = pd.Series(False, index=g.index)
+    for c in _DRILL_ACTIVITY_COLS:
+        if c in g.columns:
+            mask = mask | (pd.to_numeric(g[c], errors="coerce").fillna(0) != 0)
+    return mask
+
+
 def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False,
                       prev_source=None, show_yoy=False):
     """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
@@ -2995,8 +3013,6 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
                                     prev=_proot, show_yoy=show_yoy),
               "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols), "promo": ""}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
-    # 기준 필터 지표: 노출수>0 모드면 노출수, 아니면 광고비.
-    base_metric = "지표_노출수" if impr_only else "지표_광고비"
     period_cols = {"__day__", "__week__", "__month__"}
     for d in range(1, len(dims) + 1):
         g = _augment(agg(work, cols[:d]), cols[:d])
@@ -3005,7 +3021,15 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         plook = _prev_lookup(d) if depth_show_yoy else {}
         # 기간(일/주/월) 단계는 기준 0인 날짜(전환만 있는 날 등)도 모두 표시
         if dims[d - 1][1] not in period_cols:
-            g = g[g[base_metric].fillna(0) > 0]
+            if impr_only:
+                # '노출수 0 초과만 보기' 모드: 노출수 기준으로만 거른다.
+                g = g[g["지표_노출수"].fillna(0) > 0]
+            else:
+                # 광고비만으로 거르면 광고비 0/음수인 비용출처(서비스비용·정산제외 등,
+                # 매출·노출만 있고 광고비는 0이거나 정산 차감으로 음수인 행)가 통째로
+                # 사라져 일자 토탈과 세부 행의 합이 어긋난다. → 광고비뿐 아니라 실적·노출이
+                # 하나라도 있으면(전부 0인 빈 행만 제외) 행을 남긴다.
+                g = g[_drill_has_activity(g)]
         g = g.sort_values("지표_광고비", ascending=False)
         anc = cols[:d - 1]
         if anc:
