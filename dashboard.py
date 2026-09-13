@@ -3728,6 +3728,56 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     # 전체=펼쳐보기와 동일한 전 지표 세트(집행일수·회원UV·RD~SP 등)를 정규 순서로
     spec = YOY_CORE_SPEC if metric_grp == "핵심" else _order_metrics(DRILL_SHOW)
 
+    # ── 정렬 기준 직접 조정 ─────────────────────────────────────────
+    # 기간 단계(기간 일/주/월)는 지표순으로 뒤섞이면 읽기 어려우므로 분류 단계와
+    # 정렬을 분리한다. 라벨(연월·주차·일자)은 사전식=날짜순이라 그대로 정렬키가 된다.
+    _PERIOD_TOKENS = {"__day__", "__week__", "__month__"}
+    _sort_metric_opts = [s[0] for s in spec]
+    _sort_metric_by_lbl = {s[0]: s[1] for s in spec}
+    _has_period_lvl = any(c in _PERIOD_TOKENS for c in cols_list)
+    _dim_sort_opts = ["지표 큰 순", "지표 작은 순", "이름 오름차순", "이름 내림차순"]
+    _period_sort_opts = ["과거→최신", "최신→과거", "지표 큰 순", "지표 작은 순"]
+    if _has_period_lvl:
+        s1, s2, s3 = st.columns([1.4, 1.4, 1.4])
+    else:
+        s1, s2 = st.columns([1.6, 1.6])
+        s3 = None
+    _def_metric = "광고비" if "광고비" in _sort_metric_opts else _sort_metric_opts[0]
+    sort_metric_lbl = s1.selectbox(
+        "정렬 지표", _sort_metric_opts,
+        index=_sort_metric_opts.index(_def_metric), key="yoy_sort_metric",
+        help="‘지표 큰/작은 순’으로 정렬할 때 기준이 되는 지표입니다.")
+    dim_sort = s2.selectbox(
+        "분류 단계 정렬", _dim_sort_opts, index=0, key="yoy_dim_sort",
+        help="채널·매체·상품 등 분류 단계를 어떤 순서로 나열할지. "
+             "‘지표 큰 순’이 기존 동작(광고비 많은 순)입니다.")
+    if s3 is not None:
+        period_sort = s3.selectbox(
+            "기간 단계 정렬", _period_sort_opts, index=0, key="yoy_period_sort",
+            help="기간(일/주/월) 단계의 정렬 순서. 기본은 날짜순(과거→최신)입니다.")
+    else:
+        period_sort = "과거→최신"
+    _sort_metric_col = _sort_metric_by_lbl.get(sort_metric_lbl, "지표_광고비")
+
+    def _sort_metric_val(row):
+        try:
+            v = row.get(_sort_metric_col, 0)
+        except AttributeError:
+            v = 0
+        return 0.0 if v is None or pd.isna(v) else float(v)
+
+    def _sort_keys(keys, cmap, level):
+        """단계별 정렬. 기간 단계는 기간 정렬옵션, 그 외는 분류 정렬옵션 적용."""
+        mode = period_sort if cols_list[level] in _PERIOD_TOKENS else dim_sort
+        if mode in ("이름 오름차순", "과거→최신"):
+            keys.sort(key=lambda k: k[level])
+        elif mode in ("이름 내림차순", "최신→과거"):
+            keys.sort(key=lambda k: k[level], reverse=True)
+        elif mode == "지표 작은 순":
+            keys.sort(key=lambda k: _sort_metric_val(cmap[k]))
+        else:  # 지표 큰 순 (기본)
+            keys.sort(key=lambda k: _sort_metric_val(cmap[k]), reverse=True)
+
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
     if show_yoy and prev_src.empty:
@@ -3777,7 +3827,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     def _emit(level, parent_key):
         cmap = cur_maps[level]
         keys = [k for k in cmap if k[:level] == parent_key]
-        keys.sort(key=lambda k: -(cmap[k].get("지표_광고비", 0) or 0))
+        _sort_keys(keys, cmap, level)
         is_leaf = (level == L - 1)
         for k in keys:
             v = k[level]
