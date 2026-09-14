@@ -483,10 +483,12 @@ def fmt_won(v):
     if pd.isna(v): return "–"
     return f"{int(round(v)):,}원"
 
-def fmt_money_no_mil(v):
-    """억/백만 단위 축약 없이 항상 원 숫자 그대로 표기."""
-    if pd.isna(v): return "–"
-    return f"{int(round(v)):,}원"
+# 금액 단위 표기 옵션(펼쳐보기 실적·전년비 리포트): 라벨 → 금액 포맷 함수
+MONEY_UNIT_FMTS = {
+    "원 단위": fmt_won,        # 축약 없이 원 숫자 그대로 (예: 12,345,678원)
+    "억·백만 축약": fmt_money,  # 1억↑ 억원, 백만↑ 백만원 (예: 1.2억원 / 12.3백만원)
+}
+MONEY_UNIT_DEFAULT = "원 단위"
 
 def fmt_num(v):
     if pd.isna(v): return "–"
@@ -991,9 +993,9 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
 # ───────────────────────────────────────────────
 # 상세 실적 표 (기간별 전지표) — 전체요약/주차별/일별 공용
 # ───────────────────────────────────────────────
-def _fmt_kind(v, kind, money_no_mil=False):
+def _fmt_kind(v, kind, money_fn=fmt_money):
     if pd.isna(v): return "–"
-    if kind == "money": return fmt_money_no_mil(v) if money_no_mil else fmt_money(v)
+    if kind == "money": return money_fn(v)
     if kind == "won":   return fmt_won(v)
     if kind == "roas":  return fmt_roas(v)
     if kind == "num":   return fmt_num(v)
@@ -2875,9 +2877,10 @@ def _drill_yoy_badge(cur_v, prev_v):
 
 
 def _drill_cells(series, spec, daily_avg=False, extra_cols=(),
-                 prev=None, show_yoy=False):
+                 prev=None, show_yoy=False, money_fn=fmt_money):
     """spec 지표를 표시용 HTML 문자열 리스트로. (ROAS는 색 span)
-    show_yoy=True면 각 셀 아래에 전년 동기(-364일 동요일) 대비 증감률 배지를 붙인다."""
+    show_yoy=True면 각 셀 아래에 전년 동기(-364일 동요일) 대비 증감률 배지를 붙인다.
+    money_fn: 금액(money) 지표의 표기 포맷 함수(단위 옵션)."""
     if daily_avg and series is not None:
         series = _drill_daily_avg(series, extra_cols)
     if daily_avg and prev is not None:
@@ -2885,7 +2888,7 @@ def _drill_cells(series, spec, daily_avg=False, extra_cols=(),
     out = []
     for _label, col, kind in spec:
         v = series.get(col, np.nan) if series is not None else np.nan
-        txt = _fmt_kind(v, kind, money_no_mil=True)
+        txt = _fmt_kind(v, kind, money_fn=money_fn)
         if kind == "roas" and not pd.isna(v):
             txt = f'<span class="{"up" if v >= 1 else "dn"}">{txt}</span>'
         if show_yoy:
@@ -2938,7 +2941,7 @@ def _drill_has_activity(g):
 
 
 def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False,
-                      prev_source=None, show_yoy=False):
+                      prev_source=None, show_yoy=False, money_fn=fmt_money):
     """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
     부모별 상위 top_n만 유지. impr_only=True면 노출수>0 행만 사용.
     sort_by: '광고비'(큰 순) | '이름'(기간·가나다순). daily_avg면 일평균 표시.
@@ -2959,7 +2962,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         work = work[work["지표_노출수"].fillna(0) > 0]
         if work.empty:
             root = {"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
-                    "cells": _drill_cells(None, spec), "hasChildren": False, "promo": ""}
+                    "cells": _drill_cells(None, spec, money_fn=money_fn),
+                    "hasChildren": False, "promo": ""}
             return [root], spec
     for c in extra_cols:                 # 미인식 지표 숫자화(합산 대비)
         work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0)
@@ -3015,7 +3019,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
         _root_s[c] = work[c].sum()
     nodes = [{"id": "ROOT", "parent": "", "depth": 0, "name": "전체 TOTAL",
               "cells": _drill_cells(_root_s, spec, daily_avg, extra_cols,
-                                    prev=_proot, show_yoy=show_yoy),
+                                    prev=_proot, show_yoy=show_yoy, money_fn=money_fn),
               "raw": _drill_raw(_root_s, spec, daily_avg, extra_cols), "promo": ""}]
     prev_kept = {(): "ROOT"}     # 유지된 조상 토큰튜플 → 노드 id
     period_cols = {"__day__", "__week__", "__month__"}
@@ -3062,7 +3066,8 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             nodes.append({"id": nid, "parent": pid, "depth": d,
                           "name": _drill_disp(r[cols[d - 1]]),
                           "cells": _drill_cells(r, spec, daily_avg, extra_cols,
-                                                prev=pr_s, show_yoy=depth_show_yoy),
+                                                prev=pr_s, show_yoy=depth_show_yoy,
+                                                money_fn=money_fn),
                           "raw": _drill_raw(r, spec, daily_avg, extra_cols),
                           "promo": promo})
             new_kept[atuple + (tok,)] = nid
@@ -3320,7 +3325,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    o1, o2, o3, o4, o5 = st.columns([1.3, 1.5, 1.2, 1.3, 1.4])
+    o1, o2, o3, o4, o5, o6 = st.columns([1.3, 1.5, 1.2, 1.3, 1.4, 1.3])
     topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
@@ -3339,6 +3344,12 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
                            help="각 단계·각 지표 값 아래에 전년 동기(-364일 동요일) 대비 "
                                 "증감률(▲증가·▼감소)을 배지로 표시합니다. 현재 화면의 필터·"
                                 "날짜 범위를 그대로 1년 전 같은 요일 구간과 비교합니다.")
+    money_unit = o6.selectbox("금액 단위", list(MONEY_UNIT_FMTS),
+                              index=list(MONEY_UNIT_FMTS).index(MONEY_UNIT_DEFAULT),
+                              key="drill_money_unit",
+                              help="금액(광고비·거래액 등) 표기 방식. '원 단위'는 숫자 그대로, "
+                                   "'억·백만 축약'은 1.2억원·12.3백만원처럼 축약해 보여줍니다.")
+    money_fn = MONEY_UNIT_FMTS[money_unit]
 
     if not order:
         st.info("‘1단계’에 펼칠 항목을 하나 이상 골라주세요.")
@@ -3358,7 +3369,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
                                     daily_avg=daily_avg,
                                     prev_source=(base if show_yoy else None),
-                                    show_yoy=show_yoy)
+                                    show_yoy=show_yoy, money_fn=money_fn)
     if show_yoy:
         st.caption("🟢+ 전년 대비 증가 · 🔴△ 감소 · '전년 –'은 전년 동기 데이터가 "
                    "없어 비교 불가. 증감률은 (당기−전년)/|전년| 기준입니다. "
@@ -3428,8 +3439,10 @@ def _yoy_num(s, col, kind):
     return round(float(v), 2)
 
 
-def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True):
+def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True,
+               money_fn=fmt_money):
     """한 그룹의 행. show_yoy=True면 (당년/전년/비교) 3행, False면 (당년) 1행.
+    money_fn: 금액(money) 지표의 표기 포맷 함수(단위 옵션).
     반환: (표시행, 원본행)."""
     disp, raw = [], []
     pairs = [(cur_lab, cur_s)] + ([(prev_lab, prev_s)] if show_yoy else [])
@@ -3439,7 +3452,7 @@ def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True):
         r = {"분류": lb, "기간": tag}
         for lab_, col, kind in spec:
             v = s.get(col, np.nan) if s is not None else np.nan
-            d[lab_] = _fmt_kind(v, kind, money_no_mil=True)
+            d[lab_] = _fmt_kind(v, kind, money_fn=money_fn)
             r[lab_] = _yoy_num(s, col, kind)
         disp.append(d)
         raw.append(r)
@@ -3678,7 +3691,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         if sel != "(없음)" and sel not in order:
             order.append(sel)
 
-    o1, o2, o3, o4 = st.columns([1.4, 1.2, 1.4, 1.2])
+    o1, o2, o3, o4, o5 = st.columns([1.4, 1.2, 1.4, 1.2, 1.3])
     metric_grp = o1.selectbox("지표 묶음", ["핵심", "전체"], index=0, key="yoy_mets",
                               help="핵심=보고서형 주요 지표, 전체=상세표+집행일수·회원UV·"
                                    "RD~SP 등 전 지표(정규 순서). "
@@ -3691,6 +3704,12 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
                                  "노출수>0 기준으로 계산됩니다.")
     show_yoy = o4.checkbox("전년비 표시", value=True, key="yoy_show_yoy",
                            help="켜면 당년/전년/비교 3줄, 끄면 당년 값만 1줄로 표시(펼쳐보기처럼).")
+    money_unit = o5.selectbox("금액 단위", list(MONEY_UNIT_FMTS),
+                              index=list(MONEY_UNIT_FMTS).index(MONEY_UNIT_DEFAULT),
+                              key="yoy_money_unit",
+                              help="금액(광고비·거래액 등) 표기 방식. '원 단위'는 숫자 그대로, "
+                                   "'억·백만 축약'은 1.2억원·12.3백만원처럼 축약해 보여줍니다.")
+    money_fn = MONEY_UNIT_FMTS[money_unit]
     if not order:
         st.info("‘1단계’에 분류를 하나 이상 골라주세요.")
         return
@@ -3737,7 +3756,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
     def _add(label, cs, ps, depth):
         d, r = _yoy_block(label, _davg(cs), _davg(ps), cur_lab, prev_lab, spec,
-                          show_yoy=show_yoy)
+                          show_yoy=show_yoy, money_fn=money_fn)
         blocks.append({"label": label, "depth": depth, "rows": d})
         raw_rows.extend(r)
 
