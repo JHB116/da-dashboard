@@ -483,6 +483,12 @@ def fmt_won(v):
     if pd.isna(v): return "–"
     return f"{int(round(v)):,}원"
 
+def fmt_money_no_mil(v):
+    """1억 이상만 억원으로 축약하고, 백만 단위는 축약 없이 원 숫자 그대로 표기."""
+    if pd.isna(v): return "–"
+    if abs(v) >= 1e8: return f"{v/1e8:.1f}억원"
+    return f"{int(round(v)):,}원"
+
 def fmt_num(v):
     if pd.isna(v): return "–"
     return f"{int(v):,}"
@@ -986,9 +992,9 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
 # ───────────────────────────────────────────────
 # 상세 실적 표 (기간별 전지표) — 전체요약/주차별/일별 공용
 # ───────────────────────────────────────────────
-def _fmt_kind(v, kind):
+def _fmt_kind(v, kind, money_no_mil=False):
     if pd.isna(v): return "–"
-    if kind == "money": return fmt_money(v)
+    if kind == "money": return fmt_money_no_mil(v) if money_no_mil else fmt_money(v)
     if kind == "won":   return fmt_won(v)
     if kind == "roas":  return fmt_roas(v)
     if kind == "num":   return fmt_num(v)
@@ -2880,7 +2886,7 @@ def _drill_cells(series, spec, daily_avg=False, extra_cols=(),
     out = []
     for _label, col, kind in spec:
         v = series.get(col, np.nan) if series is not None else np.nan
-        txt = _fmt_kind(v, kind)
+        txt = _fmt_kind(v, kind, money_no_mil=True)
         if kind == "roas" and not pd.isna(v):
             txt = f'<span class="{"up" if v >= 1 else "dn"}">{txt}</span>'
         if show_yoy:
@@ -3434,7 +3440,7 @@ def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True):
         r = {"분류": lb, "기간": tag}
         for lab_, col, kind in spec:
             v = s.get(col, np.nan) if s is not None else np.nan
-            d[lab_] = _fmt_kind(v, kind)
+            d[lab_] = _fmt_kind(v, kind, money_no_mil=True)
             r[lab_] = _yoy_num(s, col, kind)
         disp.append(d)
         raw.append(r)
