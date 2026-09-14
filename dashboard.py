@@ -484,9 +484,8 @@ def fmt_won(v):
     return f"{int(round(v)):,}원"
 
 def fmt_money_no_mil(v):
-    """1억 이상만 억원으로 축약하고, 백만 단위는 축약 없이 원 숫자 그대로 표기."""
+    """억/백만 단위 축약 없이 항상 원 숫자 그대로 표기."""
     if pd.isna(v): return "–"
-    if abs(v) >= 1e8: return f"{v/1e8:.1f}억원"
     return f"{int(round(v)):,}원"
 
 def fmt_num(v):
