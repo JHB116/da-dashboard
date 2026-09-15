@@ -2950,11 +2950,16 @@ def _drill_has_activity(g):
     return mask
 
 
-def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", daily_avg=False,
+def _drill_build_tree(df, dims, top_n, impr_only=False,
+                      dim_sort="지표 큰 순", period_sort="과거→최신",
+                      sort_metric_col="지표_광고비", daily_avg=False,
                       prev_source=None, show_yoy=False, money_fn=fmt_money):
     """차원 순서대로 계층 노드 목록을 만든다. 반환: (nodes, spec).
-    부모별 상위 top_n만 유지. impr_only=True면 노출수>0 행만 사용.
-    sort_by: '광고비'(큰 순) | '이름'(기간·가나다순). daily_avg면 일평균 표시.
+    부모별 상위 top_n만 유지(상위 N 선정은 항상 광고비 기준). impr_only=True면 노출수>0 행만 사용.
+    표시 정렬은 부모 내에서 단계별로 적용: 기간(일/주/월) 단계는 period_sort,
+    그 외 분류 단계는 dim_sort. 값은 '지표 큰 순'|'지표 작은 순'|'이름 오름차순'|
+    '이름 내림차순'(기간은 '과거→최신'|'최신→과거'|'지표 큰 순'|'지표 작은 순').
+    sort_metric_col: '지표 큰/작은 순' 정렬의 기준 컬럼. daily_avg면 일평균 표시.
     show_yoy=True면 prev_source(날짜 미필터 동일필터 소스)에서 전년 동기(-364일
     동요일) 집계를 계층별로 매칭해 각 셀에 전년비 배지를 붙인다.
     캠페인·하위캠페인 단계는 기획전번호를 이름 앞에 붙여 표시."""
@@ -3049,6 +3054,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
                 # 사라져 일자 토탈과 세부 행의 합이 어긋난다. → 광고비뿐 아니라 실적·노출이
                 # 하나라도 있으면(전부 0인 빈 행만 제외) 행을 남긴다.
                 g = g[_drill_has_activity(g)]
+        # 상위 N개 선정은 항상 광고비 기준(문서화된 규칙)
         g = g.sort_values("지표_광고비", ascending=False)
         anc = cols[:d - 1]
         if anc:
@@ -3058,10 +3064,18 @@ def _drill_build_tree(df, dims, top_n, impr_only=False, sort_by="광고비", dai
             g["_rk"] = range(len(g))
         if top_n:
             g = g[g["_rk"] < top_n]
-        # 표시 순서: 이름순이면 부모 내에서 자연정렬(기간/월 순), 아니면 광고비 큰 순 유지
-        if sort_by == "이름":
+        # 표시 순서: 기간 단계는 period_sort, 그 외 분류 단계는 dim_sort를 부모 내에서 적용
+        _mode = period_sort if dims[d - 1][1] in period_cols else dim_sort
+        if _mode in ("이름 오름차순", "과거→최신", "이름 내림차순", "최신→과거"):
+            _asc = _mode in ("이름 오름차순", "과거→최신")
             g = g.assign(_sk=g[cols[d - 1]].astype("object").map(_drill_natstr))
-            g = g.sort_values(anc + ["_sk"]) if anc else g.sort_values("_sk")
+            g = (g.sort_values(anc + ["_sk"], ascending=[True] * len(anc) + [_asc])
+                 if anc else g.sort_values("_sk", ascending=_asc))
+        else:  # 지표 큰 순 / 지표 작은 순
+            _asc = (_mode == "지표 작은 순")
+            _mc = sort_metric_col if sort_metric_col in g.columns else "지표_광고비"
+            g = (g.sort_values(anc + [_mc], ascending=[True] * len(anc) + [_asc])
+                 if anc else g.sort_values(_mc, ascending=_asc))
         new_kept = {}
         for _, r in g.iterrows():
             atuple = tuple(_drill_token(r[c]) for c in anc)
@@ -3335,26 +3349,21 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         if sel != DRILL_NONE and sel not in order:
             order.append(sel)
 
-    o1, o2, o3, o4, o5, o6 = st.columns([1.3, 1.5, 1.2, 1.3, 1.4, 1.3])
+    o1, o2, o3, o4, o5 = st.columns([1.3, 1.2, 1.3, 1.4, 1.3])
     topn = o1.selectbox("단계별 표시 개수", [10, 20, 50, "전체"], index=1, key="drill_topn",
                         help="각 단계에서 광고비 상위 N개만 표시(나머지 생략)")
     top_n = None if topn == "전체" else int(topn)
-    sort_lab = o2.selectbox("정렬 기준", ["이름 순(기간·가나다)", "광고비 큰 순"], index=0,
-                            key="drill_sort",
-                            help="이름 순은 숫자를 인식해 …1월 < …2월 < … < …12월 순으로 정렬합니다. "
-                                 "(상위 N개 선정은 항상 광고비 기준)")
-    sort_by = "이름" if sort_lab.startswith("이름") else "광고비"
-    daily_avg = o3.checkbox("일평균으로 보기", value=False, key="drill_daily_avg",
+    daily_avg = o2.checkbox("일평균으로 보기", value=False, key="drill_daily_avg",
                             help="합계형 지표(노출·클릭·광고비·거래액 등)를 집행일수로 나눈 "
                                  "일평균으로 표시합니다. 비율지표(CTR·ROAS·객단가 등)는 그대로.")
-    impr_only = o4.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
+    impr_only = o3.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다. 켜면 그룹 필터와 "
                                  "일평균(집행일수)도 노출수>0 날짜 기준으로 계산됩니다.")
-    show_yoy = o5.checkbox("전년비 표시", value=False, key="drill_yoy",
+    show_yoy = o4.checkbox("전년비 표시", value=False, key="drill_yoy",
                            help="각 단계·각 지표 값 아래에 전년 동기(-364일 동요일) 대비 "
                                 "증감률(▲증가·▼감소)을 배지로 표시합니다. 현재 화면의 필터·"
                                 "날짜 범위를 그대로 1년 전 같은 요일 구간과 비교합니다.")
-    money_unit = o6.selectbox("금액 단위", list(MONEY_UNIT_FMTS),
+    money_unit = o5.selectbox("금액 단위", list(MONEY_UNIT_FMTS),
                               index=list(MONEY_UNIT_FMTS).index(MONEY_UNIT_DEFAULT),
                               key="drill_money_unit",
                               help="금액(광고비·거래액 등) 표기 방식. '원 단위'는 숫자 그대로, "
@@ -3366,6 +3375,38 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
         return
     dims = [(l, DRILL_DIM_OPTS[l]) for l in order]
 
+    # ── 정렬 기준 직접 조정 ─────────────────────────────────────────
+    # 분류 단계와 기간 단계(일/주/월)의 정렬을 분리한다. 기간 라벨(연월·주차·일자)은
+    # 자연정렬=날짜순이라, 채널 등은 광고비순으로 두면서 기간만 날짜순으로 볼 수 있다.
+    _drill_period_tokens = {"__day__", "__week__", "__month__"}
+    _drill_spec = _drill_metric_spec(df)
+    _drill_metric_opts = [s[0] for s in _drill_spec]
+    _drill_metric_col = {s[0]: s[1] for s in _drill_spec}
+    _has_period_lvl = any(dc in _drill_period_tokens for _l, dc in dims)
+    if _has_period_lvl:
+        s1, s2, s3 = st.columns([1.4, 1.4, 1.4])
+    else:
+        s1, s2 = st.columns([1.6, 1.6])
+        s3 = None
+    _def_m = "광고비" if "광고비" in _drill_metric_opts else _drill_metric_opts[0]
+    sort_metric_lbl = s1.selectbox(
+        "정렬 지표", _drill_metric_opts,
+        index=_drill_metric_opts.index(_def_m), key="drill_sort_metric",
+        help="‘지표 큰/작은 순’으로 정렬할 때 기준이 되는 지표입니다. "
+             "(상위 N개 선정은 항상 광고비 기준)")
+    dim_sort = s2.selectbox(
+        "분류 단계 정렬", ["지표 큰 순", "지표 작은 순", "이름 오름차순", "이름 내림차순"],
+        index=0, key="drill_dim_sort",
+        help="채널·매체·상품 등 분류 단계 정렬 순서. ‘지표 큰 순’이 기존 동작(광고비 많은 순)입니다.")
+    if s3 is not None:
+        period_sort = s3.selectbox(
+            "기간 단계 정렬", ["과거→최신", "최신→과거", "지표 큰 순", "지표 작은 순"],
+            index=0, key="drill_period_sort",
+            help="기간(일/주/월) 단계의 정렬 순서. 기본은 날짜순(과거→최신)입니다.")
+    else:
+        period_sort = "과거→최신"
+    sort_metric_col = _drill_metric_col.get(sort_metric_lbl, "지표_광고비")
+
     # 캠페인·하위캠페인을 단계로 선택하면 기획전번호 열을 자동으로 함께 표시
     show_promo = (_DRILL_PROMO_COL in df.columns
                   and any(dc in ("구분_캠페인", "구분_하위캠페인") for _l, dc in dims))
@@ -3376,7 +3417,9 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
                    "(예: 전년 실적이 존재하는 월)으로 바꾸면 전년비가 채워집니다.")
 
     st.divider()
-    nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only, sort_by=sort_by,
+    nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only,
+                                    dim_sort=dim_sort, period_sort=period_sort,
+                                    sort_metric_col=sort_metric_col,
                                     daily_avg=daily_avg,
                                     prev_source=(base if show_yoy else None),
                                     show_yoy=show_yoy, money_fn=money_fn)
@@ -3395,7 +3438,7 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
 
     _components_html(_drill_html(nodes, spec, show_promo=show_promo), height=640, scrolling=False)
     st.caption("ℹ️ 이름을 클릭하면 그 아래 단계가 펼쳐집니다(브라우저에서 즉시). "
-               "· 각 단계 광고비 큰 순 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산. "
+               "· 정렬은 상단 ‘분류/기간 단계 정렬’ 설정을 따릅니다 · ROAS 100%↑ 초록/↓ 빨강 · 비율지표는 합계 기준 재계산. "
                "🖱️ **지표 머리글을 마우스로 끌어 열 순서를 바꿀 수 있어요**(대상 열 앞에 삽입, "
                "펼침/접힘에도 유지 · 새로고침하면 원래 순서).")
 
