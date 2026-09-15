@@ -1749,10 +1749,18 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
 def _render_trend_grid(df, targets, src="TOTAL"):
     """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
     '누적으로 보기' 토글로 일평균 ↔ 월 합계값 보기를 전환한다."""
-    cumulative = st.toggle(
-        "📊 누적으로 보기", value=False, key="sum_cumulative",
-        help="켜면 일평균 대신 해당 월의 '합계값'으로 표시합니다. "
-             "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
+    tcol, ncol_col = st.columns([2, 1])
+    with tcol:
+        cumulative = st.toggle(
+            "📊 누적으로 보기", value=False, key="sum_cumulative",
+            help="켜면 일평균 대신 해당 월의 '합계값'으로 표시합니다. "
+                 "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
+    with ncol_col:
+        per_row = st.radio(
+            "한 줄에 표시할 그래프 수", options=[2, 3, 4], index=0,
+            key="sum_per_row", horizontal=True,
+            help="한 행에 나란히 배치할 그래프 개수. 많을수록 그래프가 좁아지지만 "
+                 "스크롤이 짧아집니다. (와이드 모니터는 3~4개 권장)")
     mode = "월 · 합계" if cumulative else "월 · 일평균"
     st.markdown(f"#### 📈 지표별 추이 ({mode}) · 비용출처: {src}")
     if cumulative:
@@ -1764,13 +1772,15 @@ def _render_trend_grid(df, targets, src="TOTAL"):
         st.info("해당 비용출처 데이터가 없습니다.")
         return
     suffix = "월 합계" if cumulative else "월 일평균"
+    # 한 줄에 그래프가 많아질수록 폭이 좁아지므로 높이를 약간 키워 라벨 가독성 보정
+    chart_h = {2: 300, 3: 320, 4: 340}.get(per_row, 300)
     mlist = list(SUMMARY_CHART_METRICS.items())
-    for i in range(0, len(mlist), 2):
-        ccols = st.columns(2)
-        for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
+    for i in range(0, len(mlist), per_row):
+        ccols = st.columns(per_row)
+        for (lbl, col), cc in zip(mlist[i:i + per_row], ccols):
             with cc:
                 fig = metric_trend_fig(df_tab, col, "월", f"{lbl} ({suffix})",
-                                       height=300, tickfmt=RATIO_TICKFMT.get(col),
+                                       height=chart_h, tickfmt=RATIO_TICKFMT.get(col),
                                        cumulative=cumulative)
                 st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
 
