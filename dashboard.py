@@ -2129,12 +2129,13 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
     else:
         suffix = "" if gran == "일" else f" ({gran} 일평균)"
     mlist = list(SUMMARY_CHART_METRICS.items())
-    for i in range(0, len(mlist), 2):
-        ccols = st.columns(2)
-        for (lbl, col), cc in zip(mlist[i:i + 2], ccols):
+    per_row = 3  # 한 행에 3개 고정 (전체요약과 동일)
+    for i in range(0, len(mlist), per_row):
+        ccols = st.columns(per_row)
+        for (lbl, col), cc in zip(mlist[i:i + per_row], ccols):
             with cc:
                 fig = metric_trend_fig(graph_src, col, gran, f"{lbl}{suffix}",
-                                       height=300, tickfmt=RATIO_TICKFMT.get(col),
+                                       height=320, tickfmt=RATIO_TICKFMT.get(col),
                                        cumulative=cumulative)
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
