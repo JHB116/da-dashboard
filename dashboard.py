@@ -537,15 +537,14 @@ def chg_style(v):
 # 전체요약/일별 공통 그래프 지표 (표기 순서)
 SUMMARY_CHART_METRICS = {
     "광고비": "지표_광고비",
-    "순결제비중": "순결제비중",
     "거래액(순결제)": "지표_순결제거래액", "ROAS(순결제)": "순결제ROAS",
+    "순결제비중": "순결제비중",
     "거래액(총결제)": "지표_총결제거래액", "ROAS(총결제)": "총결제ROAS",
-    "총결제객단가": "객단가(총)",
-    "UV": "지표_UV(전체)", "CR(총)": "CR(총)",
-    "CTR": "CTR", "CPC": "CPC",
+    "UV": "지표_UV(전체)", "CR(총결제)": "CR(총)", "객단가(총결제)": "객단가(총)",
+    "CPC": "CPC", "CTR": "CTR", "CPUV": "CPUV",
     "가입수": "지표_가입회원", "가입CPA": "가입CPA",
-    "첫구매수": "지표_순결제고객수(첫구매)", "첫구매CPA": "첫구매CPA",
     "신규거래액": "지표_당년신규순결제거래액",
+    "첫구매수": "지표_순결제고객수(첫구매)", "첫구매CPA": "첫구매CPA",
 }
 RATIO_TICKFMT = {"순결제ROAS": ".0%", "총결제ROAS": ".0%", "순결제비중": ".1%",
                  "CR(총)": ".2%", "CTR": ".2%"}
@@ -1749,18 +1748,11 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
 def _render_trend_grid(df, targets, src="TOTAL"):
     """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
     '누적으로 보기' 토글로 일평균 ↔ 월 합계값 보기를 전환한다."""
-    tcol, ncol_col = st.columns([2, 1])
-    with tcol:
-        cumulative = st.toggle(
-            "📊 누적으로 보기", value=False, key="sum_cumulative",
-            help="켜면 일평균 대신 해당 월의 '합계값'으로 표시합니다. "
-                 "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
-    with ncol_col:
-        per_row = st.radio(
-            "한 줄에 표시할 그래프 수", options=[2, 3, 4], index=0,
-            key="sum_per_row", horizontal=True,
-            help="한 행에 나란히 배치할 그래프 개수. 많을수록 그래프가 좁아지지만 "
-                 "스크롤이 짧아집니다. (와이드 모니터는 3~4개 권장)")
+    cumulative = st.toggle(
+        "📊 누적으로 보기", value=False, key="sum_cumulative",
+        help="켜면 일평균 대신 해당 월의 '합계값'으로 표시합니다. "
+             "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
+    per_row = 3  # 한 행에 3개 고정
     mode = "월 · 합계" if cumulative else "월 · 일평균"
     st.markdown(f"#### 📈 지표별 추이 ({mode}) · 비용출처: {src}")
     if cumulative:
@@ -1772,8 +1764,8 @@ def _render_trend_grid(df, targets, src="TOTAL"):
         st.info("해당 비용출처 데이터가 없습니다.")
         return
     suffix = "월 합계" if cumulative else "월 일평균"
-    # 한 줄에 그래프가 많아질수록 폭이 좁아지므로 높이를 약간 키워 라벨 가독성 보정
-    chart_h = {2: 300, 3: 320, 4: 340}.get(per_row, 300)
+    # 3열 배치로 폭이 좁아지므로 높이를 약간 키워 라벨 가독성 보정
+    chart_h = 320
     mlist = list(SUMMARY_CHART_METRICS.items())
     for i in range(0, len(mlist), per_row):
         ccols = st.columns(per_row)
