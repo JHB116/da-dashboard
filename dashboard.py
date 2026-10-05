@@ -8,6 +8,9 @@ import io
 import re
 import json
 import calendar
+import hashlib
+import os
+from datetime import datetime, timedelta, timezone
 from streamlit.components.v1 import html as _components_html
 
 st.set_page_config(
@@ -4275,6 +4278,55 @@ def _reset_all_filters():
 
 
 # ───────────────────────────────────────────────
+# 마지막 업로드 파일 보관 (재업로드 없이 대시보드 조회)
+# ───────────────────────────────────────────────
+_SAVED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_data")
+
+
+def _save_upload(slot: str, file_bytes: bytes, filename: str) -> None:
+    """업로드된 파일을 서버 디스크에 보관한다(내용이 바뀐 경우에만 기록)."""
+    meta_path = os.path.join(_SAVED_DIR, f"{slot}.json")
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            if json.load(f).get("sha256") == digest:
+                return
+    except Exception:
+        pass
+    try:
+        os.makedirs(_SAVED_DIR, exist_ok=True)
+        bin_path = os.path.join(_SAVED_DIR, f"{slot}.bin")
+        with open(bin_path + ".tmp", "wb") as f:
+            f.write(file_bytes)
+        os.replace(bin_path + ".tmp", bin_path)
+        saved_at = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
+        with open(meta_path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"name": filename, "sha256": digest, "saved_at": saved_at}, f, ensure_ascii=False)
+        os.replace(meta_path + ".tmp", meta_path)
+    except Exception:
+        pass  # 보관 실패는 현재 조회에 영향 없음
+
+
+def _load_saved(slot: str):
+    """보관된 파일 → (bytes, meta) / 없으면 (None, None)."""
+    try:
+        with open(os.path.join(_SAVED_DIR, f"{slot}.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        with open(os.path.join(_SAVED_DIR, f"{slot}.bin"), "rb") as f:
+            return f.read(), meta
+    except Exception:
+        return None, None
+
+
+def _delete_saved(slot: str) -> None:
+    for ext in ("bin", "json"):
+        try:
+            os.remove(os.path.join(_SAVED_DIR, f"{slot}.{ext}"))
+        except FileNotFoundError:
+            pass
+
+
+# ───────────────────────────────────────────────
 # 메인
 # ───────────────────────────────────────────────
 def main():
@@ -4302,7 +4354,22 @@ def main():
             key="report_uploader",
         )
 
-    if uploaded is None:
+    # 새로 올린 파일은 보관하고, 없으면 마지막으로 보관된 파일을 사용한다.
+    data_meta = report_meta = None
+    if uploaded is not None:
+        data_bytes, data_name = uploaded.getvalue(), uploaded.name
+        _save_upload("raw", data_bytes, data_name)
+    else:
+        data_bytes, data_meta = _load_saved("raw")
+        data_name = data_meta["name"] if data_meta else None
+
+    if report_file is not None:
+        report_bytes = report_file.getvalue()
+        _save_upload("report", report_bytes, report_file.name)
+    else:
+        report_bytes, report_meta = _load_saved("report")
+
+    if data_bytes is None:
         st.info("👈 사이드바 하단 '파일 업로드'에서 데이터 파일을 업로드해주세요.")
         st.markdown("""
         **지원 파일 형식**
@@ -4314,12 +4381,23 @@ def main():
         return
 
     with st.spinner("데이터 로딩 중..."):
-        df = load_data(uploaded.read(), uploaded.name)
+        df = load_data(data_bytes, data_name)
 
     report_targets = {}
-    if report_file is not None:
+    if report_bytes is not None:
         with st.spinner("목표 파일 로딩 중..."):
-            report_targets = load_targets_from_report(report_file.read())
+            report_targets = load_targets_from_report(report_bytes)
+
+    # 보관본 사용 중이면 안내 + 삭제 버튼
+    with upload_box:
+        for meta, slot, label in ((data_meta, "raw", "데이터"), (report_meta, "report", "목표")):
+            if meta is None:
+                continue
+            st.info(f"💾 저장된 {label} 사용 중: {meta.get('name')} ({meta.get('saved_at')} 업로드)")
+            if st.button(f"🗑️ 저장된 {label} 파일 삭제", key=f"saved_btn_del_{slot}",
+                         use_container_width=True):
+                _delete_saved(slot)
+                st.rerun()
 
     # 업로드 박스 하단에 로드 상태 표시
     with upload_box:
@@ -4335,7 +4413,7 @@ def main():
                 + " — 로데이터 `기간_일자` 열의 셀 형식을 '날짜' 또는 "
                 "`YYYY-MM-DD` 텍스트로 맞춰주세요."
             )
-        if report_file is not None:
+        if report_bytes is not None:
             n_m = sum(len(v) for v in report_targets.get("monthly", {}).values())
             n_w = len(report_targets.get("weekly", {}))
             if n_m or n_w:
