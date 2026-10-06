@@ -10,6 +10,7 @@ import json
 import calendar
 import hashlib
 import os
+import zlib
 from datetime import datetime, timedelta, timezone
 from streamlit.components.v1 import html as _components_html
 
@@ -4279,43 +4280,155 @@ def _reset_all_filters():
 
 # ───────────────────────────────────────────────
 # 마지막 업로드 파일 보관 (재업로드 없이 대시보드 조회)
+#  - 1차: 서버 디스크(saved_data/) — 빠르지만 앱 재부팅 시 사라짐
+#  - 2차: 구글 드라이브 — secrets 에 서비스계정·폴더가 설정된 경우 영구 보관
+#    [gdrive] folder_id = "..."   /   [gcp_service_account] (서비스계정 JSON 키 내용)
 # ───────────────────────────────────────────────
 _SAVED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_data")
+_DRIVE_API = "https://www.googleapis.com/drive/v3/files"
+_DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 
 
-def _save_upload(slot: str, file_bytes: bytes, filename: str) -> None:
-    """업로드된 파일을 서버 디스크에 보관한다(내용이 바뀐 경우에만 기록)."""
+@st.cache_resource(show_spinner=False)
+def _drive_client():
+    """(AuthorizedSession, folder_id) / 미설정·오류 시 (None, None)."""
+    try:
+        info = dict(st.secrets["gcp_service_account"])
+        folder_id = str(st.secrets["gdrive"]["folder_id"]).strip()
+    except Exception:
+        return None, None
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import AuthorizedSession
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/drive"])
+        return AuthorizedSession(creds), folder_id
+    except Exception:
+        return None, None
+
+
+def _drive_enabled() -> bool:
+    return _drive_client()[0] is not None
+
+
+def _drive_find(slot: str):
+    """보관 폴더에서 slot 파일 메타(id, description) 조회 / 없으면 None."""
+    sess, folder_id = _drive_client()
+    r = sess.get(_DRIVE_API, params={
+        "q": f"name = 'da_dashboard_{slot}.bin' and '{folder_id}' in parents and trashed = false",
+        "fields": "files(id,description)",
+        "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+    }, timeout=30)
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    return files[0] if files else None
+
+
+def _drive_put(slot: str, content: bytes, description: str) -> None:
+    """slot 파일 내용·설명을 덮어쓴다(없으면 폴더에 새로 만든다). 재개 가능 업로드 사용."""
+    sess, folder_id = _drive_client()
+    found = _drive_find(slot)
+    headers = {"X-Upload-Content-Type": "application/octet-stream",
+               "X-Upload-Content-Length": str(len(content))}
+    params = {"uploadType": "resumable", "supportsAllDrives": "true"}
+    if found:
+        r = sess.patch(f"{_DRIVE_UPLOAD}/{found['id']}", params=params,
+                       json={"description": description}, headers=headers, timeout=30)
+    else:
+        r = sess.post(_DRIVE_UPLOAD, params=params, headers=headers, timeout=30, json={
+            "name": f"da_dashboard_{slot}.bin", "parents": [folder_id],
+            "description": description, "mimeType": "application/octet-stream"})
+    r.raise_for_status()
+    r = sess.put(r.headers["Location"], data=content,
+                 headers={"Content-Type": "application/octet-stream"}, timeout=600)
+    r.raise_for_status()
+
+
+def _drive_get(slot: str):
+    """드라이브 보관본 → (bytes, meta) / 없으면 (None, None)."""
+    found = _drive_find(slot)
+    if not found or not found.get("description"):
+        return None, None
+    meta = json.loads(found["description"])
+    sess, _ = _drive_client()
+    r = sess.get(f"{_DRIVE_API}/{found['id']}", params={"alt": "media", "supportsAllDrives": "true"},
+                 timeout=600)
+    r.raise_for_status()
+    data = zlib.decompress(r.content)
+    if hashlib.sha256(data).hexdigest() != meta.get("sha256"):
+        return None, None
+    return data, meta
+
+
+def _write_local(slot: str, file_bytes: bytes, meta: dict) -> None:
+    os.makedirs(_SAVED_DIR, exist_ok=True)
+    bin_path = os.path.join(_SAVED_DIR, f"{slot}.bin")
     meta_path = os.path.join(_SAVED_DIR, f"{slot}.json")
+    with open(bin_path + ".tmp", "wb") as f:
+        f.write(file_bytes)
+    os.replace(bin_path + ".tmp", bin_path)
+    with open(meta_path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    os.replace(meta_path + ".tmp", meta_path)
+
+
+def _read_local_meta(slot: str):
+    try:
+        with open(os.path.join(_SAVED_DIR, f"{slot}.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_upload(slot: str, file_bytes: bytes, filename: str):
+    """업로드 파일 보관. 드라이브 저장 실패 시 오류 메시지 반환(그 외 None).
+    같은 내용이 이미 보관돼 있으면 다시 기록하지 않는다."""
     digest = hashlib.sha256(file_bytes).hexdigest()
+    old = _read_local_meta(slot)
+    drive_on = _drive_enabled()
+    if old and old.get("sha256") == digest and (old.get("drive") or not drive_on):
+        return None
+    meta = {"name": filename, "sha256": digest,
+            "saved_at": datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")}
+    if old and old.get("sha256") == digest:
+        meta["saved_at"] = old.get("saved_at", meta["saved_at"])
+    err = None
+    if drive_on:
+        try:
+            _drive_put(slot, zlib.compress(file_bytes, 6), json.dumps(meta, ensure_ascii=False))
+            meta["drive"] = True
+        except Exception as e:
+            err = f"구글 드라이브 보관 실패: {e}"
     try:
-        with open(meta_path, encoding="utf-8") as f:
-            if json.load(f).get("sha256") == digest:
-                return
+        _write_local(slot, file_bytes, meta)
     except Exception:
-        pass
-    try:
-        os.makedirs(_SAVED_DIR, exist_ok=True)
-        bin_path = os.path.join(_SAVED_DIR, f"{slot}.bin")
-        with open(bin_path + ".tmp", "wb") as f:
-            f.write(file_bytes)
-        os.replace(bin_path + ".tmp", bin_path)
-        saved_at = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
-        with open(meta_path + ".tmp", "w", encoding="utf-8") as f:
-            json.dump({"name": filename, "sha256": digest, "saved_at": saved_at}, f, ensure_ascii=False)
-        os.replace(meta_path + ".tmp", meta_path)
-    except Exception:
-        pass  # 보관 실패는 현재 조회에 영향 없음
+        pass  # 디스크 보관 실패는 현재 조회에 영향 없음
+    return err
 
 
 def _load_saved(slot: str):
-    """보관된 파일 → (bytes, meta) / 없으면 (None, None)."""
+    """보관된 파일 → (bytes, meta) / 없으면 (None, None).
+    서버 디스크에 없으면(재부팅 등) 구글 드라이브에서 받아와 디스크에 다시 캐시한다."""
+    meta = _read_local_meta(slot)
+    if meta:
+        try:
+            with open(os.path.join(_SAVED_DIR, f"{slot}.bin"), "rb") as f:
+                return f.read(), meta
+        except Exception:
+            pass
+    if not _drive_enabled():
+        return None, None
     try:
-        with open(os.path.join(_SAVED_DIR, f"{slot}.json"), encoding="utf-8") as f:
-            meta = json.load(f)
-        with open(os.path.join(_SAVED_DIR, f"{slot}.bin"), "rb") as f:
-            return f.read(), meta
+        data, meta = _drive_get(slot)
     except Exception:
         return None, None
+    if data is not None:
+        meta["drive"] = True
+        try:
+            _write_local(slot, data, meta)
+        except Exception:
+            pass
+    return data, meta
 
 
 def _delete_saved(slot: str) -> None:
@@ -4323,6 +4436,11 @@ def _delete_saved(slot: str) -> None:
         try:
             os.remove(os.path.join(_SAVED_DIR, f"{slot}.{ext}"))
         except FileNotFoundError:
+            pass
+    if _drive_enabled():
+        try:  # 서비스계정은 사용자 소유 파일을 지울 수 없으므로 내용을 비운다
+            _drive_put(slot, b"", "")
+        except Exception:
             pass
 
 
@@ -4356,16 +4474,17 @@ def main():
 
     # 새로 올린 파일은 보관하고, 없으면 마지막으로 보관된 파일을 사용한다.
     data_meta = report_meta = None
+    save_errors = []
     if uploaded is not None:
         data_bytes, data_name = uploaded.getvalue(), uploaded.name
-        _save_upload("raw", data_bytes, data_name)
+        save_errors.append(_save_upload("raw", data_bytes, data_name))
     else:
         data_bytes, data_meta = _load_saved("raw")
         data_name = data_meta["name"] if data_meta else None
 
     if report_file is not None:
         report_bytes = report_file.getvalue()
-        _save_upload("report", report_bytes, report_file.name)
+        save_errors.append(_save_upload("report", report_bytes, report_file.name))
     else:
         report_bytes, report_meta = _load_saved("report")
 
@@ -4388,8 +4507,15 @@ def main():
         with st.spinner("목표 파일 로딩 중..."):
             report_targets = load_targets_from_report(report_bytes)
 
-    # 보관본 사용 중이면 안내 + 삭제 버튼
+    # 보관 상태 안내 + 보관본 삭제 버튼
     with upload_box:
+        for err in filter(None, save_errors):
+            st.warning(f"⚠️ {err}")
+        if _drive_enabled():
+            st.caption("☁️ 업로드한 파일은 구글 드라이브에 보관되어 재부팅 후에도 유지됩니다.")
+        else:
+            st.caption("💾 업로드한 파일은 서버에 임시 보관됩니다(앱 재부팅 시 삭제). "
+                       "구글 드라이브 보관은 secrets 설정 후 사용 가능합니다.")
         for meta, slot, label in ((data_meta, "raw", "데이터"), (report_meta, "report", "목표")):
             if meta is None:
                 continue
