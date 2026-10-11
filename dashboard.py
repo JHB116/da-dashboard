@@ -229,16 +229,25 @@ def _file_ext(name: str) -> str:
     return "x." + str(name).rsplit(".", 1)[-1].lower()
 
 
-@st.cache_data(show_spinner=False, max_entries=1)
-def load_dataset(main_bytes: bytes, main_ext: str, b24: bytes | None = None,
-                 ext24: str | None = None):
-    """로데이터(+선택: 24년 파일)를 읽어 하나의 df로 병합. 결과 1건만 캐시해
-    파일을 바꿔 올리거나 이름만 바꿔도 이전 데이터가 메모리에 쌓이지 않게 한다.
+def _upload_key(f):
+    """업로드 파일 식별 키(업로드마다 고유한 file_id + 크기). 파일 내용을 매번 해시하지 않는다."""
+    if f is None:
+        return None
+    return (getattr(f, "file_id", None) or f.name, getattr(f, "size", None))
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def load_dataset(key, _main, _f24=None):
+    """로데이터(+선택: 24년 파일)를 읽어 하나의 df로 병합해 1건만 보관.
+    - cache_resource: 화면 조작(필터 등)마다 df 전체 사본을 만들지 않고 같은 객체를 공유
+      (pandas 3 Copy-on-Write라 하위 함수의 필터·컬럼 추가가 원본을 바꾸지 않음)
+    - 키는 업로드 file_id 기반: 매 실행마다 수백 MB 파일 바이트를 해시·복사하지 않음
+    - max_entries=1: 파일을 바꿔 올리거나 이름만 바꿔도 이전 데이터가 쌓이지 않음
     반환: (df, 24년 병합 행수, 24년 데이터 최소 연도)"""
-    df = load_data(main_bytes, main_ext)
-    if b24 is None:
+    df = load_data(_main.getvalue(), _file_ext(_main.name))
+    if _f24 is None:
         return df, 0, None
-    d24 = load_data(b24, ext24)
+    d24 = load_data(_f24.getvalue(), _file_ext(_f24.name))
     d24 = d24[d24["연도"] < DEFAULT_START_YEAR]
     if d24.empty:
         return df, 0, None
@@ -506,7 +515,7 @@ def load_targets_from_report(file_bytes: bytes) -> dict:
 # 파생지표 계산
 # ───────────────────────────────────────────────
 def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
-    d = df.copy()
+    d = df.copy(deep=False)
     d["CTR"]        = safe_div(d["지표_클릭수"],                        d["지표_노출수"])
     d["CPC"]        = safe_div(d["지표_광고비"],                        d["지표_클릭수"])
     d["순결제ROAS"]  = safe_div(d["지표_순결제거래액"],                   d["지표_광고비"])
@@ -753,7 +762,7 @@ def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
     # 'int + str' TypeError를 낸다. 항상 숫자로 강제 변환한다.
     non_numeric = [c for c in cols if not pd.api.types.is_numeric_dtype(df[c])]
     if non_numeric:
-        df = df.copy()
+        df = df.copy(deep=False)
         for c in non_numeric:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     grouped = df.groupby(by, dropna=False)[cols].sum().reset_index()
@@ -918,7 +927,7 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
                 if mask.any() and not pd.isna(v):
                     d.loc[mask, val_col] = v
         if gran == "주(최근10주)":
-            d = d.copy()
+            d = d.copy(deep=False)
             d["_ord"] = d["연도"].astype(int) * 100 + d["주차번호"].astype(int)
             recent = sorted(d["_ord"].unique())[-10:]
             d = d[d["_ord"].isin(recent)]
@@ -951,7 +960,7 @@ def yoy_sameday_prev(df: pd.DataFrame, cur_year: int, group_col: str) -> pd.Data
     cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
     date_to_group = cur.set_index("비교일자")[group_col].to_dict()
 
-    prev = df[df["연도"] == cur_year - 1].copy()
+    prev = df[df["연도"] == cur_year - 1].copy(deep=False)
     prev[group_col + "_cur"] = prev["기간_일자"].map(date_to_group)
     prev_valid = prev.dropna(subset=[group_col + "_cur"])
     if prev_valid.empty:
@@ -1737,12 +1746,17 @@ def _old_label(rows_old_years) -> str:
     return "·".join(f"{y % 100:02d}" for y in ys) + "년" if ys else f"{START_YEAR}년"
 
 
+def _agg_slim(df: pd.DataFrame) -> pd.DataFrame:
+    """동요일 매칭 merge용: 집계에 필요한 열(기간_일자 + 지표)만 남겨 merge 사본 크기를 줄인다."""
+    return df[["기간_일자"] + [c for c in AGG_COLS if c in df.columns]]
+
+
 def _sameday_prev_by_ym(df_tab: pd.DataFrame, days: int = DAYS_Y1) -> dict:
     """동요일(-364일) 기준, 현재 각 (연도,월)에 대응하는 전년 집계를 반환.
     반환: {(연도, 월): Series} — 키는 '현재' 기간의 (연도,월)."""
-    cur = df_tab[["기간_일자", "연도", "월"]].drop_duplicates().copy()
+    cur = df_tab[["기간_일자", "연도", "월"]].drop_duplicates().copy(deep=False)
     cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=days)
-    joined = df_tab.merge(
+    joined = _agg_slim(df_tab).merge(
         cur[["비교일자", "연도", "월"]].rename(columns={"연도": "_cy", "월": "_cm"}),
         left_on="기간_일자", right_on="비교일자", how="inner",
     )
@@ -1815,7 +1829,7 @@ def _raw_dl(num_df, key, label="📥 원본 숫자 CSV 다운로드"):
     if num_df is None or getattr(num_df, "empty", True):
         return
     keep = [c for c in num_df.columns if not str(c).startswith("_")]
-    out = num_df.loc[:, keep].copy()
+    out = num_df.loc[:, keep].copy(deep=False)
     # 비율/ROAS 컬럼은 화면에 보이는 % 숫자로 환산(×100)해 저장한다.
     rename = {}
     for c in list(out.columns):
@@ -2114,10 +2128,10 @@ def _sameday_prev(df, gran, days: int = DAYS_Y1):
     """동요일(-364일) 전년 집계를 현재 기간키로 매핑. {기간키: Series}"""
     cols = PERIOD_COLS[gran]
     base_cols = list(dict.fromkeys(["기간_일자"] + cols))  # 중복 제거(일 단위 대응)
-    cur = df[base_cols].drop_duplicates().copy()
+    cur = df[base_cols].drop_duplicates().copy(deep=False)
     cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=days)
     ren = {c: f"_c{i}" for i, c in enumerate(cols)}
-    joined = df.merge(cur[["비교일자"] + cols].rename(columns=ren),
+    joined = _agg_slim(df).merge(cur[["비교일자"] + cols].rename(columns=ren),
                       left_on="기간_일자", right_on="비교일자", how="inner")
     if joined.empty:
         return {}
@@ -2617,7 +2631,7 @@ def page_media(df: pd.DataFrame):
     ]
     for dc, col, dtitle, texttmpl in donut_specs:
         with dc:
-            sub = by_media[by_media[col].fillna(0) > 0].copy()
+            sub = by_media[by_media[col].fillna(0) > 0].copy(deep=False)
             figd = px.pie(sub, names="구분_매체명", values=col, hole=0.55,
                           color="구분_매체명", color_discrete_map=MEDIA_COLORS)
             figd.update_traces(textposition="inside", textinfo="percent+label",
@@ -2788,7 +2802,7 @@ def _render_weekday_heatmap(df, key_prefix="hm"):
         return
     sel = st.selectbox("지표", list(HEATMAP_METRICS.keys()), key=f"{key_prefix}_hm_metric")
     col = HEATMAP_METRICS[sel]
-    d = df.copy()
+    d = df.copy(deep=False)
     d["_요일"] = d["기간_일자"].dt.dayofweek
     hm = agg(d, ["_요일"])[["_요일", col]].dropna()
     if hm.empty:
@@ -2810,7 +2824,7 @@ def _render_weekday_heatmap(df, key_prefix="hm"):
 def _render_bpu_charts(df):
     """부서(BPU)별 광고비·거래액·순결제ROAS — 고정 순서 막대 그래프."""
     by_dept = agg(df, ["구분_부서명"])
-    by_dept = by_dept[by_dept["지표_광고비"].fillna(0) > 0].copy()
+    by_dept = by_dept[by_dept["지표_광고비"].fillna(0) > 0].copy(deep=False)
     if by_dept.empty:
         return
     by_dept["_ord"] = by_dept["구분_부서명"].apply(
@@ -2962,7 +2976,7 @@ def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame,
             or "기간_일자" not in prev_source.columns:
         return empty
     pcols = [c for c in _PY_PERIOD_COLS if c in cur_df.columns]
-    cmap = cur_df[pcols].drop_duplicates().copy()
+    cmap = cur_df[pcols].drop_duplicates().copy(deep=False)
     cmap["_pdate"] = cmap["기간_일자"] - pd.Timedelta(days=days)
     # suffixes=("_py","")로 겹치는 기간 컬럼은 '현재값(오른쪽)'이 이기게 한다.
     merged = prev_source.merge(cmap, left_on="기간_일자", right_on="_pdate",
@@ -3145,7 +3159,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False,
     promo_on = _DRILL_PROMO_COL in df.columns
     promo_prefix_cols = {"구분_캠페인", "구분_하위캠페인"}
 
-    work = df.copy()
+    work = df.copy(deep=False)
     if impr_only:
         work = work[work["지표_노출수"].fillna(0) > 0]
         if work.empty:
@@ -3168,7 +3182,7 @@ def _drill_build_tree(df, dims, top_n, impr_only=False,
         if impr_only and not pw.empty:
             pw = pw[pw["지표_노출수"].fillna(0) > 0]
         if not pw.empty:
-            pw = pw.copy()
+            pw = pw.copy(deep=False)
             for c in extra_cols:
                 pw[c] = pd.to_numeric(pw[c], errors="coerce").fillna(0)
             for i, (_lab, col) in enumerate(dims):
@@ -4026,9 +4040,9 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     # 기간 파생 차원(__day__/__week__/__month__)을 실제 컬럼으로 만들고, 노출0초과 필터 적용
     period_tokens = {"__day__", "__week__", "__month__"}
     need_period = [c for c in cols_list if c in period_tokens]
-    work_cur = cur.copy() if need_period else cur
-    work_prev = prev_src.copy() if (need_period and not prev_src.empty) else prev_src
-    work_prev2 = prev2_src.copy() if (need_period and not prev2_src.empty) else prev2_src
+    work_cur = cur.copy(deep=False) if need_period else cur
+    work_prev = prev_src.copy(deep=False) if (need_period and not prev_src.empty) else prev_src
+    work_prev2 = prev2_src.copy(deep=False) if (need_period and not prev2_src.empty) else prev2_src
     for c in need_period:
         work_cur[c] = _drill_series(work_cur, c)
         if not work_prev.empty:
@@ -4535,10 +4549,8 @@ def main():
         return
 
     with st.spinner("데이터 로딩 중..."):
-        b24 = data24_file.getvalue() if data24_file is not None else None
         df, n24, y24_min = load_dataset(
-            uploaded.getvalue(), _file_ext(uploaded.name),
-            b24, _file_ext(data24_file.name) if data24_file is not None else None)
+            (_upload_key(uploaded), _upload_key(data24_file)), uploaded, data24_file)
 
     # ── 24년 데이터(별도 파일) 병합 결과(load_dataset 캐시)에서 연도 범위 반영
     global START_YEAR, Y2_ON
