@@ -762,19 +762,21 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         cy, cm = int(data_max.year), int(data_max.month)
         if data_max.day < calendar.monthrange(cy, cm)[1]:
             cur_dates = df[(df["연도"] == cy) & (df["월"] == cm)]["기간_일자"].drop_duplicates()
-            prev_dates = cur_dates - pd.Timedelta(days=364)
-            sub = df[df["기간_일자"].isin(prev_dates)]
-            if not sub.empty:
+            for k in (1, 2):  # 전년·전전년 동일월을 각각 동요일 MTD 창으로
+                prev_dates = cur_dates - pd.Timedelta(days=364 * k)
+                sub = df[df["기간_일자"].isin(prev_dates)]
+                if sub.empty:
+                    continue
                 pa = agg(sub, ["연도"])
                 v = pa[val_col].iloc[0]
                 if to_avg:
                     ndays = sub["기간_일자"].nunique()
                     v = v / ndays if ndays else np.nan
-                mask = (d["연도"] == cy - 1) & (d["월"] == cm)
+                mask = (d["연도"] == cy - k) & (d["월"] == cm)
                 if mask.any():
                     d.loc[mask, val_col] = v
                 elif not pd.isna(v):
-                    d = pd.concat([d, pd.DataFrame([{"연도": cy - 1, "월": cm, val_col: v}])],
+                    d = pd.concat([d, pd.DataFrame([{"연도": cy - k, "월": cm, val_col: v}])],
                                   ignore_index=True).sort_values(["연도", "월"])
         fig = yoy_overlay_fig(d, "월", val_col, title,
                               ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
@@ -839,15 +841,17 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
             sunday = data_max
         if data_max.normalize() < sunday:
             cur_dates = df[df["기간_일자"] > (data_max - pd.Timedelta(days=data_max.weekday()))]["기간_일자"].drop_duplicates()
-            prev_dates = cur_dates - pd.Timedelta(days=364)
-            sub = df[df["기간_일자"].isin(prev_dates)]
-            if not sub.empty:
+            for k in (1, 2):  # 전년·전전년 동일 주차를 각각 동요일 MTD 창으로
+                prev_dates = cur_dates - pd.Timedelta(days=364 * k)
+                sub = df[df["기간_일자"].isin(prev_dates)]
+                if sub.empty:
+                    continue
                 pa = agg(sub, ["연도"])
                 v = pa[val_col].iloc[0]
                 if to_avg:
                     nd = sub["기간_일자"].nunique()
                     v = v / nd if nd else np.nan
-                mask = (d["연도"] == cwy - 1) & (d["주차번호"] == cw)
+                mask = (d["연도"] == cwy - k) & (d["주차번호"] == cw)
                 if mask.any() and not pd.isna(v):
                     d.loc[mask, val_col] = v
         if gran == "주(최근10주)":
@@ -943,7 +947,7 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
     """실적요약 테이블(2줄 헤더/MultiIndex 컬럼).
     rows: [(라벨, cur_series, prev_series|None, target_dict), ...]
     metric_labels: 표기할 지표 라벨 목록(_METRIC_SRC 키)
-    groups: ("실적","전년비","목표","목표비") 중 포함할 그룹
+    groups: ("실적","전년비","전전년비","목표","목표비") 중 포함할 그룹
     add_total: True면 맨 아래 TOTAL 행(입력 rows 합산) 추가
     반환: 상단=그룹, 하단=지표 인 2단 컬럼 DataFrame
     """
@@ -969,13 +973,24 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
         cur_tot = _sum_kpi_series([r[1] for r in rows])
         prev_tot = _sum_kpi_series([r[2] for r in rows]) if any(r[2] is not None for r in rows) else None
         tgt_tot = _sum_targets([r[3] for r in rows])
-        rows = rows + [("TOTAL", cur_tot, prev_tot, tgt_tot, False)]
+        # 비교값 TOTAL은 '비교 가능한 행'(차단X·비교값 있음)만 합산해 당기·비교 범위를 맞춘다.
+        ok1 = [r for r in rows if r[2] is not None and not (len(r) > 4 and r[4])]
+        ok2 = [r for r in rows if len(r) > 5 and r[5] is not None
+               and not (r[6] if len(r) > 6 else (len(r) > 4 and r[4]))]
+        prev_tot = _sum_kpi_series([r[2] for r in ok1]) if ok1 else None
+        prev2_tot = _sum_kpi_series([r[5] for r in ok2]) if ok2 else None
+        cmp1_tot = _sum_kpi_series([r[1] for r in ok1]) if ok1 else None
+        cmp2_tot = _sum_kpi_series([r[1] for r in ok2]) if ok2 else None
+        rows = rows + [("TOTAL", cur_tot, prev_tot, tgt_tot, False, prev2_tot, False,
+                        cmp1_tot, cmp2_tot)]
 
     data = []
     for row in rows:
         # row: (라벨, cur, prev, tgt[, block]) — block=True면 전년비/목표비 차단
         label, cur, prev, tgt = row[0], row[1], row[2], row[3]
         block = row[4] if len(row) > 4 else False
+        prev2 = row[5] if len(row) > 5 else None          # 전전년(-728일) 집계
+        block2 = row[6] if len(row) > 6 else block
         tgt = tgt or {}
         rec = {(period_type, ""): label}
         for m in metric_labels:
@@ -986,8 +1001,13 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
             tv = (tgt.get(tk) if tk else None) or 0
             if "실적" in groups:
                 rec[("실적", m)] = fmt(cval) if not pd.isna(cval) else "–"
+            # TOTAL 행은 비교 가능한 행만 합산한 당기값(row[7]/row[8])으로 증감률 계산
+            c1 = _get(row[7], src) if len(row) > 7 else cval
+            c2 = _get(row[8], src) if len(row) > 8 else cval
             if "전년비" in groups:
-                rec[("전년비", m)] = "–" if block else signed_pct(_chg(cval, pval))
+                rec[("전년비", m)] = "–" if block else signed_pct(_chg(c1, pval))
+            if "전전년비" in groups:
+                rec[("전전년비", m)] = "–" if block2 else signed_pct(_chg(c2, _get(prev2, src)))
             if "목표" in groups:
                 rec[("목표", m)] = fmt(tv) if tv > 0 else "–"
             if "목표비" in groups:
@@ -1088,11 +1108,13 @@ def detail_table_yoy(rows, period_label="기간", add_total=True) -> pd.DataFram
                 rec[disp] = signed_pct((c - p) / abs(p))
         data.append(rec)
     if add_total and rows:
-        cur_tot = _sum_kpi_series([r[1] for r in rows])
-        prev_tot = _sum_kpi_series([r[2] for r in rows]) if any(r[2] is not None for r in rows) else None
+        # 비교 가능한 행(차단X·비교값 있음)만 합산해 당기·비교 범위를 맞춘다.
+        ok = [r for r in rows if r[2] is not None and not (len(r) > 3 and r[3])]
+        cur_tot = _sum_kpi_series([r[1] for r in ok]) if ok else None
+        prev_tot = _sum_kpi_series([r[2] for r in ok]) if ok else None
         rec = {period_label: "TOTAL"}
         for disp, col, kind in DETAIL_SPEC:
-            c = cur_tot.get(col, np.nan)
+            c = cur_tot.get(col, np.nan) if cur_tot is not None else np.nan
             p = prev_tot.get(col, np.nan) if prev_tot is not None else np.nan
             rec[disp] = ("–" if (pd.isna(c) or pd.isna(p) or p == 0)
                          else signed_pct((c - p) / abs(p)))
@@ -1533,11 +1555,11 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     roas  = tot["순결제ROAS"]
 
     # 동요일 전년비 계산
-    def yoy_delta(col):
+    def _delta(col, days, tag):
         if full_df is None or df.empty: return ""
         cur_dates = df["기간_일자"].dropna()
         if cur_dates.empty: return ""
-        prev_dates = cur_dates - pd.Timedelta(days=364)
+        prev_dates = cur_dates - pd.Timedelta(days=days)
         prev_df = full_df[full_df["기간_일자"].isin(prev_dates)]
         if prev_df.empty: return ""
         p = calc_kpi(pd.DataFrame([prev_df[AGG_COLS].sum()])).iloc[0]
@@ -1546,7 +1568,14 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
         chg = (c_val - p_val) / abs(p_val)
         sym = "+" if chg >= 0 else "△"
         color = "#16A34A" if chg >= 0 else "#DC2626"
-        return f'<span style="color:{color};font-size:11px;">{sym}{abs(chg)*100:.1f}% YoY</span>'
+        return f'<span style="color:{color};font-size:11px;">{sym}{abs(chg)*100:.1f}% {tag}</span>'
+
+    def yoy_delta(col):
+        y1 = _delta(col, DAYS_Y1, "YoY")
+        if not Y2_ON:
+            return y1
+        y2 = _delta(col, DAYS_Y2, "vs 2년전")
+        return " · ".join(x for x in (y1, y2) if x)
 
     # 목표 KPI 바
     render_goal_bar(targets, spend, rev, roas)
@@ -1619,14 +1648,22 @@ def _filter_cost(df, tab_name):
     return df
 
 
-START_YEAR = 2025  # 표에 노출할 최소 연도
+START_YEAR = 2025  # 표에 노출할 최소 연도 (24년 파일 업로드 시 main()에서 2024로 바뀜)
+DEFAULT_START_YEAR = 2025
+Y2_ON = False       # 24년 데이터 업로드 여부 → 전전년(-728일) 비교 표시
+DAYS_Y1, DAYS_Y2 = 364, 728  # 동요일 기준 전년 / 전전년 시프트
 
 
-def _sameday_prev_by_ym(df_tab: pd.DataFrame) -> dict:
+def _old_label(rows_old_years) -> str:
+    ys = sorted(set(rows_old_years))
+    return "·".join(f"{y % 100:02d}" for y in ys) + "년" if ys else f"{START_YEAR}년"
+
+
+def _sameday_prev_by_ym(df_tab: pd.DataFrame, days: int = DAYS_Y1) -> dict:
     """동요일(-364일) 기준, 현재 각 (연도,월)에 대응하는 전년 집계를 반환.
     반환: {(연도, 월): Series} — 키는 '현재' 기간의 (연도,월)."""
     cur = df_tab[["기간_일자", "연도", "월"]].drop_duplicates().copy()
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=days)
     joined = df_tab.merge(
         cur[["비교일자", "연도", "월"]].rename(columns={"연도": "_cy", "월": "_cm"}),
         left_on="기간_일자", right_on="비교일자", how="inner",
@@ -1645,7 +1682,7 @@ def _hl_total_row(row):
 
 def _style_summary(tbl, metric_labels, groups):
     """전년비·목표비 컬럼 색상 + TOTAL 행 강조."""
-    subset = [(g, m) for g in ("전년비", "목표비") if g in groups for m in metric_labels]
+    subset = [(g, m) for g in ("전년비", "전전년비", "목표비") if g in groups for m in metric_labels]
     sty = tbl.style
     if subset:
         sty = sty.map(chg_style, subset=subset)
@@ -1658,12 +1695,31 @@ def _fit_height(n_rows, header_rows=1, cap=4000):
     return min(h, cap)
 
 
+def _row_label_year(label):
+    """행 라벨('26년 7월', '26년7월1주차', '26년 7월 1일(수)') → 연도(2026). 실패 시 None."""
+    m = re.match(r"\s*(\d{2})년", str(label))
+    return 2000 + int(m.group(1)) if m else None
+
+
+def _groups_with_y2(groups):
+    """24년 데이터가 있으면 '전년비' 뒤에 '전전년비' 그룹을 끼워 넣는다."""
+    if not Y2_ON or "전년비" not in groups:
+        return groups
+    out = []
+    for g in groups:
+        out.append(g)
+        if g == "전년비":
+            out.append("전전년비")
+    return tuple(out)
+
+
 def _split_render(rows_new, rows_old, show_fn, key, latest_first=False):
     """한 표에 26년(기본)만 표시하고, 체크박스로 25년 행을 같은 표에 접었다 폈다.
     latest_first=True면 최근 기간이 위로 오도록 역순 정렬."""
     include = False
     if rows_old:
-        include = st.checkbox(f"📁 {START_YEAR}년 포함", value=False, key=key)
+        yrs = [y for y in (_row_label_year(r[0]) for r in rows_old) if y]
+        include = st.checkbox(f"📁 {_old_label(yrs)} 포함", value=False, key=key)
     rows = (list(rows_old) + list(rows_new)) if include else list(rows_new)
     if latest_first:
         rows = rows[::-1]
@@ -1709,6 +1765,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         st.info("해당 기간 데이터가 없습니다.")
         return
 
+    prev2_map = _sameday_prev_by_ym(df_tab, DAYS_Y2) if Y2_ON else {}
     if sameday:
         prev_map = _sameday_prev_by_ym(df_tab)
     else:
@@ -1721,6 +1778,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         metric_labels, groups = DEFAULT_METRICS, ("실적", "전년비")
     else:  # TOTAL, TOTAL(서비스비용미반영)
         metric_labels, groups = DEFAULT_METRICS, ("실적", "전년비", "목표", "목표비")
+    groups = _groups_with_y2(groups)
 
     tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
 
@@ -1730,19 +1788,23 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
     last_day = calendar.monthrange(cy, cm)[1]
     partial = data_max.day < last_day
 
+    latest_yr = int(cur["연도"].max())
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         yr, mo = int(r["연도"]), int(r["월"])
         label = f"{yr % 100:02d}년 {mo}월"
         prev = prev_map.get((yr, mo)) if sameday else prev_map.get((yr - 1, mo))
+        prev2 = prev2_map.get((yr, mo))
         tgt = dict(tab_monthly.get((yr, mo), {}) or {})
         # 당월 MTD 목표 (TOTAL 탭만 weekly 목표 사용)
         if partial and yr == cy and mo == cm and weekly_rows:
             mtd = mtd_target_from_weekly(weekly_rows, yr, mo, data_max)
             if mtd:
                 tgt = mtd
-        block = (yr <= START_YEAR)  # 25년 전년비/목표비 블락(24년 데이터 혼입 방지)
-        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
+        block = (yr <= START_YEAR)  # 첫 연도는 전년비/목표비 블락(이전 연도 데이터 혼입 방지)
+        block2 = (yr <= START_YEAR + 1)
+        (rows_old if yr < latest_yr else rows_new).append(
+            (label, r, prev, tgt, block, prev2, block2))
 
     def _show(rows):
         # 전체요약 월별 실적요약 표는 TOTAL 행 미표시
@@ -1890,11 +1952,12 @@ def _render_detail_tables(df):
     cur = agg(df_tot[df_tot["연도"] >= START_YEAR], ["연도", "월"]).sort_values(["연도", "월"])
     if cur.empty:
         return
+    latest_yr = int(cur["연도"].max())
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         yr, mo = int(r["연도"]), int(r["월"])
         label = f"{yr % 100:02d}년 {mo}월"
-        (rows_old if yr <= START_YEAR else rows_new).append((label, r))
+        (rows_old if yr < latest_yr else rows_new).append((label, r))
 
     def _actual(rows):
         st.dataframe(detail_table(rows), use_container_width=True, hide_index=True,
@@ -1969,12 +2032,12 @@ def _period_label(gran, r):
     return _date_label_kr(r["기간_일자"])  # '26년 7월 1일(수)' — 요일 병기
 
 
-def _sameday_prev(df, gran):
+def _sameday_prev(df, gran, days: int = DAYS_Y1):
     """동요일(-364일) 전년 집계를 현재 기간키로 매핑. {기간키: Series}"""
     cols = PERIOD_COLS[gran]
     base_cols = list(dict.fromkeys(["기간_일자"] + cols))  # 중복 제거(일 단위 대응)
     cur = df[base_cols].drop_duplicates().copy()
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=days)
     ren = {c: f"_c{i}" for i, c in enumerate(cols)}
     joined = df.merge(cur[["비교일자"] + cols].rename(columns=ren),
                       left_on="기간_일자", right_on="비교일자", how="inner")
@@ -2052,7 +2115,9 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     if cur.empty:
         st.info("해당 기간 데이터가 없습니다.")
         return
-    prev_map = _sameday_prev(prev_tab if prev_tab is not None else df_tab, gran)
+    _psrc = prev_tab if prev_tab is not None else df_tab
+    prev_map = _sameday_prev(_psrc, gran)
+    prev2_map = _sameday_prev(_psrc, gran, DAYS_Y2) if Y2_ON else {}
 
     if tab_name in ("신규고객확대", "인지도제고"):
         metric_labels, groups = ACQ_METRICS, ("실적", "전년비")
@@ -2061,11 +2126,13 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     else:
         metric_labels = DEFAULT_METRICS
         groups = ("실적", "전년비", "목표", "목표비") if gran in ("월", "주") else ("실적", "전년비")
+    groups = _groups_with_y2(groups)
 
     tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
     data_max = df_tab["기간_일자"].max()
     ptype = PERIOD_TYPE[gran]
 
+    latest_yr = max(_row_year(gran, r) for _, r in cur.iterrows())
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         pk = _period_key(gran, r)
@@ -2075,7 +2142,8 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
         tgt = _period_target(gran, tab_name, tab_monthly, weekly_targets, pk, data_max,
                              weekly_rows=weekly_rows)
         block = (yr <= START_YEAR)
-        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
+        (rows_old if yr < latest_yr else rows_new).append(
+            (label, r, prev, tgt, block, prev2_map.get(pk), yr <= START_YEAR + 1))
 
     def _show(rows):
         tbl = summary_table(rows, metric_labels, groups, period_type=ptype, add_total=True)
@@ -2129,7 +2197,8 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
     if prev_df is not None:
         prev_tab = _filter_cost(prev_df, src)
         cur_dates = df_tab["기간_일자"].drop_duplicates()
-        prev_dates = pd.Series(cur_dates.values) - pd.Timedelta(days=364)
+        prev_dates = pd.concat([pd.Series(cur_dates.values) - pd.Timedelta(days=dd)
+                                for dd in ((DAYS_Y1, DAYS_Y2) if Y2_ON else (DAYS_Y1,))])
         extra = prev_tab[prev_tab["기간_일자"].isin(prev_dates)
                          & ~prev_tab["기간_일자"].isin(cur_dates)]
         if not extra.empty:
@@ -2163,7 +2232,9 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     if cur.empty:
         return
     prev_map = _sameday_prev(prev_tot, gran)
+    prev2_map = _sameday_prev(prev_tot, gran, DAYS_Y2) if Y2_ON else {}
     ptype = PERIOD_TYPE[gran]
+    latest_yr = max(_row_year(gran, r) for _, r in cur.iterrows())
     rows_new, rows_old = [], []
     for _, r in cur.iterrows():
         pk = _period_key(gran, r)
@@ -2171,18 +2242,25 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
         yr = _row_year(gran, r)
         prev = prev_map.get(pk)
         block = (yr <= START_YEAR)
-        (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
+        (rows_old if yr < latest_yr else rows_new).append(
+            (label, r, prev, block, prev2_map.get(pk), yr <= START_YEAR + 1))
 
     lf = False  # 최근 기간이 맨 아래(오름차순)
 
     def _actual(rows):
-        t = detail_table([(l, s) for l, s, _, _ in rows], period_label=ptype)
+        t = detail_table([(r[0], r[1]) for r in rows], period_label=ptype)
         st.dataframe(t.style.apply(_hl_total_row, axis=1),
                      use_container_width=True, hide_index=True,
                      height=_fit_height(len(rows) + 1))
 
     def _yoy(rows):
-        t = detail_table_yoy([(l, s, p, b) for l, s, p, b in rows], period_label=ptype)
+        t = detail_table_yoy([(r[0], r[1], r[2], r[3]) for r in rows], period_label=ptype)
+        st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
+                     use_container_width=True, hide_index=True,
+                     height=_fit_height(len(rows) + 1))
+
+    def _yoy2(rows):
+        t = detail_table_yoy([(r[0], r[1], r[4], r[5]) for r in rows], period_label=ptype)
         st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
                      use_container_width=True, hide_index=True,
                      height=_fit_height(len(rows) + 1))
@@ -2191,6 +2269,9 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
     st.markdown(f"##### 📄 {gran}별 실적 (전년비) · 비용출처: {src}")
     _split_render(rows_new, rows_old, _yoy, key=f"{key_prefix}_detB", latest_first=lf)
+    if Y2_ON:
+        st.markdown(f"##### 📄 {gran}별 실적 (전전년비 · 2년 전 동요일) · 비용출처: {src}")
+        _split_render(rows_new, rows_old, _yoy2, key=f"{key_prefix}_detC", latest_first=lf)
     _raw_dl(cur, f"{key_prefix}_상세")
 
 
@@ -2265,11 +2346,11 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
 # ───────────────────────────────────────────────
 # 그룹(매체/BPU)별 실적 공용 렌더
 # ───────────────────────────────────────────────
-def _sameday_prev_window(prev_source, col, cur_dates):
+def _sameday_prev_window(prev_source, col, cur_dates, days: int = DAYS_Y1):
     """동요일(-364일) 창의 전년 집계를 그룹값 기준으로 매핑. {그룹값: Series}
     prev_source: 전년 데이터를 포함한(날짜 미필터) 소스 df."""
     prev = prev_source[prev_source["기간_일자"].isin(
-        pd.Series(cur_dates.unique()) - pd.Timedelta(days=364))]
+        pd.Series(cur_dates.unique()) - pd.Timedelta(days=days))]
     if prev.empty:
         return {}
     pa = agg(prev, [col])
@@ -2293,13 +2374,17 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
     else:
         cur = cur.sort_values("지표_광고비", ascending=False)
     prev_map = _sameday_prev_window(prev_source, group_col, df["기간_일자"])
+    prev2_map = (_sameday_prev_window(prev_source, group_col, df["기간_일자"], DAYS_Y2)
+                 if Y2_ON else {})
 
-    rows = [(str(r[group_col]), r, prev_map.get(r[group_col]), {}, False)
+    rows = [(str(r[group_col]), r, prev_map.get(r[group_col]), {}, False,
+             prev2_map.get(r[group_col]), False)
             for _, r in cur.iterrows()]
     nrow = len(cur)
     st.markdown("##### 📇 실적 요약")
-    tbl = summary_table(rows, DEFAULT_METRICS, ("실적", "전년비"), period_type=ptype, add_total=True)
-    st.dataframe(_style_summary(tbl, DEFAULT_METRICS, ("실적", "전년비")),
+    grps = _groups_with_y2(("실적", "전년비"))
+    tbl = summary_table(rows, DEFAULT_METRICS, grps, period_type=ptype, add_total=True)
+    st.dataframe(_style_summary(tbl, DEFAULT_METRICS, grps),
                  use_container_width=True, hide_index=True,
                  height=_fit_height(nrow + 1, header_rows=2))
     st.caption("ℹ️ 전년비는 동요일 기준(-364일) 동기간 비교입니다.")
@@ -2314,6 +2399,12 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
                             for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dyt.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
                  use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
+    if Y2_ON:
+        st.markdown("##### 📄 상세 실적 (전전년비 · 2년 전 동요일)")
+        dyt2 = detail_table_yoy([(str(r[group_col]), r, prev2_map.get(r[group_col]), False)
+                                 for _, r in cur.iterrows()], period_label=ptype)
+        st.dataframe(dyt2.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
+                     use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
     _raw_dl(cur, f"{ptype}별_실적")
 
 
@@ -2784,7 +2875,8 @@ def _drill_series(df_sub, col):
 _PY_PERIOD_COLS = ["기간_일자", "연도", "월", "연월", "기간_주", "주차번호"]
 
 
-def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> pd.DataFrame:
+def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame,
+                       days: int = DAYS_Y1) -> pd.DataFrame:
     """현재 기간(cur_df)의 -364일 동요일에 해당하는 전년 행을 prev_source에서 뽑아,
     기간 컬럼을 현재값으로 치환한 프레임으로 반환. 매칭 없으면 빈 프레임."""
     empty = (prev_source if prev_source is not None else cur_df).iloc[0:0]
@@ -2793,7 +2885,7 @@ def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> pd.Da
         return empty
     pcols = [c for c in _PY_PERIOD_COLS if c in cur_df.columns]
     cmap = cur_df[pcols].drop_duplicates().copy()
-    cmap["_pdate"] = cmap["기간_일자"] - pd.Timedelta(days=364)
+    cmap["_pdate"] = cmap["기간_일자"] - pd.Timedelta(days=days)
     # suffixes=("_py","")로 겹치는 기간 컬럼은 '현재값(오른쪽)'이 이기게 한다.
     merged = prev_source.merge(cmap, left_on="기간_일자", right_on="_pdate",
                                how="inner", suffixes=("_py", ""))
@@ -3483,6 +3575,12 @@ def _yoy_period_labels(cur: pd.DataFrame):
     return f"{y % 100:02d}년", f"{(y - 1) % 100:02d}년"
 
 
+def _yoy_prev2_label(cur_lab: str) -> str:
+    """'26년' → '24년'. 연도 라벨이 아니면 '전전년'."""
+    m = re.match(r"(\d{2})년", cur_lab or "")
+    return f"{(int(m.group(1)) - 2) % 100:02d}년" if m else "전전년"
+
+
 def _yoy_num(s, col, kind):
     """CSV용 원본 숫자(비율·ROAS는 %, 금액·수치는 원 단위)."""
     v = s.get(col, np.nan) if s is not None else np.nan
@@ -3496,15 +3594,22 @@ def _yoy_num(s, col, kind):
 
 
 def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True,
-               money_fn=fmt_money):
+               money_fn=fmt_money, prev2_s=None, prev2_lab=None):
     """한 그룹의 행. show_yoy=True면 (당년/전년/비교) 3행, False면 (당년) 1행.
+    prev2_lab이 주어지면(24년 데이터 업로드 시) 전전년 행과 비교 행이 더해져
+    (당년/전년/전전년/vs전년/vs전전년) 5행이 된다.
     money_fn: 금액(money) 지표의 표기 포맷 함수(단위 옵션).
-    반환: (표시행, 원본행)."""
+    반환: (표시행, 원본행). 표시행에는 HTML 역할 키 '_role'이 들어 있다."""
     disp, raw = [], []
-    pairs = [(cur_lab, cur_s)] + ([(prev_lab, prev_s)] if show_yoy else [])
-    for i, (tag, s) in enumerate(pairs):
+    y2 = show_yoy and prev2_lab is not None
+    pairs = [(cur_lab, cur_s, "cur")]
+    if show_yoy:
+        pairs.append((prev_lab, prev_s, "prev"))
+    if y2:
+        pairs.append((prev2_lab, prev2_s, "prev"))
+    for i, (tag, s, role) in enumerate(pairs):
         lb = label if i == 0 else ""
-        d = {"분류": lb, "기간": tag}
+        d = {"분류": lb, "기간": tag, "_role": role}
         r = {"분류": lb, "기간": tag}
         for lab_, col, kind in spec:
             v = s.get(col, np.nan) if s is not None else np.nan
@@ -3513,18 +3618,22 @@ def _yoy_block(label, cur_s, prev_s, cur_lab, prev_lab, spec, show_yoy=True,
         disp.append(d)
         raw.append(r)
     if show_yoy:
-        dcmp = {"분류": "", "기간": "비교"}
-        rcmp = {"분류": "", "기간": "비교"}
-        for lab_, col, kind in spec:
-            cv = cur_s.get(col, np.nan) if cur_s is not None else np.nan
-            pv = prev_s.get(col, np.nan) if prev_s is not None else np.nan
-            chg = ((cv - pv) / abs(pv)
-                   if (prev_s is not None and pd.notna(pv) and pv != 0 and pd.notna(cv))
-                   else np.nan)
-            dcmp[lab_] = signed_pct(chg)
-            rcmp[lab_] = round(float(chg) * 100, 2) if pd.notna(chg) else None
-        disp.append(dcmp)
-        raw.append(rcmp)
+        cmps = [(f"vs {prev_lab}" if y2 else "비교", prev_s)]
+        if y2:
+            cmps.append((f"vs {prev2_lab}", prev2_s))
+        for tag, base_s in cmps:
+            dcmp = {"분류": "", "기간": tag, "_role": "cmp"}
+            rcmp = {"분류": "", "기간": tag}
+            for lab_, col, kind in spec:
+                cv = cur_s.get(col, np.nan) if cur_s is not None else np.nan
+                pv = base_s.get(col, np.nan) if base_s is not None else np.nan
+                chg = ((cv - pv) / abs(pv)
+                       if (base_s is not None and pd.notna(pv) and pv != 0 and pd.notna(cv))
+                       else np.nan)
+                dcmp[lab_] = signed_pct(chg)
+                rcmp[lab_] = round(float(chg) * 100, 2) if pd.notna(chg) else None
+            disp.append(dcmp)
+            raw.append(rcmp)
     return disp, raw
 
 
@@ -3545,7 +3654,6 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
     heads = "".join(
         f'<th data-col="{j}" draggable="true" title="머리글을 끌어 열 순서 이동">{l}</th>'
         for j, l in enumerate(metric_labels))
-    role_lab = {"cur": cur_lab, "prev": prev_lab, "cmp": "비교"}
     trs = []
     for blk in blocks:
         label, rows = blk["label"], blk["rows"]
@@ -3553,16 +3661,15 @@ def _yoy_html(blocks, spec, cur_lab, prev_lab):
         pad = 8 + depth * 12                  # 단계 깊이만큼 분류 셀 들여쓰기
         dp = f"dp{min(depth, 7)}"            # 배경색은 단계(depth)별로 고정
         nrows = len(rows)
-        roles = ("cur", "prev", "cmp") if nrows == 3 else ("cur",)
         safe = (str(label).replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))
-        for ri, role in enumerate(roles):
-            r = rows[ri]
+        for ri, r in enumerate(rows):
+            role = r.get("_role", "cur")
             cells = []
             if ri == 0:
                 cells.append(f'<td class="nm" rowspan="{nrows}" '
                              f'style="padding-left:{pad}px">{safe}</td>')
-            cells.append(f'<td class="pd">{role_lab[role]}</td>')
+            cells.append(f'<td class="pd">{r.get("기간", "")}</td>')
             for j, lb in enumerate(metric_labels):
                 v = r.get(lb, "")
                 v = "" if v is None else v
@@ -3826,6 +3933,13 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
+    show_y2 = False
+    if Y2_ON and show_yoy:
+        prev2_lab = _yoy_prev2_label(cur_lab)
+        show_y2 = st.checkbox(f"📆 {prev2_lab}(전전년) 함께 비교", value=True, key="yoy_show_y2",
+                              help="24년 데이터 파일을 올렸을 때 사용할 수 있습니다. 각 그룹에 "
+                                   "2년 전 동요일(-728일) 행과 그 대비 증감률 행을 추가합니다.")
+    prev2_src = _prev_year_aligned(cur, base, DAYS_Y2) if show_y2 else cur.iloc[0:0]
     if show_yoy and prev_src.empty:
         st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년·비교가 "
                    "모두 ‘–’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**으로 "
@@ -3836,14 +3950,19 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     need_period = [c for c in cols_list if c in period_tokens]
     work_cur = cur.copy() if need_period else cur
     work_prev = prev_src.copy() if (need_period and not prev_src.empty) else prev_src
+    work_prev2 = prev2_src.copy() if (need_period and not prev2_src.empty) else prev2_src
     for c in need_period:
         work_cur[c] = _drill_series(work_cur, c)
         if not work_prev.empty:
             work_prev[c] = _drill_series(work_prev, c)
+        if not work_prev2.empty:
+            work_prev2[c] = _drill_series(work_prev2, c)
     if impr_only:
         work_cur = work_cur[work_cur["지표_노출수"].fillna(0) > 0]
         if not work_prev.empty:
             work_prev = work_prev[work_prev["지표_노출수"].fillna(0) > 0]
+        if not work_prev2.empty:
+            work_prev2 = work_prev2[work_prev2["지표_노출수"].fillna(0) > 0]
 
     def _davg(s):
         return _drill_daily_avg(s) if (daily_avg and s is not None) else s
@@ -3857,18 +3976,21 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     # 단계별 집계: cur_maps[d] = (앞 d+1개 차원값 튜플) → 집계 시리즈
     cur_maps = [_map(work_cur, cols_list[:d + 1]) for d in range(L)]
     prv_maps = [_map(work_prev, cols_list[:d + 1]) for d in range(L)]
+    prv2_maps = [_map(work_prev2, cols_list[:d + 1]) for d in range(L)]
 
     blocks, raw_rows = [], []
 
-    def _add(label, cs, ps, depth):
+    def _add(label, cs, ps, depth, p2s=None):
         d, r = _yoy_block(label, _davg(cs), _davg(ps), cur_lab, prev_lab, spec,
-                          show_yoy=show_yoy, money_fn=money_fn)
+                          show_yoy=show_yoy, money_fn=money_fn,
+                          prev2_s=_davg(p2s), prev2_lab=(prev2_lab if show_y2 else None))
         blocks.append({"label": label, "depth": depth, "rows": d})
         raw_rows.extend(r)
 
     tot_c = agg(work_cur.assign(_a="_"), ["_a"]).iloc[0] if not work_cur.empty else None
     tot_p = agg(work_prev.assign(_a="_"), ["_a"]).iloc[0] if not work_prev.empty else None
-    _add("전체 TOTAL", tot_c, tot_p, 0)
+    tot_p2 = agg(work_prev2.assign(_a="_"), ["_a"]).iloc[0] if not work_prev2.empty else None
+    _add("전체 TOTAL", tot_c, tot_p, 0, tot_p2)
 
     def _emit(level, parent_key):
         cmap = cur_maps[level]
@@ -3878,7 +4000,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
         for k in keys:
             v = k[level]
             label = v if is_leaf else f"{v}_TOTAL"
-            _add(label, cmap[k], prv_maps[level].get(k), level + 1)
+            _add(label, cmap[k], prv_maps[level].get(k), level + 1, prv2_maps[level].get(k))
             if not is_leaf:
                 _emit(level + 1, k)
 
@@ -3888,14 +4010,19 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     raw_table = pd.DataFrame(raw_rows, columns=cols)
 
     st.markdown("##### 📊 " + " → ".join(order)
-                + f" 전년비 · {cur_lab} vs {prev_lab}")
+                + f" 전년비 · {cur_lab} vs {prev_lab}"
+                + (f" · {prev2_lab}" if show_y2 else ""))
     n_rows = sum(len(b["rows"]) for b in blocks)
     height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
     _components_html(_yoy_html(blocks, spec, cur_lab, prev_lab),
                      height=height, scrolling=False)
     cap = ("배경색은 **단계(depth)별로 고정**이고, 같은 단계는 같은 색입니다. "
            "**분류·기간 열은 좌측 고정** · 🖱️ **지표 머리글을 끌어 열 순서 변경**(임시).")
-    if show_yoy:
+    if show_y2:
+        cap = (f"각 그룹은 **{cur_lab}(진하게) / {prev_lab}·{prev2_lab}(연하게) / vs {prev_lab}·vs {prev2_lab}(색상)** "
+               "5줄입니다. 비교줄은 (당기−비교연도)/|비교연도| 증감률(초록=증가·빨강=감소), "
+               "비교연도는 동요일(-364일/-728일) 기준. 데이터가 없으면 ‘–’. ") + cap
+    elif show_yoy:
         cap = ("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
                "(당기−전년)/|전년| 증감률(초록=증가·빨강=감소). 전년 데이터가 없으면 ‘–’. "
                ) + cap
@@ -4269,7 +4396,7 @@ def _persist_widget_state():
     """멀티페이지 전환 시 위젯 상태가 폐기되지 않도록 세션 키를 재대입한다.
     (버튼/다운로드버튼·파일업로더는 세션 쓰기가 불가하므로 건너뛴다.)"""
     for k in list(st.session_state.keys()):
-        if k in ("data_uploader", "report_uploader") or _is_button_key(k):
+        if k in ("data_uploader", "data24_uploader", "report_uploader") or _is_button_key(k):
             continue
         try:
             st.session_state[k] = st.session_state[k]
@@ -4306,6 +4433,12 @@ def main():
             help="DA 광고 로데이터 파일을 업로드하세요. (CSV / Excel)",
             key="data_uploader",
         )
+        data24_file = st.file_uploader(
+            "24년 데이터 파일 (선택)", type=["csv", "xlsx", "xlsb"],
+            help="24년 로데이터(양식 동일)를 별도 파일로 올리면 24·25·26년을 함께 비교합니다. "
+                 "25년 전년비가 계산되고, 전전년비(2년 전 동요일)가 추가됩니다.",
+            key="data24_uploader",
+        )
         report_file = st.file_uploader(
             "목표 파일 (보고서 엑셀)", type=["xlsx"],
             help="월별/주차별 목표가 있는 보고서 엑셀을 업로드하면 자동으로 목표비를 계산합니다.",
@@ -4326,6 +4459,26 @@ def main():
     with st.spinner("데이터 로딩 중..."):
         df = load_data(uploaded.read(), uploaded.name)
 
+    # ── 24년 데이터(별도 파일) 병합: 24년 이전 일자는 24년 파일 값을 사용
+    global START_YEAR, Y2_ON
+    START_YEAR, Y2_ON = DEFAULT_START_YEAR, False
+    n24 = 0
+    if data24_file is not None:
+        with st.spinner("24년 데이터 로딩 중..."):
+            d24 = load_data(data24_file.read(), data24_file.name)
+        d24 = d24[d24["연도"] < DEFAULT_START_YEAR]
+        if not d24.empty:
+            n24 = len(d24)
+            df = pd.concat([d24, df[df["연도"] >= DEFAULT_START_YEAR]], ignore_index=True)
+            # 한쪽 파일에만 있는 컬럼: 지표는 0, 구분은 빈 값으로 채움
+            for c in df.columns:
+                if df[c].isna().any():
+                    if str(c).startswith("지표_"):
+                        df[c] = df[c].fillna(0)
+                    elif str(c).startswith("구분_"):
+                        df[c] = df[c].fillna("")
+            START_YEAR, Y2_ON = int(d24["연도"].min()), True
+
     report_targets = {}
     if report_file is not None:
         with st.spinner("목표 파일 로딩 중..."):
@@ -4336,6 +4489,11 @@ def main():
         st.caption(
             f"총 {len(df):,}행 | {df['기간_일자'].min().date()} ~ {df['기간_일자'].max().date()}"
         )
+        if data24_file is not None:
+            if n24:
+                st.caption(f"📆 24년 데이터 {n24:,}행 병합 → 24·25·26년 함께 비교")
+            else:
+                st.warning("⚠️ 24년 파일에서 25년 이전 일자 데이터를 찾지 못했습니다.")
         _yrs = df["기간_일자"].dt.year
         if ((_yrs < 2015) | (_yrs > 2100)).any():
             _bad = sorted(_yrs[(_yrs < 2015) | (_yrs > 2100)].unique().tolist())
