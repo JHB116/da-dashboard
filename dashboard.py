@@ -890,6 +890,16 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         # 전년 이전 연도는 현재년도 달력으로 이동시켜 '동요일 일자' 오버레이가 되게 한다.
         # (일자별 값은 이미 합계이므로 cumulative 여부와 무관하게 동일하다.)
         d = agg(df, ["기간_일자"]).sort_values("기간_일자").dropna(subset=[val_col])
+        if d.empty:
+            # 지표 값이 전부 비어 있으면(예: 분모 0인 CPA) 페이지 전체가 죽지 않도록 빈 그래프 표시
+            fig = go.Figure()
+            fig.add_annotation(text="표시할 데이터가 없습니다", showarrow=False,
+                               xref="paper", yref="paper", x=0.5, y=0.5,
+                               font=dict(size=12, color="#94A3B8"))
+            fig.update_xaxes(visible=False)
+            fig.update_yaxes(visible=False)
+            base_layout(fig, title, height)
+            return fig
         d["_yr"] = d["기간_일자"].dt.year
         cur_year = int(d["_yr"].max())
         d["_ax"] = d["기간_일자"] + pd.to_timedelta((cur_year - d["_yr"]) * 364, unit="D")
