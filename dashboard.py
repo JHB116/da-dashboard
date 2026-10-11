@@ -224,7 +224,37 @@ def _parse_date_col(s: pd.Series):
     return best
 
 
-@st.cache_data(show_spinner=False)
+def _file_ext(name: str) -> str:
+    """캐시 키용 확장자. 파일명(★ 등 특수문자·이름 변경)과 무관하게 같은 내용이면 같은 캐시."""
+    return "x." + str(name).rsplit(".", 1)[-1].lower()
+
+
+@st.cache_data(show_spinner=False, max_entries=1)
+def load_dataset(main_bytes: bytes, main_ext: str, b24: bytes | None = None,
+                 ext24: str | None = None):
+    """로데이터(+선택: 24년 파일)를 읽어 하나의 df로 병합. 결과 1건만 캐시해
+    파일을 바꿔 올리거나 이름만 바꿔도 이전 데이터가 메모리에 쌓이지 않게 한다.
+    반환: (df, 24년 병합 행수, 24년 데이터 최소 연도)"""
+    df = load_data(main_bytes, main_ext)
+    if b24 is None:
+        return df, 0, None
+    d24 = load_data(b24, ext24)
+    d24 = d24[d24["연도"] < DEFAULT_START_YEAR]
+    if d24.empty:
+        return df, 0, None
+    n24, y_min = len(d24), int(d24["연도"].min())
+    df = pd.concat([d24, df[df["연도"] >= DEFAULT_START_YEAR]], ignore_index=True)
+    del d24
+    # 한쪽 파일에만 있는 컬럼: 지표는 0, 구분은 빈 값으로 채움
+    for c in df.columns:
+        if df[c].isna().any():
+            if str(c).startswith("지표_"):
+                df[c] = df[c].fillna(0)
+            elif str(c).startswith("구분_"):
+                df[c] = df[c].fillna("")
+    return df, n24, y_min
+
+
 def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext == "csv":
@@ -4505,27 +4535,16 @@ def main():
         return
 
     with st.spinner("데이터 로딩 중..."):
-        df = load_data(uploaded.read(), uploaded.name)
+        b24 = data24_file.getvalue() if data24_file is not None else None
+        df, n24, y24_min = load_dataset(
+            uploaded.getvalue(), _file_ext(uploaded.name),
+            b24, _file_ext(data24_file.name) if data24_file is not None else None)
 
-    # ── 24년 데이터(별도 파일) 병합: 24년 이전 일자는 24년 파일 값을 사용
+    # ── 24년 데이터(별도 파일) 병합 결과(load_dataset 캐시)에서 연도 범위 반영
     global START_YEAR, Y2_ON
     START_YEAR, Y2_ON = DEFAULT_START_YEAR, False
-    n24 = 0
-    if data24_file is not None:
-        with st.spinner("24년 데이터 로딩 중..."):
-            d24 = load_data(data24_file.read(), data24_file.name)
-        d24 = d24[d24["연도"] < DEFAULT_START_YEAR]
-        if not d24.empty:
-            n24 = len(d24)
-            df = pd.concat([d24, df[df["연도"] >= DEFAULT_START_YEAR]], ignore_index=True)
-            # 한쪽 파일에만 있는 컬럼: 지표는 0, 구분은 빈 값으로 채움
-            for c in df.columns:
-                if df[c].isna().any():
-                    if str(c).startswith("지표_"):
-                        df[c] = df[c].fillna(0)
-                    elif str(c).startswith("구분_"):
-                        df[c] = df[c].fillna("")
-            START_YEAR, Y2_ON = int(d24["연도"].min()), True
+    if n24:
+        START_YEAR, Y2_ON = y24_min, True
 
     report_targets = {}
     if report_file is not None:
