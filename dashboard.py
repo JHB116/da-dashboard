@@ -82,7 +82,7 @@ PURPOSE_COLORS = {
 YEAR_COLORS = ["#2563EB", "#F59E0B", "#10B981", "#EF4444"]
 
 # 추이 그래프 색 토큰 — 광고 채널 신규/첫구매 대시보드(ad-first-dashboard)와 동일.
-# 당해년도만 진한 파랑 실선, 이전 연도는 회색 점선으로 눌러 당해년도가 먼저 읽히게 한다.
+# 당해년도만 진한 파랑 실선, 전년은 회색 실선, 전전년은 옅은 회색 점선으로 눌러 당해년도가 먼저 읽히게 한다.
 CH_CUR = "#2a78d6"     # --c1  당해년도
 CH_PREV = "#b3b1a9"    # --prev 전년
 CH_PREV2 = "#d3d1ca"   # 전전년(더 옅게)
@@ -91,12 +91,12 @@ CH_GRID, CH_AXIS, CH_SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
 
 def year_line_style(yr: int, latest: int) -> dict:
-    """연도별 선 스타일: 당해=파랑 실선, 전년=회색 점선, 그 이전=옅은 회색 잔점선."""
+    """연도별 선 스타일: 당해=파랑 실선, 전년=회색 실선, 그 이전=옅은 회색 잔점선."""
     k = latest - int(yr)
     if k <= 0:
         return dict(color=CH_CUR, width=2.6)
     if k == 1:
-        return dict(color=CH_PREV, width=1.8, dash="4px,3px")
+        return dict(color=CH_PREV, width=1.8)
     return dict(color=CH_PREV2, width=1.6, dash="2px,3px")
 
 
