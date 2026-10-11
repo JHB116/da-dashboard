@@ -84,6 +84,113 @@ YEAR_COLORS = ["#2563EB", "#F59E0B", "#10B981", "#EF4444"]
 MONTH_LABELS = {i: f"{i}월" for i in range(1, 13)}
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
 
+# ───────────────────────────────────────────────
+# 비교 기간 설정 (사이드바) — 기본은 전년 동요일(-364일).
+# 표·카드·배지의 '전년비' 계산은 모두 cmp_shift()로 비교 일자를 구한다.
+# ───────────────────────────────────────────────
+CMP_YOY_SAMEDAY = "전년 동요일 (-364일)"
+CMP_YOY_SAMEDATE = "전년 동일자 (-1년)"
+CMP_4W = "4주 전 동요일 (-28일)"
+CMP_1W = "전주 동요일 (-7일)"
+CMP_CUSTOM = "직접 설정"
+CMP_MODES = [CMP_YOY_SAMEDAY, CMP_YOY_SAMEDATE, CMP_4W, CMP_1W, CMP_CUSTOM]
+CMP_DEFAULT = CMP_YOY_SAMEDAY
+_CMP_FIXED_DAYS = {CMP_YOY_SAMEDAY: 364, CMP_4W: 28, CMP_1W: 7}
+CMP_HOW_DAYS = "일수 입력"
+CMP_HOW_DATES = "날짜로 지정"
+
+
+def _cmp_mode() -> str:
+    m = st.session_state.get("cmp_mode", CMP_DEFAULT)
+    return m if m in CMP_MODES else CMP_DEFAULT
+
+
+def cmp_days():
+    """비교 시프트 일수. 전년 동일자(-1년, 윤년 보정)는 None."""
+    mode = _cmp_mode()
+    if mode == CMP_YOY_SAMEDATE:
+        return None
+    if mode == CMP_CUSTOM:
+        if st.session_state.get("cmp_custom_how", CMP_HOW_DAYS) == CMP_HOW_DATES:
+            c, p = st.session_state.get("cmp_ref_cur"), st.session_state.get("cmp_ref_prev")
+            n = (pd.Timestamp(c) - pd.Timestamp(p)).days if (c and p) else 364
+        else:
+            n = int(st.session_state.get("cmp_days", 364) or 364)
+        return n if n > 0 else 364  # 미래 구간 비교는 허용하지 않음 → 기본값
+    return _CMP_FIXED_DAYS[mode]
+
+
+def cmp_shift(dates):
+    """현재 일자(들) → 비교 일자(들). Timestamp·Series·DatetimeIndex 모두 지원."""
+    n = cmp_days()
+    if n is None:
+        return dates - pd.DateOffset(years=1)
+    return dates - pd.Timedelta(days=n)
+
+
+def cmp_is_yearly() -> bool:
+    """비교 기간이 '전년' 기준인지(전년 동요일/동일자, 또는 직접 설정 364~366일)."""
+    n = cmp_days()
+    return n is None or 364 <= n <= 366
+
+
+def cmp_desc() -> str:
+    """캡션용 비교 기준 설명. 예: '전년 동요일(-364일)', '직접 설정(-30일)'."""
+    mode = _cmp_mode()
+    if mode == CMP_CUSTOM:
+        return f"직접 설정(-{cmp_days()}일)"
+    return mode.replace(" (", "(")
+
+
+def cmp_grp() -> str:
+    """표 머리글용 비교 그룹명. 전년 기준이면 '전년비'."""
+    mode = _cmp_mode()
+    if cmp_is_yearly():
+        return "전년비"
+    return {CMP_4W: "4주전비", CMP_1W: "전주비"}.get(mode, "비교기간비")
+
+
+def cmp_prev_word() -> str:
+    """'전년' 대신 쓸 비교 대상 단어. 예: '전년', '전주', '비교기간'."""
+    g = cmp_grp()
+    return g[:-1] if g != "비교기간비" else "비교기간"
+
+
+def cmp_blocked(yr: int) -> bool:
+    """START_YEAR 이하 행의 비교값 차단 여부(전년 기준일 때만 — 이전 연도 데이터 혼입 방지)."""
+    return yr <= START_YEAR and cmp_is_yearly()
+
+
+def render_cmp_settings():
+    """사이드바 '비교 기간' 설정 위젯. st.sidebar 컨텍스트 안에서 호출."""
+    st.subheader("🔁 비교 기간")
+    mode = st.selectbox(
+        "비교 기준", CMP_MODES, index=CMP_MODES.index(CMP_DEFAULT), key="cmp_mode",
+        help="모든 페이지의 전년비(비교) 계산 기준입니다. 기본은 전년 동요일(-364일). "
+             "선택한 기간을 이 기준만큼 과거로 옮긴 구간과 비교합니다.")
+    if mode == CMP_CUSTOM:
+        how = st.radio("설정 방식", [CMP_HOW_DAYS, CMP_HOW_DATES], horizontal=True,
+                       key="cmp_custom_how")
+        if how == CMP_HOW_DAYS:
+            st.number_input("며칠 전과 비교할까요?", min_value=1, max_value=3650,
+                            value=364, step=1, key="cmp_days",
+                            help="예: 7=전주, 28=4주 전, 364=전년 동요일, 365=전년 동일자(평년)")
+        else:
+            today = pd.Timestamp.today().normalize()
+            st.date_input("당기 기준일", value=today.date(), key="cmp_ref_cur",
+                          help="비교할 당기 구간의 시작일(아무 날짜나 기준으로 삼아도 됩니다).")
+            st.date_input("비교 기준일", value=(today - pd.Timedelta(days=364)).date(),
+                          key="cmp_ref_prev",
+                          help="당기 기준일과 맞대어 비교할 과거 날짜. 두 날짜 차이만큼 모든 "
+                               "기간을 이동해 비교합니다.")
+            c, p = st.session_state.get("cmp_ref_cur"), st.session_state.get("cmp_ref_prev")
+            if c and p and (pd.Timestamp(c) - pd.Timestamp(p)).days <= 0:
+                st.warning("비교 기준일은 당기 기준일보다 과거여야 합니다. "
+                           "기본값(-364일)으로 비교합니다.")
+    st.caption(f"현재 기준: **{cmp_desc()}** · 표 머리글: **{cmp_grp()}**")
+    if not cmp_is_yearly():
+        st.caption("※ 지표별 추이 그래프의 연도별 겹쳐보기는 그대로 전년 기준입니다.")
+
 
 def _weekday_kr(ts) -> str:
     """요일 한글 한 글자('월'~'일')."""
@@ -871,7 +978,8 @@ def yoy_compare(df: pd.DataFrame, cur_year: int, by_col: str, val_col: str):
 def yoy_sameday_prev(df: pd.DataFrame, cur_year: int, group_col: str) -> pd.DataFrame:
     """동요일 기준 전년 집계: 현재년도 각 날짜의 -364일(52주) 전 날짜로 전년 데이터 매핑."""
     cur = df[df["연도"] == cur_year][["기간_일자", group_col]].drop_duplicates()
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    cur["비교일자"] = cmp_shift(cur["기간_일자"])
+    cur = cur.drop_duplicates("비교일자")  # 윤일(2/29→2/28) 중복 매칭 방지
     date_to_group = cur.set_index("비교일자")[group_col].to_dict()
 
     prev = df[df["연도"] == cur_year - 1].copy()
@@ -986,7 +1094,11 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
                                      else signed_pct(cval / tv - 1))
         data.append(rec)
 
-    return pd.DataFrame(data, columns=pd.MultiIndex.from_tuples(tuples))
+    out = pd.DataFrame(data, columns=pd.MultiIndex.from_tuples(tuples))
+    # 내부 그룹키는 '전년비' 고정, 표시 머리글만 비교 기간 설정에 맞춰 변경
+    if "전년비" in groups and cmp_grp() != "전년비":
+        out = out.rename(columns={"전년비": cmp_grp()}, level=0)
+    return out
 
 
 # ───────────────────────────────────────────────
@@ -1522,12 +1634,14 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     rev   = tot["지표_순결제거래액"]
     roas  = tot["순결제ROAS"]
 
-    # 동요일 전년비 계산
+    # 비교 기간(기본 동요일 전년) 대비 증감 계산
+    yoy_tag = "YoY" if cmp_is_yearly() else cmp_grp()
+
     def yoy_delta(col):
         if full_df is None or df.empty: return ""
         cur_dates = df["기간_일자"].dropna()
         if cur_dates.empty: return ""
-        prev_dates = cur_dates - pd.Timedelta(days=364)
+        prev_dates = cmp_shift(cur_dates)
         prev_df = full_df[full_df["기간_일자"].isin(prev_dates)]
         if prev_df.empty: return ""
         p = calc_kpi(pd.DataFrame([prev_df[AGG_COLS].sum()])).iloc[0]
@@ -1536,7 +1650,7 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
         chg = (c_val - p_val) / abs(p_val)
         sym = "+" if chg >= 0 else "△"
         color = "#16A34A" if chg >= 0 else "#DC2626"
-        return f'<span style="color:{color};font-size:11px;">{sym}{abs(chg)*100:.1f}% YoY</span>'
+        return f'<span style="color:{color};font-size:11px;">{sym}{abs(chg)*100:.1f}% {yoy_tag}</span>'
 
     # 목표 KPI 바
     render_goal_bar(targets, spend, rev, roas)
@@ -1616,7 +1730,8 @@ def _sameday_prev_by_ym(df_tab: pd.DataFrame) -> dict:
     """동요일(-364일) 기준, 현재 각 (연도,월)에 대응하는 전년 집계를 반환.
     반환: {(연도, 월): Series} — 키는 '현재' 기간의 (연도,월)."""
     cur = df_tab[["기간_일자", "연도", "월"]].drop_duplicates().copy()
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    cur["비교일자"] = cmp_shift(cur["기간_일자"])
+    cur = cur.drop_duplicates("비교일자")  # 윤일(2/29→2/28) 중복 매칭 방지
     joined = df_tab.merge(
         cur[["비교일자", "연도", "월"]].rename(columns={"연도": "_cy", "월": "_cm"}),
         left_on="기간_일자", right_on="비교일자", how="inner",
@@ -1635,7 +1750,8 @@ def _hl_total_row(row):
 
 def _style_summary(tbl, metric_labels, groups):
     """전년비·목표비 컬럼 색상 + TOTAL 행 강조."""
-    subset = [(g, m) for g in ("전년비", "목표비") if g in groups for m in metric_labels]
+    subset = [(cmp_grp() if g == "전년비" else g, m)
+              for g in ("전년비", "목표비") if g in groups for m in metric_labels]
     sty = tbl.style
     if subset:
         sty = sty.map(chg_style, subset=subset)
@@ -1731,7 +1847,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
             mtd = mtd_target_from_weekly(weekly_rows, yr, mo, data_max)
             if mtd:
                 tgt = mtd
-        block = (yr <= START_YEAR)  # 25년 전년비/목표비 블락(24년 데이터 혼입 방지)
+        block = cmp_blocked(yr)  # 25년 전년비/목표비 블락(24년 데이터 혼입 방지, 전년 기준일 때)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
 
     def _show(rows):
@@ -1919,7 +2035,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
 
     # ── 상단: 비용출처 선택 (한 번 고르면 아래 요약표·그래프 전체에 동일 적용)
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key="sum_src")
-    st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
+    st.caption(f"ℹ️ {cmp_grp()}는 **{cmp_desc()}** 기준으로 비교합니다(사이드바 ‘비교 기간’에서 변경). "
                "· 선택한 **비용출처가 아래 표·그래프 전체에 적용**됩니다.")
     sameday = True
 
@@ -1964,7 +2080,8 @@ def _sameday_prev(df, gran):
     cols = PERIOD_COLS[gran]
     base_cols = list(dict.fromkeys(["기간_일자"] + cols))  # 중복 제거(일 단위 대응)
     cur = df[base_cols].drop_duplicates().copy()
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=364)
+    cur["비교일자"] = cmp_shift(cur["기간_일자"])
+    cur = cur.drop_duplicates("비교일자")  # 윤일(2/29→2/28) 중복 매칭 방지
     ren = {c: f"_c{i}" for i, c in enumerate(cols)}
     joined = df.merge(cur[["비교일자"] + cols].rename(columns=ren),
                       left_on="기간_일자", right_on="비교일자", how="inner")
@@ -2064,7 +2181,7 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
         prev = prev_map.get(pk)
         tgt = _period_target(gran, tab_name, tab_monthly, weekly_targets, pk, data_max,
                              weekly_rows=weekly_rows)
-        block = (yr <= START_YEAR)
+        block = cmp_blocked(yr)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, tgt, block))
 
     def _show(rows):
@@ -2160,7 +2277,7 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
         label = _period_label(gran, r)
         yr = _row_year(gran, r)
         prev = prev_map.get(pk)
-        block = (yr <= START_YEAR)
+        block = cmp_blocked(yr)
         (rows_old if yr <= START_YEAR else rows_new).append((label, r, prev, block))
 
     lf = False  # 최근 기간이 맨 아래(오름차순)
@@ -2179,7 +2296,7 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
 
     st.markdown(f"##### 📄 {gran}별 상세 실적 · 비용출처: {src}")
     _split_render(rows_new, rows_old, _actual, key=f"{key_prefix}_detA", latest_first=lf)
-    st.markdown(f"##### 📄 {gran}별 실적 (전년비) · 비용출처: {src}")
+    st.markdown(f"##### 📄 {gran}별 실적 ({cmp_grp()}) · 비용출처: {src}")
     _split_render(rows_new, rows_old, _yoy, key=f"{key_prefix}_detB", latest_first=lf)
     _raw_dl(cur, f"{key_prefix}_상세")
 
@@ -2243,7 +2360,7 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
     # 비용출처 선택(한 번 고르면 요약표·상세표·그래프 전체에 동일 적용)
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key=f"{key_prefix}_src")
     st.caption("ℹ️ 선택한 **비용출처가 아래 요약표·상세표·그래프 전체에 적용**됩니다. "
-               "전년비는 동요일 기준(전년 동일 요일, -364일)으로 비교합니다.")
+               f"{cmp_grp()}는 **{cmp_desc()}** 기준으로 비교합니다(사이드바 ‘비교 기간’에서 변경).")
     # 순서: 실적요약 → 상세표 → 그래프(맨 하단)
     _render_period_summary(df, gran, report_targets, targets or {}, prev_df=prev_df, src=src)
     st.divider()
@@ -2259,7 +2376,7 @@ def _sameday_prev_window(prev_source, col, cur_dates):
     """동요일(-364일) 창의 전년 집계를 그룹값 기준으로 매핑. {그룹값: Series}
     prev_source: 전년 데이터를 포함한(날짜 미필터) 소스 df."""
     prev = prev_source[prev_source["기간_일자"].isin(
-        pd.Series(cur_dates.unique()) - pd.Timedelta(days=364))]
+        cmp_shift(pd.Series(cur_dates.unique())))]
     if prev.empty:
         return {}
     pa = agg(prev, [col])
@@ -2292,14 +2409,14 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
     st.dataframe(_style_summary(tbl, DEFAULT_METRICS, ("실적", "전년비")),
                  use_container_width=True, hide_index=True,
                  height=_fit_height(nrow + 1, header_rows=2))
-    st.caption("ℹ️ 전년비는 동요일 기준(-364일) 동기간 비교입니다.")
+    st.caption(f"ℹ️ {cmp_grp()}는 **{cmp_desc()}** 기준 동기간 비교입니다(사이드바 ‘비교 기간’에서 변경).")
 
     st.markdown("##### 📄 상세 실적")
     dt = detail_table([(str(r[group_col]), r) for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dt.style.apply(_hl_total_row, axis=1),
                  use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
 
-    st.markdown("##### 📄 상세 실적 (전년비)")
+    st.markdown(f"##### 📄 상세 실적 ({cmp_grp()})")
     dyt = detail_table_yoy([(str(r[group_col]), r, prev_map.get(r[group_col]), False)
                             for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dyt.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
@@ -2783,7 +2900,8 @@ def _prev_year_aligned(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> pd.Da
         return empty
     pcols = [c for c in _PY_PERIOD_COLS if c in cur_df.columns]
     cmap = cur_df[pcols].drop_duplicates().copy()
-    cmap["_pdate"] = cmap["기간_일자"] - pd.Timedelta(days=364)
+    cmap["_pdate"] = cmp_shift(cmap["기간_일자"])
+    cmap = cmap.drop_duplicates("_pdate")  # 윤일(2/29→2/28) 중복 매칭 방지
     # suffixes=("_py","")로 겹치는 기간 컬럼은 '현재값(오른쪽)'이 이기게 한다.
     merged = prev_source.merge(cmap, left_on="기간_일자", right_on="_pdate",
                                how="inner", suffixes=("_py", ""))
@@ -2801,7 +2919,7 @@ def _has_prev_year_data(cur_df: pd.DataFrame, prev_source: pd.DataFrame) -> bool
         return False
     prev_dates = set(pd.to_datetime(prev_source["기간_일자"].dropna().unique()))
     cur_dates = pd.to_datetime(cur_df["기간_일자"].dropna().unique())
-    return any((pd.Timestamp(d) - pd.Timedelta(days=364)) in prev_dates
+    return any(cmp_shift(pd.Timestamp(d)) in prev_dates
                for d in cur_dates)
 
 
@@ -2873,7 +2991,7 @@ def _drill_yoy_badge(cur_v, prev_v):
     """전년비 배지 HTML. cur/prev로 (cur-prev)/|prev| 증감률.
     표기는 전년비 리포트와 동일(signed_pct): 증가 +초록 / 감소 △빨강."""
     if prev_v is None or pd.isna(prev_v) or prev_v == 0 or pd.isna(cur_v):
-        return '<span class="yoy na">전년 –</span>'
+        return f'<span class="yoy na">{cmp_prev_word()} –</span>'
     chg = (cur_v - prev_v) / abs(prev_v)
     cls = "up" if chg >= 0 else "dn"
     return f'<span class="yoy {cls}">{signed_pct(chg)}</span>'
@@ -3352,10 +3470,11 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
     impr_only = o3.checkbox("노출수 0 초과만 보기", value=True, key="drill_impr_only",
                             help="노출이 있었던(노출수>0) 데이터만 집계합니다. 켜면 그룹 필터와 "
                                  "일평균(집행일수)도 노출수>0 날짜 기준으로 계산됩니다.")
-    show_yoy = o4.checkbox("전년비 표시", value=False, key="drill_yoy",
-                           help="각 단계·각 지표 값 아래에 전년 동기(-364일 동요일) 대비 "
+    show_yoy = o4.checkbox(f"{cmp_grp()} 표시", value=False, key="drill_yoy",
+                           help=f"각 단계·각 지표 값 아래에 비교 기간({cmp_desc()}) 대비 "
                                 "증감률(▲증가·▼감소)을 배지로 표시합니다. 현재 화면의 필터·"
-                                "날짜 범위를 그대로 1년 전 같은 요일 구간과 비교합니다.")
+                                "날짜 범위를 비교 기간만큼 옮긴 구간과 비교합니다. "
+                                "비교 기준은 사이드바 ‘비교 기간’에서 바꿀 수 있습니다.")
     money_unit = o5.selectbox("금액 단위", list(MONEY_UNIT_FMTS),
                               index=list(MONEY_UNIT_FMTS).index(MONEY_UNIT_DEFAULT),
                               key="drill_money_unit",
@@ -3405,9 +3524,10 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
                   and any(dc in ("구분_캠페인", "구분_하위캠페인") for _l, dc in dims))
 
     if show_yoy and not _has_prev_year_data(df, base):
-        st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년비가 "
-                   "모두 ‘전년 –’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**"
-                   "(예: 전년 실적이 존재하는 월)으로 바꾸면 전년비가 채워집니다.")
+        _pw = cmp_prev_word()
+        st.warning(f"⚠️ 선택한 날짜 범위의 **비교 기간({cmp_desc()})** 데이터가 없어 {cmp_grp()}가 "
+                   f"모두 ‘{_pw} –’로 표시됩니다. 상단 날짜 범위나 사이드바 ‘비교 기간’을 "
+                   f"**{_pw} 데이터가 있는 구간**으로 바꾸면 {cmp_grp()}가 채워집니다.")
 
     st.divider()
     nodes, spec = _drill_build_tree(df, dims, top_n, impr_only=impr_only,
@@ -3417,9 +3537,10 @@ def page_drilldown(df: pd.DataFrame, targets: dict = None, report_targets: dict 
                                     prev_source=(base if show_yoy else None),
                                     show_yoy=show_yoy, money_fn=money_fn)
     if show_yoy:
-        st.caption("🟢+ 전년 대비 증가 · 🔴△ 감소 · '전년 –'은 전년 동기 데이터가 "
-                   "없어 비교 불가. 증감률은 (당기−전년)/|전년| 기준입니다. "
-                   "캠페인·하위캠페인·기획전 단계는 매년 값이 달라져 전년비를 표시하지 않습니다.")
+        _pw = cmp_prev_word()
+        st.caption(f"🟢+ {_pw} 대비 증가 · 🔴△ 감소 · '{_pw} –'은 비교 기간({cmp_desc()}) 데이터가 "
+                   f"없어 비교 불가. 증감률은 (당기−{_pw})/|{_pw}| 기준입니다. "
+                   "캠페인·하위캠페인·기획전 단계는 매년 값이 달라져 비교 배지를 표시하지 않습니다.")
 
     exp_df = _drill_export_df(nodes, dims, spec, show_promo=show_promo)
     avg_tag = "_일평균" if daily_avg else ""
@@ -3466,6 +3587,8 @@ YOY_CORE_SPEC = [s for lbl in _YOY_CORE_LABELS for s in DETAIL_SPEC if s[0] == l
 def _yoy_period_labels(cur: pd.DataFrame):
     """현재 선택 기간 → (당년 라벨, 전년 라벨). 선택 월은 노출하지 않고 연도만 표기.
     예: ('26년', '25년'). 연도 정보가 없으면 ('당년','전년')."""
+    if not cmp_is_yearly():
+        return "당기", cmp_prev_word()
     years = sorted(cur["연도"].dropna().unique()) if "연도" in cur.columns else []
     if not years:
         return "당년", "전년"
@@ -3701,7 +3824,8 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     st.header("🆚 전년비 리포트")
     st.caption("비용출처·매체·상품 등 **원하는 분류 단위**로 **당년·전년·비교(전년비)** 3줄을 "
                "한 표에 세워 봅니다. 보고서(전년도 비용출처 비교) 포맷 그대로예요. "
-               "전년비는 대시보드 공통 규칙인 **동요일 기준(-364일)** 동기간 비교입니다.")
+               f"비교 기준은 **{cmp_desc()}**(기본 전년 동요일)이며, 사이드바 ‘비교 기간’에서 "
+               "다른 기간으로 바꿀 수 있습니다.")
     if df.empty:
         st.warning("데이터가 없습니다.")
         return
@@ -3817,9 +3941,9 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     cur_lab, prev_lab = _yoy_period_labels(cur)
     prev_src = _prev_year_aligned(cur, base)
     if show_yoy and prev_src.empty:
-        st.warning("⚠️ 선택한 날짜 범위의 **전년 동기(-364일 동요일)** 데이터가 없어 전년·비교가 "
-                   "모두 ‘–’로 표시됩니다. 상단 날짜 범위를 **전년 데이터가 있는 기간**으로 "
-                   "바꾸면 채워집니다.")
+        st.warning(f"⚠️ 선택한 날짜 범위의 **비교 기간({cmp_desc()})** 데이터가 없어 {prev_lab}·비교가 "
+                   "모두 ‘–’로 표시됩니다. 상단 날짜 범위나 사이드바 ‘비교 기간’을 "
+                   "**비교 데이터가 있는 구간**으로 바꾸면 채워집니다.")
 
     # 기간 파생 차원(__day__/__week__/__month__)을 실제 컬럼으로 만들고, 노출0초과 필터 적용
     period_tokens = {"__day__", "__week__", "__month__"}
@@ -3878,7 +4002,7 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     raw_table = pd.DataFrame(raw_rows, columns=cols)
 
     st.markdown("##### 📊 " + " → ".join(order)
-                + f" 전년비 · {cur_lab} vs {prev_lab}")
+                + f" {cmp_grp()} · {cur_lab} vs {prev_lab}")
     n_rows = sum(len(b["rows"]) for b in blocks)
     height = min(46 + n_rows * 29 + 4, _YOY_TABLE_MAXH + 20)
     _components_html(_yoy_html(blocks, spec, cur_lab, prev_lab),
@@ -3886,9 +4010,9 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     cap = ("배경색은 **단계(depth)별로 고정**이고, 같은 단계는 같은 색입니다. "
            "**분류·기간 열은 좌측 고정** · 🖱️ **지표 머리글을 끌어 열 순서 변경**(임시).")
     if show_yoy:
-        cap = ("각 그룹은 **당년(진하게) / 전년(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
-               "(당기−전년)/|전년| 증감률(초록=증가·빨강=감소). 전년 데이터가 없으면 ‘–’. "
-               ) + cap
+        cap = (f"각 그룹은 **{cur_lab}(진하게) / {prev_lab}(연하게) / 비교(색상)** 3줄입니다. 비교줄은 "
+               f"(당기−비교)/|비교| 증감률(초록=증가·빨강=감소) · 비교 기준: {cmp_desc()}. "
+               "비교 데이터가 없으면 ‘–’. ") + cap
     st.caption(cap)
     st.download_button("📄 CSV 다운로드 (원본 숫자)",
                        data=raw_table.to_csv(index=False).encode("utf-8-sig"),
@@ -4242,7 +4366,7 @@ def build_html_report(df: pd.DataFrame) -> str:
 # '필터 초기화' 버튼은 아래 접두어에 해당하는 키만 지운다.
 _FILTER_KEY_PREFIXES = (
     "sumf", "medf", "campf", "bpuf", "wkf", "mof", "dyf", "cuf", "crf", "drillf",
-    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy", "drill",
+    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy", "drill", "cmp",
 )
 
 
@@ -4283,8 +4407,9 @@ def main():
 
     st.title("📊 DA 광고 실적 대시보드")
 
-    # 사이드바 순서: ① 페이지  ② 파일 업로드 (필터·내보내기는 제거됨)
+    # 사이드바 순서: ① 페이지  ② 비교 기간  ③ 파일 업로드 (필터·내보내기는 제거됨)
     page_box   = st.sidebar.container()
+    cmp_box    = st.sidebar.container()
     upload_box = st.sidebar.container()
 
     # ── ③ 파일 업로드 (맨 아래)
@@ -4361,6 +4486,11 @@ def main():
                      help="모든 페이지의 필터·날짜·조회옵션을 기본값으로 되돌립니다. (페이지 선택은 유지)"):
             _reset_all_filters()
             st.rerun()
+
+    # ── ② 비교 기간 (기본: 전년 동요일 -364일)
+    with cmp_box:
+        st.divider()
+        render_cmp_settings()
 
     if page == "📊 전체 요약":
         page_summary(pre_date_filtered, targets, report_targets)
