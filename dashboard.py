@@ -81,6 +81,50 @@ PURPOSE_COLORS = {
 
 YEAR_COLORS = ["#2563EB", "#F59E0B", "#10B981", "#EF4444"]
 
+# 추이 그래프 색 토큰 — 광고 채널 신규/첫구매 대시보드(ad-first-dashboard)와 동일.
+# 당해년도만 진한 파랑 실선, 이전 연도는 회색 점선으로 눌러 당해년도가 먼저 읽히게 한다.
+CH_CUR = "#2a78d6"     # --c1  당해년도
+CH_PREV = "#b3b1a9"    # --prev 전년
+CH_PREV2 = "#d3d1ca"   # 전전년(더 옅게)
+CH_INK, CH_INK2, CH_MUTED = "#0b0b0b", "#52514e", "#898781"
+CH_GRID, CH_AXIS, CH_SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+
+
+def year_line_style(yr: int, latest: int) -> dict:
+    """연도별 선 스타일: 당해=파랑 실선, 전년=회색 점선, 그 이전=옅은 회색 잔점선."""
+    k = latest - int(yr)
+    if k <= 0:
+        return dict(color=CH_CUR, width=2.6)
+    if k == 1:
+        return dict(color=CH_PREV, width=1.8, dash="4px,3px")
+    return dict(color=CH_PREV2, width=1.6, dash="2px,3px")
+
+
+def add_year_traces(fig, rows, latest, textfmt=None, hoverfmt=None):
+    """rows: [(연도, x, y)] — 이전 연도부터 그려 당해년도가 맨 위에 오게 한다.
+    값 라벨(textfmt)은 당해년도 선에만, 끝점에는 강조 점을 찍는다."""
+    for yr, xs, ys, *rest in sorted(rows, key=lambda r: r[0]):
+        cur = int(yr) == int(latest)
+        ht = rest[0] if rest else None
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, name=f"{yr}년",
+            mode="lines+text" if (cur and textfmt) else "lines",
+            line=dict(**year_line_style(yr, latest), shape="linear"),
+            texttemplate=(f"%{{y:{textfmt}}}" if (cur and textfmt) else None),
+            textposition="top center", textfont=dict(size=9, color=CH_CUR),
+            customdata=ht,
+            hovertemplate=(("%{customdata} · " if ht is not None else "")
+                           + "%{y:" + (hoverfmt or textfmt or ",.4~f") + "}"
+                           + "<extra>%{fullData.name}</extra>"),
+        ))
+        if cur and len(xs):
+            fig.add_trace(go.Scatter(
+                x=[list(xs)[-1]], y=[list(ys)[-1]], mode="markers", showlegend=False,
+                hoverinfo="skip",
+                marker=dict(size=9, color=CH_CUR, line=dict(color=CH_SURFACE, width=2)),
+            ))
+    return fig
+
 MONTH_LABELS = {i: f"{i}월" for i in range(1, 13)}
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -696,7 +740,7 @@ def agg(df: pd.DataFrame, by: list) -> pd.DataFrame:
 def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
                     title: str, ticklabels: dict | None = None,
                     height: int = 380, ma_window: int = 0,
-                    textfmt: str | None = None) -> go.Figure:
+                    textfmt: str | None = None, hoverfmt: str | None = None) -> go.Figure:
     """
     연도별 라인을 동일 x축(period_col)에 겹쳐 그린다.
     period_col: 月(1~12) 또는 주차번호(1~53) 같은 숫자형 기간 컬럼
@@ -705,31 +749,26 @@ def yoy_overlay_fig(df: pd.DataFrame, period_col: str, val_col: str,
     """
     years = sorted(df["연도"].unique())
     fig = go.Figure()
-    for i, yr in enumerate(years):
+    latest = int(max(years)) if len(years) else 0
+    rows = []
+    for yr in years:
         sub = df[df["연도"] == yr].sort_values(period_col).dropna(subset=[val_col])
-        color = YEAR_COLORS[i % len(YEAR_COLORS)]
-        fig.add_trace(go.Scatter(
-            x=sub[period_col], y=sub[val_col],
-            name=f"{yr}년",
-            mode="lines+markers+text" if textfmt else "lines+markers",
-            line=dict(color=color, width=2),
-            marker=dict(size=6),
-            texttemplate=(f"%{{y:{textfmt}}}" if textfmt else None),
-            textposition="top center", textfont=dict(size=9),
-        ))
-        if ma_window > 1 and len(sub) >= ma_window:
-            ma = sub[val_col].rolling(ma_window, min_periods=1).mean()
-            fig.add_trace(go.Scatter(
-                x=sub[period_col], y=ma,
-                name=f"{yr}년 {ma_window}주MA",
-                mode="lines",
-                line=dict(color=color, width=1.5, dash="dot"),
-                showlegend=True,
-            ))
+        rows.append((int(yr), sub[period_col].tolist(), sub[val_col].tolist()))
+    add_year_traces(fig, rows, latest, textfmt=textfmt, hoverfmt=hoverfmt)
+    if ma_window > 1:
+        for yr in years:
+            sub = df[df["연도"] == yr].sort_values(period_col).dropna(subset=[val_col])
+            if len(sub) >= ma_window:
+                ma = sub[val_col].rolling(ma_window, min_periods=1).mean()
+                st_ = year_line_style(yr, latest)
+                fig.add_trace(go.Scatter(
+                    x=sub[period_col], y=ma, name=f"{yr}년 {ma_window}주MA", mode="lines",
+                    line=dict(color=st_["color"], width=1.2, dash="dot"), opacity=0.7,
+                ))
     if ticklabels:
         vals = sorted(ticklabels.keys())
         fig.update_xaxes(tickvals=vals, ticktext=[ticklabels[v] for v in vals])
-    base_layout(fig, title, height)
+    base_layout(fig, title, height, unified=True)
     return fig
 
 
@@ -800,21 +839,15 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         d["_ax"] = d["기간_일자"] + pd.to_timedelta((cur_year - d["_yr"]) * 364, unit="D")
         d = d.sort_values("_ax")
         fig = go.Figure()
-        # 점이 너무 많으면 라벨이 겹치므로 40개 이하일 때만 값 표시
+        # 점이 너무 많으면 라벨이 겹치므로 40개 이하일 때만 (당해년도 선에) 값 표시
         show_text = d["_ax"].nunique() <= 40
-        for i, yr in enumerate(sorted(d["_yr"].unique())):
+        rows = []
+        for yr in sorted(d["_yr"].unique()):
             sub = d[d["_yr"] == yr]
             hov = [_date_label_kr(t) for t in sub["기간_일자"]]  # 실제(전년) 날짜+요일
-            fig.add_trace(go.Scatter(
-                x=sub["_ax"], y=sub[val_col], name=f"{yr}년",
-                mode="lines+markers+text" if show_text else "lines+markers",
-                line=dict(color=YEAR_COLORS[i % len(YEAR_COLORS)], width=1.8),
-                marker=dict(size=4),
-                texttemplate=(f"%{{y:{lbl_fmt}}}" if show_text else None),
-                textposition="top center", textfont=dict(size=8),
-                customdata=hov,
-                hovertemplate="%{customdata}<br>%{y:" + lbl_fmt + "}<extra>%{fullData.name}</extra>",
-            ))
+            rows.append((int(yr), sub["_ax"].tolist(), sub[val_col].tolist(), hov))
+        add_year_traces(fig, rows, cur_year, textfmt=(lbl_fmt if show_text else None),
+                        hoverfmt=lbl_fmt)
         # x축 눈금: 현재년도 날짜에 요일 병기(과밀 방지 위해 최대 ~15개만 라벨)
         axdays = sorted(pd.Series(d["_ax"].dt.normalize().unique()))
         if 0 < len(axdays) <= 40:
@@ -824,7 +857,7 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
                 tickvals=ticks,
                 ticktext=[_date_label_kr(t, short=True) for t in ticks],
             )
-        base_layout(fig, title, height)
+        base_layout(fig, title, height, unified=True)
     else:
         # 주 / 주(최근10주): 주 단위 일평균 (누적 모드면 주 합계)
         d = agg(df, ["연도", "주차번호"]).sort_values(["연도", "주차번호"])
@@ -865,7 +898,7 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
         # 겹치므로 40개 이하일 때만 노출한다(넘으면 hover로만 표시).
         show_text = d["주차번호"].nunique() <= 40
         fig = yoy_overlay_fig(d, "주차번호", val_col, title, ticklabels=wk_labels,
-                              height=height, textfmt=(lbl_fmt if show_text else None))
+                              height=height, textfmt=(lbl_fmt if show_text else None), hoverfmt=lbl_fmt)
     if tickfmt:
         fig.update_yaxes(tickformat=tickfmt)
     return fig
@@ -1350,17 +1383,32 @@ def label_traces(fig, fmt=",.0f", size=9):
     return fig
 
 
-def base_layout(fig, title="", height=400):
+def base_layout(fig, title="", height=400, unified=False):
+    """그래프 공통 양식 — 광고 채널 신규/첫구매 대시보드와 동일한 톤
+    (밝은 면 배경, 가로 격자선만, 옅은 축 글자, 크로스헤어 통합 툴팁)."""
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14, color="#1E293B")),
+        title=dict(text=title, font=dict(size=13, color=CH_INK), x=0, xanchor="left",
+                   y=0.97, yanchor="top"),
         height=height,
-        paper_bgcolor="white", plot_bgcolor="#F8FAFC",
-        font=dict(family="Pretendard, Apple SD Gothic Neo, sans-serif", size=12),
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(gridcolor="#E2E8F0", linecolor="#CBD5E1"),
-        yaxis=dict(gridcolor="#E2E8F0", linecolor="#CBD5E1"),
+        paper_bgcolor=CH_SURFACE, plot_bgcolor=CH_SURFACE,
+        font=dict(family="Pretendard, Apple SD Gothic Neo, Malgun Gothic, sans-serif",
+                  size=11, color=CH_INK2),
+        margin=dict(l=10, r=12, t=56, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                    font=dict(size=11, color=CH_INK2), bgcolor="rgba(0,0,0,0)",
+                    traceorder="reversed"),
+        hoverlabel=dict(bgcolor=CH_SURFACE, bordercolor="rgba(11,11,11,.10)",
+                        font=dict(size=12, color=CH_INK)),
+        xaxis=dict(showgrid=False, linecolor=CH_AXIS, ticks="", zeroline=False,
+                   tickfont=dict(size=10.5, color=CH_MUTED)),
+        yaxis=dict(showgrid=True, gridcolor=CH_GRID, gridwidth=1, zeroline=True,
+                   zerolinecolor=CH_AXIS, zerolinewidth=1, linecolor="rgba(0,0,0,0)",
+                   tickfont=dict(size=10.5, color=CH_MUTED)),
     )
+    if unified:  # 연도 비교 선 그래프: 크로스헤어 + 연도별 값을 한 툴팁에
+        fig.update_layout(hovermode="x unified")
+        fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1,
+                         spikecolor=CH_AXIS, spikedash="solid", spikesnap="cursor")
     return fig
 
 
