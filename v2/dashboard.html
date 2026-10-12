@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DA 광고 실적 대시보드</title>
 <style>
-/* 색 토큰 — 화이트 배경 + 강조색 1개(data-accent: blue · red · pink). 증감은 초록(+) · 주황(△) 배지 */
+/* 색 토큰 — 네이비 상단바 + 화이트 본문 + 파란 강조. 증감은 초록(+) · 주황(△) 배지 */
 :root{
   color-scheme:light;
   --page:#ffffff; --surface:#ffffff; --surface-2:#f3f5f7; --ink:#16202b; --ink-2:#44505c; --muted:#808b96;
@@ -14,8 +14,6 @@
   --accent:#2563eb; --accent-ink:#ffffff; --accent-soft:rgba(37,99,235,.08); --head:#f5f8ff;
   --c1:var(--accent); --c4:#eda100; --wash:var(--accent-soft); --sel:color-mix(in srgb,var(--accent) 18%,transparent);
 }
-:root[data-accent="red"]{--accent:#d92d3a; --accent-soft:rgba(217,45,58,.07); --head:#fff6f6; --neg:#c2410c; --neg-bg:rgba(194,65,12,.10)}
-:root[data-accent="pink"]{--accent:#db2777; --accent-soft:rgba(219,39,119,.07); --head:#fff5f9}
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
@@ -120,7 +118,6 @@ main section+section{margin-top:12px}
 .yt{text-anchor:end}
 .endl{font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
-.area{stroke:none}
 .dot{stroke:var(--surface);stroke-width:2}
 .evl{stroke:var(--ev);stroke-width:1;stroke-dasharray:3 3}
 .evt{fill:var(--ev);font-size:10px}
@@ -166,10 +163,20 @@ body.dragging .drop-empty,body.dragging main{outline:3px dashed var(--c1);outlin
 .grp{display:flex;align-items:center;gap:8px;margin:18px 0 8px;font-size:13px;font-weight:700;color:var(--ink-2)}
 .grp::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent)}
 .grp::after{content:"";flex:1;height:1px;background:var(--grid)}
-.accents{display:inline-flex;gap:6px;align-items:center;margin-right:6px}
-.accents button{width:16px;height:16px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--border);cursor:pointer;padding:0}
-.accents button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
-.later{font-size:12px;color:var(--muted);padding:2px 0 10px}
+/* 상단바: 진한 네이비 + 흰 글씨, 선택 = 강조색 */
+header.top{background:#1b2437;border-bottom:0}
+header.top .brand h1{color:#fff}
+header.top .asof,header.top .field,header.top .flabel,header.top .hint{color:#9aa6bd}
+header.top .menu button{color:#c3cbe0}
+header.top .menu button:hover{background:rgba(255,255,255,.08)}
+header.top .menu button[aria-pressed="true"]{background:#fff;color:#1b2437}
+header.top .seg button,header.top .btn,header.top select,header.top .filt-tg,header.top input,header.top .chip{background:rgba(255,255,255,.07);color:#dfe5f1;border-color:rgba(255,255,255,.14)}
+header.top .seg button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+header.top .filt-sum{color:#9aa6bd}
+header.top select option{color:#16202b}
+header.top .chip[aria-pressed="true"]{background:rgba(255,255,255,.16);color:#fff;border-color:rgba(255,255,255,.4)}
+header.top #filtRows{border-top-color:rgba(255,255,255,.12)}
+header.top .lnk{color:#c3cbe0;text-decoration-color:rgba(255,255,255,.3)}
 </style>
 </head>
 <body>
@@ -181,7 +188,7 @@ body.dragging .drop-empty,body.dragging main{outline:3px dashed var(--c1);outlin
         <button data-page="summary">요약</button>
         <button data-page="period">기간별 실적</button>
       </nav>
-      <div class="bk-tools"><span class="accents" role="group" aria-label="강조색"><button data-accent="blue" style="background:#2563eb" title="파랑"></button><button data-accent="red" style="background:#d92d3a" title="빨강"></button><button data-accent="pink" style="background:#db2777" title="핑크"></button></span>
+      <div class="bk-tools">
         <button class="btn" id="btnSave" type="button" title="이 브라우저에 저장된 데이터를 파일로 받아 두기 (다른 PC · 브라우저로 옮길 때)" hidden>백업 내려받기</button>
         <button class="btn" id="btnOpen" type="button" title="PC에서 만든 백업(.json.gz)을 저장된 데이터에 합치기 (같은 날짜는 교체)">백업 파일 열기</button>
         <input type="file" id="fileOpen" accept=".gz,.json,application/json,application/gzip" hidden>
@@ -230,11 +237,11 @@ const FILT_DIMS = [['ch', '채널'], ['md', '매체'], ['pr', '상품'], ['bpu',
 const NAME_DIMS = [['camp', '캠페인'], ['sub', '하위캠페인'], ['bp', '브랜드/기획전'], ['pno', '기획전번호']];
 const RANGES = { month: [[13, '13개월'], [25, '25개월'], ['all', '전체']], week: [[8, '8주'], [13, '13주'], [26, '26주'], [53, '53주']], day: [[14, '14일'], [31, '31일'], [60, '60일'], [92, '92일']] };
 // 요약 화면 타일 · 차트 묶음
-const GROUPS = [['광고비 · 매출', ['cost', 'nrev', 'roas', 'trev', 'troas', 'npr']], ['유입 · 전환', ['uv', 'ctr', 'cpc', 'cpuv', 'crt', 'aovt']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr']]];
+const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr']]];
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr'];
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 13, day: 31 }, bucket: 'TOTAL',
-  filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, accent: 'blue' };
+  filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -359,10 +366,6 @@ function lineChart(el, o) {
   for (const s of vis) {
     let d = '', pen = false;
     s.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv == null) { pen = false; return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(sv).toFixed(1); pen = true; });
-    if (!s.dash && d && !d.slice(1).includes('M')) {   // 끊김 없는 실적 선 아래를 옅게 채운다
-      const pts = s.values.map((v, i) => [i, C.scaled(m, v)]).filter(([, v]) => v != null), base = y(Math.max(y0, Math.min(0, y1)));
-      g += `<path class="area" d="${d} L${x(pts[pts.length - 1][0]).toFixed(1)} ${base} L${x(pts[0][0]).toFixed(1)} ${base} Z" fill="var(${s.color})" fill-opacity=".08"/>`;
-    }
     g += `<path class="ln" d="${d}" stroke="var(${s.color})" stroke-width="${s.width || 2}"${s.dash ? ' stroke-dasharray="4 3"' : ''}/>`;
     const li = s.values.length - 1, lv = C.scaled(m, s.values[li]);
     if (lv != null) { if (!s.dash) g += `<circle class="dot" cx="${x(li)}" cy="${y(lv)}" r="4" fill="var(${s.color})"/>`; ends.push({ y: y(lv), s, v: s.values[li] }); }
@@ -580,8 +583,6 @@ document.addEventListener('keydown', e => {
 // 화면 전환 · 상단 컨트롤
 // ════════════════════════════════════════════════════════════════════
 function syncBar() {
-  document.documentElement.dataset.accent = S.accent || 'blue';
-  document.querySelectorAll('[data-accent]').forEach(b => { if (b.tagName === 'BUTTON') b.setAttribute('aria-pressed', b.dataset.accent === S.accent); });
   document.querySelectorAll('[data-page]').forEach(b => b.setAttribute('aria-pressed', b.dataset.page === S.page));
   if (S.cmp === 'yoy2' && !hasYoy2()) S.cmp = 'yoy';
   document.querySelectorAll('[data-set]').forEach(b => b.setAttribute('aria-pressed', S[b.dataset.set] === b.dataset.v));
@@ -622,7 +623,6 @@ document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
   const ds = t.dataset;
-  if (ds.accent && t.closest('.accents')) { S.accent = ds.accent; syncBar(); save(); return; }
   if (ds.page) { S.page = ds.page; render(); window.scrollTo(0, 0); return; }
   if (ds.set) { S[ds.set] = ds.v; if (ds.set === 'grain') S.at = ''; render(true); return; }
   if (ds.bucket != null) { S.bucket = ds.bucket; render(true); return; }
