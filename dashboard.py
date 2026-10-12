@@ -1909,6 +1909,75 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
     _raw_dl(cur, f"{tab_key}_월별요약")
 
 
+# ──────────────────────────────────────────────────────────
+# 분석 메모: 지표별 추이 상단에 보고용 텍스트를 함께 노출(시트별 저장)
+# ──────────────────────────────────────────────────────────
+import os as _os
+_MEMO_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "memos.json")
+
+_MEMO_DEFAULTS = {
+    "cg": """□ 10월 L+슈퍼위크(10/5~11): ROAS 개선
+전년 L+슈퍼위크 기간 대비 광고비 (=), 거래액 +8%, ROAS +8%
+
+개선 원인 ① 아울렛수입브랜드페스타에 예산 집중
+광고비 7.0백만(22%), 거래액 63.8백만(39%), ROAS 915%, 객단가 29.8만원
+전년 같은 유형(수입아우터페스타)은 광고비 2.3백만(7%), ROAS 524%
+올해는 비중을 3배로 키웠고 효율도 더 좋았음
+
+개선 원인 ② L+슈퍼위크 ROAS +32%. 아울렛 구좌가 견인
+L+슈퍼위크 광고비 6.5백만, 거래액 32.7백만, ROAS 504% (+32%)
+객단가 15.4만원 → 20.1만원, CR 0.78% → 0.88%
+올해는 '아울렛/기획전상단' 구좌를 별도 소재로 운영
+(아울렛 ROAS 587%, 메인기획전 ROAS 425%)
+(아울렛 구좌 광고비 비중 49%, 거래액 비중 57%)
+
+개선 원인 ③ 한글날 연휴(10/9~11) 저예산 운영
+연휴 일 광고비 3.1백만(평일 5.6백만), ROAS 644%(평일 ROAS 463%)""",
+}
+
+
+def _memo_load() -> dict:
+    try:
+        with open(_MEMO_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _memo_save(key: str, text: str):
+    data = _memo_load()
+    data[key] = text
+    try:
+        with open(_MEMO_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # 저장 불가 환경이면 세션 내에서만 유지
+
+
+def render_memo(key: str, title: str = "📝 분석 메모"):
+    """접었다 펼 수 있는 분석 메모. 보기 모드에선 텍스트만 노출(보고용),
+    '편집'을 켜면 입력창이 열리고 저장 시 파일+세션에 보관한다."""
+    sk = f"memo_text_{key}"
+    if sk not in st.session_state:
+        st.session_state[sk] = _memo_load().get(key, _MEMO_DEFAULTS.get(key, ""))
+    text = st.session_state[sk]
+    with st.expander(title, expanded=bool(text.strip())):
+        editing = st.toggle("✏️ 편집", value=False, key=f"memo_edit_{key}")
+        if editing:
+            new = st.text_area("메모 내용", value=text, height=320,
+                               key=f"memo_area_{key}", label_visibility="collapsed")
+            if st.button("💾 저장", key=f"memo_save_{key}"):
+                st.session_state[sk] = new
+                _memo_save(key, new)
+                del st.session_state[f"memo_edit_{key}"]
+                st.rerun()
+        elif text.strip():
+            # 줄바꿈 그대로 보이도록 마크다운 강제 개행 처리
+            st.markdown(text.replace("\n", "  \n"))
+        else:
+            st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요.")
+
+
 def _render_trend_grid(df, targets, src="TOTAL"):
     """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
     '누적으로 보기' 토글로 일평균 ↔ 월 합계값 보기를 전환한다."""
@@ -1918,6 +1987,7 @@ def _render_trend_grid(df, targets, src="TOTAL"):
              "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
     per_row = 3  # 한 행에 3개 고정
     mode = "월 · 합계" if cumulative else "월 · 일평균"
+    render_memo("summary")
     st.markdown(f"#### 📈 지표별 추이 ({mode}) · 비용출처: {src}")
     if cumulative:
         st.caption("월별 **합계**(볼륨 지표는 월 합계값). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
@@ -2278,6 +2348,7 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
         mode_note = "" if gran == "일" else " · 합계"
     else:
         mode_note = "" if gran == "일" else " · 일평균"
+    render_memo(f"period_{key_prefix}")
     st.markdown(f"#### 📈 지표별 추이 ({gran}{mode_note}) · 비용출처: {src}")
     st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
     df_tab = _filter_cost(df, src)
@@ -4276,6 +4347,7 @@ def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: di
 
     # ── 지표별 추이 그래프 (일자별, 실적 vs 비교)
     st.divider()
+    render_memo("cg")
     st.markdown(f"#### 📈 지표별 추이 (일별) · 비용출처: {src}")
     st.caption("x축은 실적 기간 날짜입니다. 비교 기간은 같은 순번의 날짜(1일차↔1일차)로 겹쳐 그리며, "
                "마우스를 올리면 두 기간의 실제 날짜와 값이 함께 보입니다.")
