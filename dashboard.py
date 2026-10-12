@@ -1962,19 +1962,24 @@ def render_memo(key: str, title: str = "📝 분석 메모"):
         st.session_state[sk] = _memo_load().get(key, _MEMO_DEFAULTS.get(key, ""))
     text = st.session_state[sk]
     with st.expander(title, expanded=bool(text.strip())):
-        editing = st.toggle("✏️ 편집", value=False, key=f"memo_edit_{key}")
+        # 세션 재대입(_persist_widget_state)과 충돌하지 않도록 value 인자 없이 키로만 초기값 지정
+        ak = f"memo_area_{key}"
+        editing = st.toggle("✏️ 편집", key=f"memo_edit_{key}")
         if editing:
-            new = st.text_area("메모 내용", value=text, height=320,
-                               key=f"memo_area_{key}", label_visibility="collapsed")
+            if ak not in st.session_state:
+                st.session_state[ak] = text
+            new = st.text_area("메모 내용", height=320, key=ak, label_visibility="collapsed")
             if st.button("💾 저장", key=f"memo_save_{key}"):
                 st.session_state[sk] = new
                 _memo_save(key, new)
                 del st.session_state[f"memo_edit_{key}"]
                 st.rerun()
-        elif text.strip():
+        else:
+            st.session_state.pop(ak, None)  # 다음 편집 때 저장된 내용으로 다시 시작
+        if not editing and text.strip():
             # 줄바꿈 그대로 보이도록 마크다운 강제 개행 처리
             st.markdown(text.replace("\n", "  \n"))
-        else:
+        elif not editing:
             st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요.")
 
 
@@ -4721,8 +4726,9 @@ def _is_button_key(k: str) -> bool:
     재대입 시 StreamlitValueAssignmentNotAllowedError가 난다.
     - 날짜 프리셋 버튼: '{prefix}_btn_{label}'  → '_btn_' 포함
     - 원본 CSV 다운로드 버튼: 'rawdl_*'
-    - 커스텀 CSV 다운로드 버튼: 'cu_csv'"""
-    return ("_btn_" in k) or k.startswith("rawdl_") or k == "cu_csv"
+    - 커스텀 CSV 다운로드 버튼: 'cu_csv'
+    - 메모 저장 버튼: 'memo_save_*'"""
+    return ("_btn_" in k) or k.startswith("rawdl_") or k == "cu_csv" or k.startswith("memo_save_")
 
 
 def _persist_widget_state():
