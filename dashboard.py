@@ -4125,6 +4125,175 @@ def page_yoy(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
 
 
 # ───────────────────────────────────────────────
+# 커스텀 그래프: 실적 기간 ↔ 비교 기간을 직접 골라 요약표·지표별 추이 비교
+# ───────────────────────────────────────────────
+def _cg_range_input(label, default, lo, hi, key):
+    """기간(시작~끝) 입력. 한쪽만 고른 중간 상태면 None."""
+    v = st.date_input(label, value=default, min_value=lo, max_value=hi, key=key,
+                      format="YYYY/MM/DD")
+    if isinstance(v, (list, tuple)):
+        if len(v) != 2:
+            return None
+        s_, e_ = v
+    else:
+        s_ = e_ = v
+    s_, e_ = pd.Timestamp(s_), pd.Timestamp(e_)
+    return (s_, e_) if s_ <= e_ else (e_, s_)
+
+
+def _cg_period_text(rng):
+    s_, e_ = rng
+    if s_ == e_:
+        return _date_label_kr(s_)
+    return f"{_date_label_kr(s_)} ~ {_date_label_kr(e_)} ({(e_ - s_).days + 1}일)"
+
+
+def _cg_total(dfx):
+    """기간 전체 합계 KPI Series (데이터 없으면 None)."""
+    if dfx.empty:
+        return None
+    return agg(dfx.assign(_a="_"), ["_a"]).iloc[0]
+
+
+def _cg_fig(labels, hov_cur, hov_cmp, cur_vals, cmp_vals, title, tickfmt=None):
+    """실적(파랑 실선) vs 비교(진한 회색 실선) — 추이 그래프 공통 양식."""
+    fig = go.Figure()
+    xs = list(range(len(labels)))
+    lbl_fmt = tickfmt or ",.0f"
+    show_text = len(xs) <= 40
+    fig.add_trace(go.Scatter(
+        x=xs, y=cmp_vals, name="비교 기간", mode="lines",
+        line=dict(color=CH_PREV, width=2), customdata=hov_cmp,
+        hovertemplate="%{customdata} · %{y:" + lbl_fmt + "}<extra>비교 기간</extra>"))
+    fig.add_trace(go.Scatter(
+        x=xs, y=cur_vals, name="실적 기간", mode="lines+text" if show_text else "lines",
+        line=dict(color=CH_CUR, width=2.6), customdata=hov_cur,
+        texttemplate=(f"%{{y:{lbl_fmt}}}" if show_text else None),
+        textposition="top center", textfont=dict(size=9, color=CH_CUR),
+        hovertemplate="%{customdata} · %{y:" + lbl_fmt + "}<extra>실적 기간</extra>"))
+    last = max((i for i, v in enumerate(cur_vals) if v is not None and not pd.isna(v)),
+               default=None)
+    if last is not None:
+        fig.add_trace(go.Scatter(
+            x=[last], y=[cur_vals[last]], mode="markers", showlegend=False, hoverinfo="skip",
+            marker=dict(size=9, color=CH_CUR, line=dict(color=CH_SURFACE, width=2))))
+    step = max(1, -(-len(xs) // 12))
+    fig.update_xaxes(tickvals=xs[::step], ticktext=labels[::step])
+    base_layout(fig, title, 320, unified=True)
+    if tickfmt:
+        fig.update_yaxes(tickformat=tickfmt)
+    return fig
+
+
+def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
+    st.header("📈 커스텀 그래프")
+    st.caption("**실적 기간**과 **비교 기간**을 직접 골라 실적 요약표와 지표별 추이 그래프로 비교합니다. "
+               "두 기간은 날짜 순서대로 하루씩 짝지어 비교하고(1일차↔1일차), TOTAL은 기간 전체 합계끼리 비교합니다.")
+    if df.empty:
+        st.warning("데이터가 없습니다.")
+        return
+    base = page_filters(df, "cgf", expanded=False)
+    if base.empty:
+        st.warning("필터 조건에 맞는 데이터가 없습니다.")
+        return
+
+    lo = base["기간_일자"].min().date()
+    hi = base["기간_일자"].max().date()
+    d_hi = pd.Timestamp(hi)
+    d_cur_s = max(d_hi - pd.Timedelta(days=6), pd.Timestamp(lo))
+    d_cmp_s, d_cmp_e = d_cur_s - pd.Timedelta(days=364), d_hi - pd.Timedelta(days=364)
+    d_cmp_s = max(d_cmp_s, pd.Timestamp(lo))
+    d_cmp_e = max(d_cmp_e, d_cmp_s)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        cur_rng = _cg_range_input("📅 실적 기간", (d_cur_s.date(), d_hi.date()), lo, hi, "cg_cur")
+    with c2:
+        cmp_rng = _cg_range_input("🔁 비교 기간", (d_cmp_s.date(), d_cmp_e.date()), lo, hi, "cg_cmp")
+    if cur_rng is None or cmp_rng is None:
+        st.info("기간의 시작일과 종료일을 모두 선택해 주세요.")
+        return
+
+    src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key="cg_src")
+    df_tab = _filter_cost(base, src)
+
+    cur_days = list(pd.date_range(*cur_rng))
+    cmp_days = list(pd.date_range(*cmp_rng))
+    n = max(len(cur_days), len(cmp_days))
+    if len(cur_days) != len(cmp_days):
+        st.caption(f"ℹ️ 두 기간의 일수가 다릅니다(실적 {len(cur_days)}일 · 비교 {len(cmp_days)}일). "
+                   "짝이 없는 날은 ‘–’로 표시되며, TOTAL은 각 기간 전체 합계로 비교합니다.")
+    st.markdown(f"**실적 기간** {_cg_period_text(cur_rng)} &nbsp;vs&nbsp; "
+                f"**비교 기간** {_cg_period_text(cmp_rng)} · 비용출처: {src}")
+
+    in_cur = df_tab[df_tab["기간_일자"].between(*cur_rng)]
+    in_cmp = df_tab[df_tab["기간_일자"].between(*cmp_rng)]
+    if in_cur.empty and in_cmp.empty:
+        st.warning("선택한 두 기간 모두 데이터가 없습니다.")
+        return
+    cur_map = {pd.Timestamp(r["기간_일자"]).normalize(): r
+               for _, r in agg(in_cur, ["기간_일자"]).iterrows()} if not in_cur.empty else {}
+    cmp_map = {pd.Timestamp(r["기간_일자"]).normalize(): r
+               for _, r in agg(in_cmp, ["기간_일자"]).iterrows()} if not in_cmp.empty else {}
+
+    def _day(lst, i):
+        return lst[i] if i < len(lst) else None
+
+    rows, labels, hov_cur, hov_cmp = [], [], [], []
+    for i in range(n):
+        dc, dp = _day(cur_days, i), _day(cmp_days, i)
+        lab = (f"{_date_label_kr(dc, True) if dc is not None else '–'} vs "
+               f"{_date_label_kr(dp, True) if dp is not None else '–'}")
+        rows.append((lab, cur_map.get(dc) if dc is not None else None,
+                     cmp_map.get(dp) if dp is not None else None, {}, False))
+        labels.append(_date_label_kr(dc, True) if dc is not None else f"D{i + 1}")
+        hov_cur.append(_date_label_kr(dc) if dc is not None else "")
+        hov_cmp.append(_date_label_kr(dp) if dp is not None else "")
+    rows.append(("TOTAL", _cg_total(in_cur), _cg_total(in_cmp), {}, False))
+
+    # ── 실적 요약표 (실적 · 비교비 2줄 헤더) + 상세 실적표
+    st.markdown("##### 📋 실적 요약 (실적 기간 vs 비교 기간)")
+    groups = ("실적", "전년비")
+    tbl = summary_table(rows, DEFAULT_METRICS, groups, period_type="일자(실적 vs 비교)",
+                        add_total=False)
+    tbl = tbl.rename(columns={"전년비": "비교비"}, level=0)
+    sub = [("비교비", m) for m in DEFAULT_METRICS]
+    st.dataframe(tbl.style.map(chg_style, subset=sub).apply(_hl_total_row, axis=1),
+                 use_container_width=True, hide_index=True,
+                 height=_fit_height(len(rows), header_rows=2))
+
+    st.markdown("##### 📄 상세 실적 (전 지표)")
+    det_rows = []
+    for lab, cs, ps, _t, _b in [rows[-1]]:
+        det_rows += [("실적 기간 TOTAL", cs), ("비교 기간 TOTAL", ps)]
+    dt_ = detail_table([(l, s_) for l, s_ in det_rows if s_ is not None],
+                       period_label="구분", add_total=False)
+    dyt = detail_table_yoy([("비교비 (실적/비교−1)", rows[-1][1], rows[-1][2], False)],
+                           period_label="구분", add_total=False)
+    both = pd.concat([dt_, dyt], ignore_index=True)
+    st.dataframe(both.style.map(chg_style, subset=DETAIL_COLS),
+                 use_container_width=True, hide_index=True, height=_fit_height(len(both)))
+
+    # ── 지표별 추이 그래프 (일자별, 실적 vs 비교)
+    st.divider()
+    st.markdown(f"#### 📈 지표별 추이 (일별) · 비용출처: {src}")
+    st.caption("x축은 실적 기간 날짜입니다. 비교 기간은 같은 순번의 날짜(1일차↔1일차)로 겹쳐 그리며, "
+               "마우스를 올리면 두 기간의 실제 날짜와 값이 함께 보입니다.")
+    mlist = list(SUMMARY_CHART_METRICS.items())
+    per_row = 3
+    for i in range(0, len(mlist), per_row):
+        ccols = st.columns(per_row)
+        for (lbl, col), cc in zip(mlist[i:i + per_row], ccols):
+            cur_vals = [(r[1].get(col, np.nan) if r[1] is not None else None) for r in rows[:-1]]
+            cmp_vals = [(r[2].get(col, np.nan) if r[2] is not None else None) for r in rows[:-1]]
+            with cc:
+                st.plotly_chart(
+                    _cg_fig(labels, hov_cur, hov_cmp, cur_vals, cmp_vals, lbl,
+                            tickfmt=RATIO_TICKFMT.get(col)),
+                    use_container_width=True, key=f"cg_chart_{col}")
+
+
+# ───────────────────────────────────────────────
 # 커스텀 실적 (피벗형: 차원/지표/필터를 자유 조합)
 # ───────────────────────────────────────────────
 
@@ -4471,7 +4640,7 @@ def build_html_report(df: pd.DataFrame) -> str:
 # '필터 초기화' 버튼은 아래 접두어에 해당하는 키만 지운다.
 _FILTER_KEY_PREFIXES = (
     "sumf", "medf", "campf", "bpuf", "wkf", "mof", "dyf", "cuf", "crf", "drillf",
-    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy", "drill",
+    "sum", "med", "camp", "bpu", "cr", "cu", "wk", "mo", "dy", "drill", "cgf", "cg",
 )
 
 
@@ -4602,6 +4771,7 @@ def main():
             "📊 전체 요약", "🌳 펼쳐보기 실적", "🆚 전년비 리포트",
             "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적",
             "📡 매체별 실적", "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
+            "📈 커스텀 그래프",
         ], label_visibility="collapsed")
         st.caption("필터는 페이지를 옮겨도 유지됩니다.")
         if st.button("🧹 필터 초기화", use_container_width=True,
@@ -4631,6 +4801,8 @@ def main():
         page_creative(pre_date_filtered)
     elif page == "🧩 커스텀 실적":
         page_custom(pre_date_filtered, targets, report_targets)
+    elif page == "📈 커스텀 그래프":
+        page_custom_graph(pre_date_filtered, targets, report_targets)
 
 
 if st.runtime.exists():
