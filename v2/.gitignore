@@ -1,0 +1,7 @@
+raw/
+data/
+backup/
+*.json.gz
+__pycache__/
+node_modules/
+tests/local/
