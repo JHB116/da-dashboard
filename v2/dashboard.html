@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DA 광고 실적 대시보드</title>
 <style>
-/* 색 토큰 — 네이비 상단바 + 화이트 본문 + 파란 강조. 증감은 초록(+) · 주황(△) 배지 */
+/* 색 토큰 (아래 '기존 DA 대시보드 스타일'이 덮어씀) */
 :root{
   color-scheme:light;
   --page:#ffffff; --surface:#ffffff; --surface-2:#f3f5f7; --ink:#16202b; --ink-2:#44505c; --muted:#808b96;
@@ -84,7 +84,7 @@ select{cursor:pointer;max-width:260px}
 .btn.pri{background:var(--c1);color:#fff;border-color:var(--c1)}
 
 /* 요약 타일 */
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
 .tile{padding:11px 14px 10px;border:1px solid var(--border);border-radius:14px;background:var(--surface);min-width:0}
 .t-l{font-size:12px;color:var(--ink-2)}
 .t-v{font-size:21px;font-weight:650;letter-spacing:-.01em;margin:2px 0 3px;white-space:nowrap;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
@@ -163,20 +163,43 @@ body.dragging .drop-empty,body.dragging main{outline:3px dashed var(--c1);outlin
 .grp{display:flex;align-items:center;gap:8px;margin:18px 0 8px;font-size:13px;font-weight:700;color:var(--ink-2)}
 .grp::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent)}
 .grp::after{content:"";flex:1;height:1px;background:var(--grid)}
-/* 상단바: 진한 네이비 + 흰 글씨, 선택 = 강조색 */
-header.top{background:#1b2437;border-bottom:0}
-header.top .brand h1{color:#fff}
-header.top .asof,header.top .field,header.top .flabel,header.top .hint{color:#9aa6bd}
-header.top .menu button{color:#c3cbe0}
-header.top .menu button:hover{background:rgba(255,255,255,.08)}
-header.top .menu button[aria-pressed="true"]{background:#fff;color:#1b2437}
-header.top .seg button,header.top .btn,header.top select,header.top .filt-tg,header.top input,header.top .chip{background:rgba(255,255,255,.07);color:#dfe5f1;border-color:rgba(255,255,255,.14)}
-header.top .seg button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
-header.top .filt-sum{color:#9aa6bd}
-header.top select option{color:#16202b}
-header.top .chip[aria-pressed="true"]{background:rgba(255,255,255,.16);color:#fff;border-color:rgba(255,255,255,.4)}
-header.top #filtRows{border-top-color:rgba(255,255,255,.12)}
-header.top .lnk{color:#c3cbe0;text-decoration-color:rgba(255,255,255,.3)}
+/* 기존 DA 대시보드(dashboard.py) 스타일 — 연회색 상단 · 흰 카드 · 격자 표, 선택 = 파랑 */
+:root,:root[data-theme]{--page:#ffffff;--surface:#ffffff;--surface-2:#F0F2F6;--ink:#0F172A;--ink-2:#334155;--muted:#64748B;--grid:#E2E8F0;--axis:#CBD5E1;--border:#E2E8F0;
+  --accent:#2563EB;--accent-soft:rgba(37,99,235,.06);--pos:#16A34A;--neg:#DC2626;--head:#F0F2F6;--prev:#6b6a66;--wash:#EFF6FF;--sel:rgba(37,99,235,.15);--c1:#2a78d6}
+body{font-family:"Source Sans Pro","Source Sans 3","Noto Sans KR","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+header.top{background:#F0F2F6!important;border-bottom:1px solid #E2E8F0!important}
+header.top .brand h1{color:#0F172A!important;font-size:21px}
+header.top .asof,header.top .field,header.top .flabel,header.top .hint,header.top .filt-sum{color:#64748B!important}
+header.top .menu{gap:18px}
+header.top .menu button{color:#334155!important;background:none!important;border-radius:0!important;margin:0!important;padding:15px 2px 12px!important;border-bottom:2px solid transparent!important;font-weight:500}
+header.top .menu button[aria-pressed="true"]{color:#2563EB!important;border-bottom-color:#2563EB!important;font-weight:600}
+header.top .seg{gap:6px}
+header.top .seg button,header.top .btn,header.top select,header.top .filt-tg,header.top input,header.top .chip{background:#fff!important;color:#31333F!important;border:1px solid rgba(49,51,63,.2)!important;border-radius:8px!important}
+header.top .seg button[aria-pressed="true"]{background:#2563EB!important;border-color:#2563EB!important;color:#fff!important}
+header.top .chip[aria-pressed="true"] i{background:#2563EB}
+header.top .lnk{color:#334155!important}
+.sec-h h2{font-size:19px;font-weight:600;color:#1E293B}
+.tiles{gap:8px}
+.tile{border:1px solid #E2E8F0;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);padding:9px 12px}
+.t-l{font-size:11.5px;color:#64748B;font-weight:500}
+.t-v{font-size:19px;font-weight:700;color:#0F172A}
+.t-r b{color:#334155}
+.bd{background:none!important;padding:0!important;font-weight:500!important}
+.grp{font-size:14px;font-weight:600;color:#334155;margin:16px 0 8px}
+.grp::before{display:none}
+.card{border-radius:10px;border-color:#E2E8F0;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.cc-t{font-size:13px}
+.tbl-wrap{border-radius:8px}
+.grid th,.grid td{border-right:1px solid #E2E8F0}
+.grid thead th{background:#F8FAFC!important;color:#64748B;font-weight:400}
+.grid thead th b{color:#475569;font-weight:600}
+.grid tbody tr:nth-child(even) td{background-image:none}
+.grid tr.tot td{background:#EEF2FF!important;font-weight:700;border-top:1px solid #E2E8F0}
+.grid tr.cur td{background-color:#F8FAFC}
+.grid td:first-child{background:#fff}
+/* 타일 아래 비교(전월비 · 전전년비 등)는 한 줄 */
+.t-r2{justify-content:flex-start;gap:10px;white-space:nowrap;font-size:11.5px}
+.t-r2>span{flex:none}
 </style>
 </head>
 <body>
@@ -424,7 +447,7 @@ function renderSummary(main) {
     const m = C.METRIC[k], v = val(m, sAt.cur), c = val(m, sAt.cmp);
     return `<div class="tile"><div class="t-l">${m.n}</div><div class="t-v" title="${esc(C.fmt(m, v, S.mode))} ${esc(C.unit(m, S.mode))}">${C.fmt(m, v, S.mode)}<small>${C.unit(m, S.mode)}</small></div>
       <div class="t-r"><span>${cmpN} <b>${C.fmt(m, c, S.mode)}</b></span><span>${deltaHTML(m, v, c)}</span></div>
-      <div class="t-r">${others.map(o => `<span>${deltaHTML(m, v, val(m, oth[o]), C.cmpLabel(o, S.grain))}</span>`).join('')}</div></div>`;
+      <div class="t-r t-r2">${others.map(o => `<span title="${C.cmpLabel(o, S.grain)}">${deltaHTML(m, v, val(m, oth[o]), C.cmpName(o, S.grain))}</span>`).join('')}</div></div>`;
   };
   let h = `<section><div class="sec-h"><h2>실적 요약 · ${esc(at.label)}${at.partial ? ' (진행 중)' : ''}</h2><span class="desc">${esc(at.range)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 집행 ${sAt.cur.days}일 · 비교 ${cmpN} ${sAt.cmp.days}일 · 비용출처 ${esc(S.bucket || '전체')}${filt ? ' · ' + esc(filt) : ''}</span></div>
     ${GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="tiles">${ks.map(tile).join('')}</div>`).join('')}</section>`;
