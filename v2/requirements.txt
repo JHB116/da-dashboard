@@ -1,0 +1,9 @@
+# v2 대시보드(app.py) 배포용 — 기존 dashboard.py 와 같은 버전 고정 (plotly 는 쓰지 않음)
+# 현재 정상 동작 확인된 버전으로 고정(재부팅 시 자동 업그레이드로 인한 갑작스런 breakage 방지)
+# 주의: numpy 2.5.x는 Python 3.12+ 전용이라 Streamlit Cloud(Python 3.11)에서 설치 실패 →
+#       앱이 "Oh no. Error running app"으로 크래시함. Python 3.11/3.12/3.13 모두 호환되는 2.4.6으로 고정.
+streamlit==1.59.2
+pandas==3.0.3
+numpy==2.4.6
+openpyxl==3.1.5
+pyxlsb==1.0.10
