@@ -2098,9 +2098,12 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                     d = [v for v in opts if str(v) in {str(x) for x in col_defaults[col]}]
                     if d:
                         default = d
+                k = f"{key_prefix}_{col}"
+                # 세션에 값이 이미 있으면 default 를 넘기지 않음
+                # (_persist_widget_state 재대입과 겹쳐 'default + Session State' 경고가 나는 것 방지)
+                kw = {} if k in st.session_state else {"default": default}
                 with c:
-                    sel = st.multiselect(label, opts, default=default,
-                                         key=f"{key_prefix}_{col}", placeholder=placeholder)
+                    sel = st.multiselect(label, opts, key=k, placeholder=placeholder, **kw)
                 # 비어있으면(전체) 필터 미적용, 일부 선택 시에만 필터
                 if sel and set(sel) != set(opts):
                     out = out[out[col].isin(sel)]
