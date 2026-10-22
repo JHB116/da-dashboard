@@ -1,0 +1,5 @@
+[server]
+# 배포 환경에서는 코드가 바뀌면 재배포로 반영되므로 파일 감시가 필요 없다.
+# 켜 두면 호스트 inotify 한도 초과(OSError: inotify watch limit reached)가 반복 발생한다.
+fileWatcherType = "none"
+runOnSave = false

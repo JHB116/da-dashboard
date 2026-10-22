@@ -1281,7 +1281,7 @@ def date_range_filter(df: pd.DataFrame, key_prefix: str = "dr",
             is_active = st.session_state.get(k_preset) == label
             if st.button(label, key=f"{key_prefix}_btn_{label}",
                          type="primary" if is_active else "secondary",
-                         use_container_width=True):
+                         width="stretch"):
                 st.session_state[k_start]  = _clamp(ps.date())
                 st.session_state[k_end]    = _clamp_end(pe.date())
                 st.session_state[k_preset] = label
@@ -1902,7 +1902,7 @@ def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_tar
         # 전체요약 월별 실적요약 표는 TOTAL 행 미표시
         tbl = summary_table(rows, metric_labels, groups, period_type="월", add_total=False)
         st.dataframe(_style_summary(tbl, metric_labels, groups),
-                     use_container_width=True, hide_index=True,
+                     width="stretch", hide_index=True,
                      height=_fit_height(len(rows), header_rows=2))
 
     _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
@@ -2013,7 +2013,7 @@ def _render_trend_grid(df, targets, src="TOTAL"):
                 fig = metric_trend_fig(df_tab, col, "월", f"{lbl} ({suffix})",
                                        height=chart_h, tickfmt=RATIO_TICKFMT.get(col),
                                        cumulative=cumulative)
-                st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
+                st.plotly_chart(fig, width="stretch", key=f"sum_chart_{col}")
 
 
 # 전체요약/주차별/일별 공용 필터 스펙
@@ -2076,7 +2076,7 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                 with st.expander(f"🔎 '{label}' 매칭 {len(matches):,}개 (여기서 제외할 항목 확인)",
                                  expanded=True):
                     st.dataframe(pd.DataFrame({label: matches}),
-                                 use_container_width=True, hide_index=True,
+                                 width="stretch", hide_index=True,
                                  height=min(len(matches) * 35 + 40, 280))
         # ── 그 외 필터(6열 그리드)
         for i in range(0, len(grid_specs), 6):
@@ -2098,9 +2098,12 @@ def page_filters(df: pd.DataFrame, key_prefix: str, expanded: bool = False,
                     d = [v for v in opts if str(v) in {str(x) for x in col_defaults[col]}]
                     if d:
                         default = d
+                key = f"{key_prefix}_{col}"
                 with c:
-                    sel = st.multiselect(label, opts, default=default,
-                                         key=f"{key_prefix}_{col}", placeholder=placeholder)
+                    # 세션에 값이 이미 있으면 default를 넘기지 않음(default+세션 동시 지정 경고 방지)
+                    sel = st.multiselect(label, opts,
+                                         default=None if key in st.session_state else default,
+                                         key=key, placeholder=placeholder)
                 # 비어있으면(전체) 필터 미적용, 일부 선택 시에만 필터
                 if sel and set(sel) != set(opts):
                     out = out[out[col].isin(sel)]
@@ -2127,7 +2130,7 @@ def _render_detail_tables(df):
         (rows_old if yr < latest_yr else rows_new).append((label, r))
 
     def _actual(rows):
-        st.dataframe(detail_table(rows), use_container_width=True, hide_index=True,
+        st.dataframe(detail_table(rows), width="stretch", hide_index=True,
                      height=_fit_height(len(rows)))
 
     st.markdown("##### 📄 월별 상세 실적")
@@ -2315,7 +2318,7 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
     def _show(rows):
         tbl = summary_table(rows, metric_labels, groups, period_type=ptype, add_total=True)
         st.dataframe(_style_summary(tbl, metric_labels, groups),
-                     use_container_width=True, hide_index=True,
+                     width="stretch", hide_index=True,
                      height=_fit_height(len(rows) + 1, header_rows=2))
 
     # 최근 기간이 맨 아래(오름차순)로 표시
@@ -2384,7 +2387,7 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
                 fig = metric_trend_fig(graph_src, col, gran, f"{lbl}{suffix}",
                                        height=320, tickfmt=RATIO_TICKFMT.get(col),
                                        cumulative=cumulative)
-                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
+                st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_chart_{col}")
 
 
 def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
@@ -2418,19 +2421,19 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     def _actual(rows):
         t = detail_table([(r[0], r[1]) for r in rows], period_label=ptype)
         st.dataframe(t.style.apply(_hl_total_row, axis=1),
-                     use_container_width=True, hide_index=True,
+                     width="stretch", hide_index=True,
                      height=_fit_height(len(rows) + 1))
 
     def _yoy(rows):
         t = detail_table_yoy([(r[0], r[1], r[2], r[3]) for r in rows], period_label=ptype)
         st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
-                     use_container_width=True, hide_index=True,
+                     width="stretch", hide_index=True,
                      height=_fit_height(len(rows) + 1))
 
     def _yoy2(rows):
         t = detail_table_yoy([(r[0], r[1], r[4], r[5]) for r in rows], period_label=ptype)
         st.dataframe(t.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
-                     use_container_width=True, hide_index=True,
+                     width="stretch", hide_index=True,
                      height=_fit_height(len(rows) + 1))
 
     st.markdown(f"##### 📄 {gran}별 상세 실적 · 비용출처: {src}")
@@ -2553,26 +2556,26 @@ def render_group_sheet_body(df, group_col, order=None, ptype=None, prev_source=N
     grps = _groups_with_y2(("실적", "전년비"))
     tbl = summary_table(rows, DEFAULT_METRICS, grps, period_type=ptype, add_total=True)
     st.dataframe(_style_summary(tbl, DEFAULT_METRICS, grps),
-                 use_container_width=True, hide_index=True,
+                 width="stretch", hide_index=True,
                  height=_fit_height(nrow + 1, header_rows=2))
     st.caption("ℹ️ 전년비는 동요일 기준(-364일) 동기간 비교입니다.")
 
     st.markdown("##### 📄 상세 실적")
     dt = detail_table([(str(r[group_col]), r) for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dt.style.apply(_hl_total_row, axis=1),
-                 use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
+                 width="stretch", hide_index=True, height=_fit_height(nrow + 1))
 
     st.markdown("##### 📄 상세 실적 (전년비)")
     dyt = detail_table_yoy([(str(r[group_col]), r, prev_map.get(r[group_col]), False)
                             for _, r in cur.iterrows()], period_label=ptype)
     st.dataframe(dyt.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
-                 use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
+                 width="stretch", hide_index=True, height=_fit_height(nrow + 1))
     if Y2_ON:
         st.markdown("##### 📄 상세 실적 (전전년비 · 2년 전 동요일)")
         dyt2 = detail_table_yoy([(str(r[group_col]), r, prev2_map.get(r[group_col]), False)
                                  for _, r in cur.iterrows()], period_label=ptype)
         st.dataframe(dyt2.style.map(chg_style, subset=DETAIL_COLS).apply(_hl_total_row, axis=1),
-                     use_container_width=True, hide_index=True, height=_fit_height(nrow + 1))
+                     width="stretch", hide_index=True, height=_fit_height(nrow + 1))
     _raw_dl(cur, f"{ptype}별_실적")
 
 
@@ -2670,7 +2673,7 @@ def render_ranking_table(df, group_col, src_name, sort_label, sort_col,
                 if row.name == last_i else [""] * len(row))
 
     st.dataframe(table.style.apply(_hl, axis=1),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
     _raw_dl(cdf, f"랭킹_{'_'.join(group_cols)}_{src_name}_{sort_col}".replace("구분_", ""))
 
 
@@ -2714,7 +2717,7 @@ def page_media(df: pd.DataFrame):
                                textfont_size=10)
             base_layout(figd, dtitle, 340)
             figd.update_layout(showlegend=False)
-            st.plotly_chart(figd, use_container_width=True, key=f"media_donut_{col}")
+            st.plotly_chart(figd, width="stretch", key=f"media_donut_{col}")
     with d3:
         sub = by_media.dropna(subset=["순결제ROAS"]).head(12)
         figr = px.bar(sub.sort_values("순결제ROAS"), x="순결제ROAS", y="구분_매체명",
@@ -2723,7 +2726,7 @@ def page_media(df: pd.DataFrame):
         base_layout(figr, "매체별 순결제ROAS", 340)
         figr.update_layout(showlegend=False)
         label_traces(figr, ".0%")
-        st.plotly_chart(figr, use_container_width=True, key="media_roas_bar")
+        st.plotly_chart(figr, width="stretch", key="media_roas_bar")
 
     mc = by_media.dropna(subset=["순결제ROAS"]).head(15)
     figc = make_subplots(specs=[[{"secondary_y": True}]])
@@ -2740,7 +2743,7 @@ def page_media(df: pd.DataFrame):
     figc.update_yaxes(tickformat=".0%", secondary_y=True)
     base_layout(figc, "매체별 광고비·거래액·순결제ROAS", 430)
     figc.update_layout(barmode="group", xaxis_tickangle=-20)
-    st.plotly_chart(figc, use_container_width=True, key="media_compare")
+    st.plotly_chart(figc, width="stretch", key="media_compare")
 
     st.divider()
     # ── 주차별/일별과 통일된 매체별 실적요약·상세표 (전년비는 base에서 동요일 비교)
@@ -2857,7 +2860,7 @@ def page_campaign(df: pd.DataFrame, targets: dict = None):
             # y축을 합리적 범위로 고정(극단 ROAS로 원이 일렬로 서는 현상 방지)
             y_hi = float(quad_df["순결제ROAS"].quantile(0.95))
             fig_q.update_yaxes(tickformat=".0%", range=[0, max(y_hi * 1.15, med_roas * 1.5, 0.01)])
-            st.plotly_chart(fig_q, use_container_width=True, key="camp_quad")
+            st.plotly_chart(fig_q, width="stretch", key="camp_quad")
 
     # ── 요일별 히트맵
     with tab_heat:
@@ -2894,7 +2897,7 @@ def _render_weekday_heatmap(df, key_prefix="hm"):
     base_layout(fig, f"요일별 {sel}", 380)
     fig.update_layout(showlegend=False)
     label_traces(fig, tf if tf else ",.0f")
-    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_weekbar")
+    st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_weekbar")
 
 
 def _render_bpu_charts(df):
@@ -2923,7 +2926,7 @@ def _render_bpu_charts(df):
             base_layout(fig, dlabel, 350)
             fig.update_layout(showlegend=False, xaxis_tickangle=-20)
             label_traces(fig, dfmt)
-            st.plotly_chart(fig, use_container_width=True, key=f"bpu_dept_{dcol}")
+            st.plotly_chart(fig, width="stretch", key=f"bpu_dept_{dcol}")
 
 
 def page_bpu(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
@@ -4335,7 +4338,7 @@ def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: di
     tbl = tbl.rename(columns={"전년비": "비교비"}, level=0)
     sub = [("비교비", m) for m in DEFAULT_METRICS]
     st.dataframe(tbl.style.map(chg_style, subset=sub).apply(_hl_total_row, axis=1),
-                 use_container_width=True, hide_index=True,
+                 width="stretch", hide_index=True,
                  height=_fit_height(len(rows), header_rows=2))
 
     st.markdown("##### 📄 상세 실적 (전 지표)")
@@ -4348,7 +4351,7 @@ def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: di
                            period_label="구분", add_total=False)
     both = pd.concat([dt_, dyt], ignore_index=True)
     st.dataframe(both.style.map(chg_style, subset=DETAIL_COLS),
-                 use_container_width=True, hide_index=True, height=_fit_height(len(both)))
+                 width="stretch", hide_index=True, height=_fit_height(len(both)))
 
     # ── 지표별 추이 그래프 (일자별, 실적 vs 비교)
     st.divider()
@@ -4367,7 +4370,7 @@ def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: di
                 st.plotly_chart(
                     _cg_fig(labels, hov_cur, hov_cmp, cur_vals, cmp_vals, lbl,
                             tickfmt=RATIO_TICKFMT.get(col)),
-                    use_container_width=True, key=f"cg_chart_{col}")
+                    width="stretch", key=f"cg_chart_{col}")
 
 
 # ───────────────────────────────────────────────
@@ -4566,7 +4569,7 @@ def page_custom(df: pd.DataFrame, targets: dict = None, report_targets: dict = N
         shown = table.style.apply(_hl_total, axis=1)
     else:
         shown = table  # 대용량: TOTAL 강조 생략(맨 아래 TOTAL 행은 그대로 표시)
-    st.dataframe(shown, use_container_width=False, hide_index=True,
+    st.dataframe(shown, width="content", hide_index=True,
                  height=_fit_height(min(len(table), 15)))
     st.caption("※ CSV는 화면의 축약표기가 아닌 **원본 숫자**로 저장됩니다. "
                "(금액=원, 건수=정수, 비율·ROAS=% 숫자)")
@@ -4653,7 +4656,7 @@ def page_creative(df: pd.DataFrame):
                     base_layout(fig, media, 320)
                     fig.update_layout(showlegend=False)
                     label_traces(fig, tickfmt)
-                    st.plotly_chart(fig, use_container_width=True,
+                    st.plotly_chart(fig, width="stretch",
                                     key=f"cr_{metric}_{media}")
 
     media_top10("CTR", ".2%", "#3B82F6", "📊 CTR 상위 10 소재 (매체별, 노출 1,000+)", impr_filter=True)
@@ -4679,7 +4682,7 @@ def page_creative(df: pd.DataFrame):
         c = cr_id_resolved.get(label, col)  # 기획전번호/상세내역 등 실제 컬럼 해석
         exp[label] = cr_df[c].values if (c and c in cr_df.columns) else ""
     export_tbl = pd.DataFrame(exp)
-    st.dataframe(export_tbl, use_container_width=True, hide_index=True)
+    st.dataframe(export_tbl, width="stretch", hide_index=True)
     _raw_dl(cr_df, "소재_상세")
 
 
@@ -4852,7 +4855,7 @@ def main():
             "📈 커스텀 그래프",
         ], label_visibility="collapsed")
         st.caption("필터는 페이지를 옮겨도 유지됩니다.")
-        if st.button("🧹 필터 초기화", use_container_width=True,
+        if st.button("🧹 필터 초기화", width="stretch",
                      help="모든 페이지의 필터·날짜·조회옵션을 기본값으로 되돌립니다. (페이지 선택은 유지)"):
             _reset_all_filters()
             st.rerun()
