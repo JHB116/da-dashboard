@@ -1122,7 +1122,7 @@ def summary_table(rows, metric_labels, groups, period_type: str = "월",
 
 
 # ───────────────────────────────────────────────
-# 상세 실적 표 (기간별 전지표) — 전체요약/주차별/일별 공용
+# 상세 실적 표 (기간별 전지표) — 전체요약 공용
 # ───────────────────────────────────────────────
 def _fmt_kind(v, kind, money_fn=fmt_money):
     if pd.isna(v): return "–"
@@ -2201,34 +2201,41 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     monthly_targets = (report_targets or {}).get("monthly", {})
     weekly_rows = (report_targets or {}).get("weekly_rows", {})
     is_total = src in ("TOTAL", "TOTAL(서비스비용미반영)")
-    if gran != "월":
-        df, prev_df = with_quarter(df), None
-        # 주 · 일은 주차별/일별 시트처럼 표시 범위를 좁혀 보고, 전년비 · 전년선은 전체 기간에서 가져온다
-        if gran in ("주", "일"):
-            scoped = _period_scope(df, f"sum_{gran}", month_picker=(gran == "일"),
-                                   recent_default=(12 if gran == "주" else None))
-            if scoped is None:
-                return
-            df, prev_df = scoped
-        st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src}")
+    df, prev_df = with_quarter(df), None
+    # 주 · 일은 표시 범위를 좁혀 보고(기본: 마지막 월 주차 / 최신 월), 전년비 · 전년선은 전체 기간에서 가져온다
+    if gran in ("주", "일"):
+        scoped = _period_scope(df, f"sum_{gran}", month_picker=(gran == "일"),
+                               recent_default=(12 if gran == "주" else None))
+        if scoped is None:
+            return
+        df, prev_df = scoped
+
+    # ── 실적요약표 → 그래프 → 상세 실적표 (동일 비용출처 적용)
+    st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src}")
+    if gran == "월":
+        _render_monthly_section(_filter_cost(df, src), targets, tab_key="sum", sameday=sameday,
+                                monthly_targets=monthly_targets, tab_name=src,
+                                weekly_rows=(weekly_rows if is_total else None))
+    else:
         _render_period_summary(df, gran, report_targets, targets, prev_df=prev_df, src=src)
-        st.divider()
-        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary")
-        return
 
-    df_tab = _filter_cost(df, src)
-    wr = weekly_rows if is_total else None
-    st.markdown(f"##### 📋 월별 실적요약 · 비용출처: {src}")
-    _render_monthly_section(df_tab, targets, tab_key="sum", sameday=sameday,
-                            monthly_targets=monthly_targets, tab_name=src, weekly_rows=wr)
-
-    # ── 실적요약표 → 그래프 (동일 비용출처 적용)
     st.divider()
-    _render_trend_grid(df, targets, src=src)
+    chart = st.radio("그래프 형태", ["선 그래프", "막대 그래프(목적별 구성비)"], horizontal=True,
+                     key="sum_chart_type",
+                     help="막대 그래프는 거래액확대 · 신규고객확대 · 인지도제고(+기타)로 나눠 구성비를 보여줍니다.")
+    if chart != "선 그래프":
+        _render_bar_grid(df, gran, f"sum_{gran}", src=src)
+    elif gran == "월":
+        _render_trend_grid(df, targets, src=src)
+    else:
+        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary")
+
+    st.divider()
+    _render_period_detail(df, gran, key_prefix=f"sum_{gran}", prev_df=prev_df, src=src)
 
 
 # ───────────────────────────────────────────────
-# 주차별/일별 공용 기간(period) 프레임워크
+# 전체요약 공용 기간(분기/월/주/일) 프레임워크
 # ───────────────────────────────────────────────
 PERIOD_COLS = {"분기": ["연도", "분기"], "월": ["연도", "월"], "주": ["연도", "주차번호"], "일": ["기간_일자"]}
 PERIOD_TYPE = {"분기": "분기", "월": "월", "주": "주차", "일": "일"}
@@ -2460,6 +2467,106 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_k
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
 
+# ───────────────────────────────────────────────
+# 전체요약 막대 그래프: 비용출처 목적별(거래액확대/신규고객확대/인지도제고/기타) 구성비
+# ───────────────────────────────────────────────
+COMP_BUCKETS = ["거래액확대", "신규고객확대", "인지도제고"]
+COMP_COLORS = {"거래액확대": "#2a78d6", "신규고객확대": "#e0569b", "인지도제고": "#f0a01e", "기타": "#a3a19b"}
+_COMP_LOOKUP = {_norm_cost(v): b for b in COMP_BUCKETS for v in COST_BUCKETS[b]}
+
+
+def _cost_comp(series):
+    """비용출처 → 목적 묶음. 세 목적에 없는 비용출처(브랜드비용·서비스비용-정산제외 등)는 '기타'."""
+    return series.map(lambda v: _COMP_LOOKUP.get(_norm_cost(v), "기타"))
+
+
+def comp_bar_fig(df_tab, val_col, gran, title, height=320, tickfmt=None, cumulative=False):
+    """기간별 막대. 합산 지표는 목적별로 쌓아 구성비(%)를, 비율 지표는 목적별 나란히 + 전체 선.
+    일평균 모드의 합산 지표는 기간 전체 집행일수로 나눠 목적별 막대 합이 전체 일평균과 같다."""
+    fmt = tickfmt if tickfmt else ",.0f"
+    cols = PERIOD_COLS[gran]
+    d = df_tab.assign(_comp=_cost_comp(df_tab["구분_비용출처"]))
+    tot = agg(d, cols).sort_values(cols)
+    yr = tot["기간_일자"].dt.year if gran == "일" else tot["연도"]
+    tot = tot[yr >= START_YEAR]
+    fig = go.Figure()
+    if tot.empty:
+        base_layout(fig, title, height)
+        return fig
+    keys = [_period_key(gran, r) for _, r in tot.iterrows()]
+    labels = [(_date_label_kr(r["기간_일자"], short=True) if gran == "일" else _period_label(gran, r))
+              for _, r in tot.iterrows()]
+    is_vol = val_col in VOLUME_COLS
+    days = (tot["집행일수"].replace(0, np.nan).tolist()
+            if (is_vol and not cumulative and "집행일수" in tot.columns) else [1] * len(tot))
+    tot_vals = [v / n for v, n in zip(tot[val_col].tolist(), days)]
+    by = {}
+    for _, r in agg(d, cols + ["_comp"]).iterrows():
+        by[(r["_comp"],) + _period_key(gran, r)] = r[val_col]
+    comps = [c for c in COMP_BUCKETS + ["기타"] if (d["_comp"] == c).any()]
+    show_text = len(keys) <= 16
+    for c in comps:
+        vals = [by.get((c,) + k, np.nan) for k in keys]
+        vals = [v / n if not pd.isna(v) else np.nan for v, n in zip(vals, days)]
+        if is_vol:
+            share = [(v / t if t and not pd.isna(v) else np.nan) for v, t in zip(vals, tot_vals)]
+            fig.add_trace(go.Bar(
+                x=labels, y=vals, name=c, marker_color=COMP_COLORS[c], customdata=share,
+                text=([f"{s:.0%}" if not pd.isna(s) else "" for s in share] if show_text else None),
+                textposition="inside", insidetextanchor="middle",
+                hovertemplate=f"{c}: %{{y:{fmt}}} (%{{customdata:.1%}})<extra></extra>"))
+        else:
+            fig.add_trace(go.Bar(x=labels, y=vals, name=c, marker_color=COMP_COLORS[c],
+                                 hovertemplate=f"{c}: %{{y:{fmt}}}<extra></extra>"))
+    if is_vol:
+        fig.update_layout(barmode="stack", uniformtext_minsize=9, uniformtext_mode="hide")
+        fig.add_trace(go.Scatter(
+            x=labels, y=tot_vals, mode="text" if show_text else "markers", name="합계",
+            text=None, texttemplate=(f"%{{y:{fmt}}}" if show_text else None),
+            textposition="top center", textfont=dict(size=10, color=CH_INK2),
+            marker=dict(size=0.1, color="rgba(0,0,0,0)"), showlegend=False,
+            hovertemplate=f"합계: %{{y:{fmt}}}<extra></extra>"))
+    else:
+        fig.update_layout(barmode="group")
+        fig.add_trace(go.Scatter(x=labels, y=tot_vals, mode="lines+markers", name="전체",
+                                 line=dict(color=CH_INK, width=1.5), marker=dict(size=5),
+                                 hovertemplate=f"전체: %{{y:{fmt}}}<extra></extra>"))
+    base_layout(fig, title, height, unified=True)
+    fig.update_layout(legend=dict(traceorder="normal"))
+    fig.update_xaxes(type="category")
+    if tickfmt:
+        fig.update_yaxes(tickformat=tickfmt)
+    return fig
+
+
+def _render_bar_grid(df, gran, key_prefix, src="TOTAL"):
+    """전체요약 막대 그래프 그리드 — 표시 중인 기간만, 목적별 구성."""
+    cumulative = st.toggle(
+        "📊 누적으로 보기", value=False, key=f"{key_prefix}_bar_cumulative",
+        help="켜면 일평균 대신 해당 기간의 '합계값'으로 표시합니다. 일 단위는 변화가 없습니다.")
+    mode_note = "" if gran == "일" else (" · 합계" if cumulative else " · 일평균")
+    render_memo("summary")
+    st.markdown(f"#### 📊 지표별 막대 ({gran}{mode_note}) · 비용출처: {src}")
+    st.caption("ℹ️ 막대 색 = 비용출처 목적(거래액확대 · 신규고객확대 · 인지도제고 · 기타). "
+               "합산 지표(광고비 · 거래액 · UV · 가입수 등)는 쌓아서 **구성비(%)**를, "
+               "비율 지표(ROAS · CPA · CR 등)는 목적별로 나란히 놓고 검은 선이 전체 값입니다. "
+               "기타 = 세 목적에 속하지 않는 비용출처(브랜드비용 · 서비스비용-정산제외 등).")
+    df_tab = _filter_cost(df, src)
+    if df_tab.empty:
+        st.info("해당 비용출처 데이터가 없습니다.")
+        return
+    suffix = "" if gran == "일" else (f" ({gran} 합계)" if cumulative else f" ({gran} 일평균)")
+    mlist = list(SUMMARY_CHART_METRICS.items())
+    per_row = 3
+    for i in range(0, len(mlist), per_row):
+        ccols = st.columns(per_row)
+        for (lbl, col), cc in zip(mlist[i:i + per_row], ccols):
+            with cc:
+                fig = comp_bar_fig(df_tab, col, gran, f"{lbl}{suffix}", height=320,
+                                   tickfmt=RATIO_TICKFMT.get(col), cumulative=cumulative)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_{col}")
+
+
 def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     """기간별 상세 실적표 + 상세 실적표(전년비). 상단에서 고른 비용출처(src) 기준, 25년 한 표 접이식."""
     df_tot = _filter_cost(df, src)
@@ -2566,37 +2673,6 @@ def _period_scope(base, key_prefix, month_picker=False, recent_default=None):
             st.info("해당 기간 데이터가 없습니다.")
             return None
     return df, prev_df
-
-
-def render_period_sheet(df, gran, header, report_targets=None, targets=None,
-                        key_prefix=None, month_picker=False, recent_default=None):
-    """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
-    month_picker=True(일별): 기본은 최신 연월만 표시.
-    recent_default=N(주차별): 기본은 '로데이터 마지막 월 주차'만 노출.
-        표시 범위 라디오로 '최근 N주'(기본 N=recent_default)·'전체 기간' 전환 가능."""
-    st.header(header)
-    if df.empty:
-        st.warning("데이터가 없습니다.")
-        return
-    key_prefix = key_prefix or gran
-    base = page_filters(df, f"{key_prefix}f", expanded=False)
-    df = base
-    prev_df = None
-    scoped = _period_scope(base, key_prefix, month_picker=month_picker,
-                           recent_default=recent_default)
-    if scoped is None:
-        return
-    df, prev_df = scoped
-    # 비용출처 선택(한 번 고르면 요약표·상세표·그래프 전체에 동일 적용)
-    src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key=f"{key_prefix}_src")
-    st.caption("ℹ️ 선택한 **비용출처가 아래 요약표·상세표·그래프 전체에 적용**됩니다. "
-               "전년비는 동요일 기준(전년 동일 요일, -364일)으로 비교합니다.")
-    # 순서: 실적요약 → 상세표 → 그래프(맨 하단)
-    _render_period_summary(df, gran, report_targets, targets or {}, prev_df=prev_df, src=src)
-    st.divider()
-    _render_period_detail(df, gran, key_prefix=key_prefix, prev_df=prev_df, src=src)
-    st.divider()
-    _render_period_graph(df, gran, key_prefix, prev_df=prev_df, src=src)
 
 
 # ───────────────────────────────────────────────
@@ -3027,23 +3103,6 @@ def page_bpu(df: pd.DataFrame, targets: dict = None, report_targets: dict = None
     _render_bpu_charts(df)
     st.divider()
     render_group_sheet_body(df, "구분_부서명", order=BPU_ORDER, ptype="BPU", prev_source=base)
-
-
-# 페이지: 주차별 실적 / 일별 실적 (공용 프레임워크)
-# ───────────────────────────────────────────────
-def page_weekly(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
-    render_period_sheet(df, "주", "📅 주차별 실적", report_targets=report_targets,
-                        targets=targets or {}, key_prefix="wk", recent_default=12)
-
-
-def page_monthly(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
-    render_period_sheet(df, "월", "🗓️ 월별 실적", report_targets=report_targets,
-                        targets=targets or {}, key_prefix="mo")
-
-
-def page_daily(df: pd.DataFrame, targets: dict = None, report_targets: dict = None):
-    render_period_sheet(df, "일", "📆 일별 실적", report_targets=report_targets,
-                        targets=targets or {}, key_prefix="dy", month_picker=True)
 
 
 # ───────────────────────────────────────────────
@@ -4935,7 +4994,6 @@ def main():
         st.subheader("📄 페이지")
         page = st.radio("페이지", [
             "📊 전체 요약", "🌳 펼쳐보기 실적", "🆚 전년비 리포트",
-            "🗓️ 월별 실적", "📅 주차별 실적", "📆 일별 실적",
             "📡 매체별 실적", "🎯 캠페인별 실적", "🎨 소재 상세", "🏢 BPU별 실적", "🧩 커스텀 실적",
             "📈 커스텀 그래프",
         ], label_visibility="collapsed")
@@ -4951,12 +5009,6 @@ def main():
         page_drilldown(pre_date_filtered, targets, report_targets)
     elif page == "🆚 전년비 리포트":
         page_yoy(pre_date_filtered, targets, report_targets)
-    elif page == "🗓️ 월별 실적":
-        page_monthly(pre_date_filtered, targets, report_targets)
-    elif page == "📅 주차별 실적":
-        page_weekly(pre_date_filtered, targets, report_targets)
-    elif page == "📆 일별 실적":
-        page_daily(pre_date_filtered, targets, report_targets)
     elif page == "🎯 캠페인별 실적":
         page_campaign(pre_date_filtered, targets)
     elif page == "🏢 BPU별 실적":
