@@ -35,7 +35,7 @@ except Exception as e:  # pragma: no cover
 # calc.js 지표 키 → dashboard.py 집계 컬럼
 COLS = {
     'cost': '지표_광고비', 'nrev': '지표_순결제거래액', 'roas': '순결제ROAS', 'npr': '순결제비중', 'trev': '지표_총결제거래액',
-    'troas': '총결제ROAS', 'uv': '지표_UV(전체)', 'crt': 'CR(총)', 'aovt': '객단가(총)', 'cpc': 'CPC', 'ctr': 'CTR', 'cpuv': 'CPUV',
+    'troas': '총결제ROAS', 'uv': '지표_UV(전체)', 'crt': 'CR(총)', 'crct': 'CR(클릭기준·총)', 'crcn': 'CR(클릭기준·순)', 'aovt': '객단가(총)', 'cpc': 'CPC', 'ctr': 'CTR', 'cpuv': 'CPUV',
     'join': '지표_가입회원', 'jcpa': '가입CPA', 'nbr': '지표_당년신규순결제거래액', 'fp': '지표_순결제고객수(첫구매)', 'fcpa': '첫구매CPA',
     'imp': '지표_노출수', 'clk': '지표_클릭수', 'cpm': 'CPM', 'npay': '지표_순결제고객수', 'crn': 'CR(순)', 'aovn': '객단가(순)',
     'tpay': '지표_총결제고객수', 'uvc': 'UV/클릭', 'jr': '가입률', 'fpu': '첫구매율', 'fpr': '지표_순결제거래액(첫구매)', 'fps': '첫구매비중',

@@ -22,6 +22,8 @@
     M('troas', 'ROAS(총결제)', 'roas', ['trev', 'cost'], s => div(s.trev, s.cost)),
     M('uv', 'UV', 'count', ['uv'], s => s.uv),
     M('crt', 'CR(총결제)', 'ratio', ['tpay', 'uv'], s => div(s.tpay, s.uv), { dp: 3 }),
+    M('crct', 'CR(클릭기준·총결제)', 'ratio', ['tpay', 'clk'], s => div(s.tpay, s.clk), { dp: 3 }),
+    M('crcn', 'CR(클릭기준·순결제)', 'ratio', ['npay', 'clk'], s => div(s.npay, s.clk), { dp: 3 }),
     M('aovt', '객단가(총결제)', 'won', ['trev', 'tpay'], s => div(s.trev, s.tpay)),
     M('cpc', 'CPC', 'won', ['cost', 'clk'], s => div(s.cost, s.clk), { lowerBetter: true }),
     M('ctr', 'CTR', 'ratio', ['clk', 'imp'], s => div(s.clk, s.imp), { dp: 2 }),
@@ -53,10 +55,10 @@
   ];
   const METRIC = Object.fromEntries(METRIC_LIST.map(m => [m.k, m]));
   // 요약 타일 · 추이 차트 (기존 대시보드 전체요약 순서)
-  const SUMMARY = ['cost', 'nrev', 'roas', 'npr', 'trev', 'troas', 'uv', 'crt', 'aovt', 'cpc', 'ctr', 'cpuv', 'join', 'jcpa', 'nbr', 'fp', 'fcpa', 'ncpa'];
+  const SUMMARY = ['cost', 'nrev', 'roas', 'npr', 'trev', 'troas', 'uv', 'crt', 'crct', 'crcn', 'aovt', 'cpc', 'ctr', 'cpuv', 'join', 'jcpa', 'nbr', 'fp', 'fcpa', 'ncpa'];
   // 기간별 상세 표 (기존 dashboard.py DAILY_DETAIL_SPEC 순서)
-  const DETAIL = ['imp', 'clk', 'ctr', 'crn', 'aovn', 'npay', 'cpm', 'cpc', 'cpuv', 'uv', 'cost', 'nrev', 'roas', 'npr', 'trev', 'troas',
-    'uvc', 'crt', 'aovt', 'tpay', 'jr', 'join', 'jcpa', 'fpu', 'fp', 'fcpa', 'fpr', 'fps', 'nb', 'ncpa', 'nbr', 'nbs', 'wb', 'wbr'];
+  const DETAIL = ['imp', 'clk', 'ctr', 'crn', 'crcn', 'aovn', 'npay', 'cpm', 'cpc', 'cpuv', 'uv', 'cost', 'nrev', 'roas', 'npr', 'trev', 'troas',
+    'uvc', 'crt', 'crct', 'aovt', 'tpay', 'jr', 'join', 'jcpa', 'fpu', 'fp', 'fcpa', 'fpr', 'fps', 'nb', 'ncpa', 'nbr', 'nbs', 'wb', 'wbr'];
 
   // 비용출처 묶음 — dashboard.py COST_BUCKETS 와 같다 (공백 · 대소문자 · 전각 슬래시 무시하고 비교)
   const COST_BUCKETS = {
