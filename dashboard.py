@@ -311,6 +311,7 @@ def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
     df["연도"] = df["기간_일자"].dt.year
     df["월"] = df["기간_일자"].dt.month
+    df["분기"] = (df["월"] - 1) // 3 + 1
     df["연월"] = df["기간_일자"].dt.to_period("M").astype(str)
     df["요일"] = df["기간_일자"].dt.dayofweek   # 0=월 ~ 6=일
     df["주차번호"] = df["기간_일자"].dt.isocalendar().week.astype(int)  # ISO 주차 1~53
@@ -863,6 +864,30 @@ def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
                                   ignore_index=True).sort_values(["연도", "월"])
         fig = yoy_overlay_fig(d, "월", val_col, title,
                               ticklabels=MONTH_LABELS, height=height, textfmt=lbl_fmt)
+    elif gran == "분기":
+        d = agg(df, ["연도", "분기"]).sort_values(["연도", "분기"])
+        if to_avg and "집행일수" in d.columns:
+            d[val_col] = d[val_col] / d["집행일수"].replace(0, np.nan)
+        # 진행 중인 분기는 전년도 동일 분기 포인트를 동요일(-364일) 창으로 맞춤.
+        data_max = df["기간_일자"].max()
+        cy, cq = int(data_max.year), (int(data_max.month) - 1) // 3 + 1
+        q_end = pd.Timestamp(cy, 3 * cq, calendar.monthrange(cy, 3 * cq)[1])
+        if data_max.normalize() < q_end:
+            cur_dates = df[(df["연도"] == cy) & (df["분기"] == cq)]["기간_일자"].drop_duplicates()
+            for k in (1, 2):  # 전년·전전년 동일 분기를 각각 동요일 창으로
+                sub = df[df["기간_일자"].isin(cur_dates - pd.Timedelta(days=364 * k))]
+                if sub.empty:
+                    continue
+                v = agg(sub, ["연도"])[val_col].iloc[0]
+                if to_avg:
+                    nd = sub["기간_일자"].nunique()
+                    v = v / nd if nd else np.nan
+                mask = (d["연도"] == cy - k) & (d["분기"] == cq)
+                if mask.any() and not pd.isna(v):
+                    d.loc[mask, val_col] = v
+        fig = yoy_overlay_fig(d, "분기", val_col, title,
+                              ticklabels={q: f"{q}분기" for q in range(1, 5)},
+                              height=height, textfmt=lbl_fmt)
     elif gran == "일":
         # 일 단위: 연도별 라인을 동요일(-364일×N) 정렬해 같은 x축에 겹쳐 비교.
         # 전년 이전 연도는 현재년도 달력으로 이동시켜 '동요일 일자' 오버레이가 되게 한다.
@@ -2166,16 +2191,29 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     st.divider()
     st.caption("아래 표·그래프는 날짜 카드와 무관하게 전체 기간 데이터를 표시합니다.")
 
-    # ── 상단: 비용출처 선택 (한 번 고르면 아래 요약표·그래프 전체에 동일 적용)
+    # ── 상단: 기간 단위 · 비용출처 선택 (한 번 고르면 아래 요약표·그래프 전체에 동일 적용)
+    gran = st.radio("기간 단위", ["분기", "월", "주", "일"], index=1, horizontal=True, key="sum_gran")
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key="sum_src")
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
-               "· 선택한 **비용출처가 아래 표·그래프 전체에 적용**됩니다.")
+               "· 선택한 **기간 단위 · 비용출처가 아래 표·그래프 전체에 적용**됩니다.")
     sameday = True
 
     monthly_targets = (report_targets or {}).get("monthly", {})
     weekly_rows = (report_targets or {}).get("weekly_rows", {})
+    is_total = src in ("TOTAL", "TOTAL(서비스비용미반영)")
+    if gran != "월":
+        df = with_quarter(df)
+        st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src}")
+        _render_period_section(_filter_cost(df, src), gran, src,
+                               weekly_targets=((report_targets or {}).get("weekly", {}) if is_total else None),
+                               monthly_targets=monthly_targets,
+                               weekly_rows=(weekly_rows if is_total else None), key=f"sum_{gran}")
+        st.divider()
+        _render_period_graph(df, gran, f"sum_{gran}", src=src, memo_key="summary")
+        return
+
     df_tab = _filter_cost(df, src)
-    wr = weekly_rows if src in ("TOTAL", "TOTAL(서비스비용미반영)") else None
+    wr = weekly_rows if is_total else None
     st.markdown(f"##### 📋 월별 실적요약 · 비용출처: {src}")
     _render_monthly_section(df_tab, targets, tab_key="sum", sameday=sameday,
                             monthly_targets=monthly_targets, tab_name=src, weekly_rows=wr)
@@ -2188,8 +2226,15 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
 # ───────────────────────────────────────────────
 # 주차별/일별 공용 기간(period) 프레임워크
 # ───────────────────────────────────────────────
-PERIOD_COLS = {"월": ["연도", "월"], "주": ["연도", "주차번호"], "일": ["기간_일자"]}
-PERIOD_TYPE = {"월": "월", "주": "주차", "일": "일"}
+PERIOD_COLS = {"분기": ["연도", "분기"], "월": ["연도", "월"], "주": ["연도", "주차번호"], "일": ["기간_일자"]}
+PERIOD_TYPE = {"분기": "분기", "월": "월", "주": "주차", "일": "일"}
+
+
+def with_quarter(df):
+    """'분기' 컬럼 보장(load_data 캐시가 예전 버전이어도 동작하도록)."""
+    if "분기" in df.columns or "월" not in df.columns:
+        return df
+    return df.assign(분기=(df["월"] - 1) // 3 + 1)
 
 
 def _row_year(gran, r):
@@ -2197,12 +2242,14 @@ def _row_year(gran, r):
 
 
 def _period_key(gran, r):
+    if gran == "분기": return (int(r["연도"]), int(r["분기"]))
     if gran == "월": return (int(r["연도"]), int(r["월"]))
     if gran == "주": return (int(r["연도"]), int(r["주차번호"]))
     return (pd.Timestamp(r["기간_일자"]).normalize(),)
 
 
 def _period_label(gran, r):
+    if gran == "분기": return f"{int(r['연도']) % 100:02d}년 {int(r['분기'])}분기"
     if gran == "월": return f"{int(r['연도']) % 100:02d}년 {int(r['월'])}월"
     if gran == "주": return week_of_month_label(int(r["연도"]), int(r["주차번호"]))
     return _date_label_kr(r["기간_일자"])  # '26년 7월 1일(수)' — 요일 병기
@@ -2251,6 +2298,19 @@ def mtd_target_week(weekly, year, iso_week, data_max) -> dict:
 def _period_target(gran, tab_name, tab_monthly, weekly, key, data_max, weekly_rows=None):
     if tab_name not in ("TOTAL", "TOTAL(서비스비용미반영)"):
         return {}
+    if gran == "분기":
+        # 분기 목표 = 해당 분기 월 목표 합(진행 중인 분기는 당월 MTD 목표까지만)
+        yr, q = key
+        spend = rev = 0.0
+        for mo in range(3 * q - 2, 3 * q + 1):
+            if (yr, mo) > (data_max.year, data_max.month):
+                break
+            t = _period_target("월", tab_name, tab_monthly, weekly, (yr, mo), data_max, weekly_rows)
+            spend += t.get("spend", 0) or 0
+            rev += t.get("rev", 0) or 0
+        if not spend and not rev:
+            return {}
+        return dict(spend=spend, rev=rev, roas=(rev / spend if spend else 0))
     if gran == "월":
         yr, mo = key
         base = dict(tab_monthly.get((yr, mo), {}) or {})
@@ -2301,7 +2361,7 @@ def _render_period_section(df_tab, gran, tab_name, weekly_targets=None, monthly_
         metric_labels, groups = DEFAULT_METRICS, ("실적", "전년비")
     else:
         metric_labels = DEFAULT_METRICS
-        groups = ("실적", "전년비", "목표", "목표비") if gran in ("월", "주") else ("실적", "전년비")
+        groups = ("실적", "전년비", "목표", "목표비") if gran in ("분기", "월", "주") else ("실적", "전년비")
     groups = _groups_with_y2(groups)
 
     tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
@@ -2347,7 +2407,7 @@ def _render_period_summary(df, gran, report_targets, targets, prev_df=None, src=
                            key=f"{gran}_sum", prev_tab=prev_tab)
 
 
-def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
+def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_key=None):
     """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
     당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
     전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다.
@@ -2355,14 +2415,14 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL"):
     '누적으로 보기' 토글로 일평균(일 단위는 일자값) ↔ 기간 합계값 보기를 전환한다."""
     cumulative = st.toggle(
         "📊 누적으로 보기", value=False, key=f"{key_prefix}_cumulative",
-        help="켜면 일평균 대신 해당 기간(주/월)의 '합계값'으로 표시합니다. "
+        help="켜면 일평균 대신 해당 기간(분기/주/월)의 '합계값'으로 표시합니다. "
              "비율 지표(ROAS·CTR·CPA·객단가 등)는 기간 집계값 그대로이며, "
              "일 단위는 이미 일자별 합계라 변화가 없습니다.")
     if cumulative:
         mode_note = "" if gran == "일" else " · 합계"
     else:
         mode_note = "" if gran == "일" else " · 일평균"
-    render_memo(f"period_{key_prefix}")
+    render_memo(memo_key or f"period_{key_prefix}")
     st.markdown(f"#### 📈 지표별 추이 ({gran}{mode_note}) · 비용출처: {src}")
     st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
     df_tab = _filter_cost(df, src)
