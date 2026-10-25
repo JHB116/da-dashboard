@@ -847,13 +847,17 @@ VOLUME_COLS = {
 
 def metric_trend_fig(df: pd.DataFrame, val_col: str, gran: str, title: str,
                      height: int = 380, tickfmt: str = None,
-                     cumulative: bool = False, bar: bool = False) -> go.Figure:
+                     cumulative: bool = False, bar: bool = False, comp: bool = False) -> go.Figure:
     """월/주/주(최근10주)/일 단위 지표 추이 (선형, 연도별 YoY 오버레이).
     bar=True: 같은 데이터를 연도별 막대(24·25·26년 나란히)로 그린다.
+    comp=True(bar와 함께): 합산 지표는 연도별 막대를 비용출처 목적별로 쌓아 구성비를 보인다.
     기본: 볼륨 지표는 '일평균'(해당 기간 합계 / 집행일수)으로 환산해 표시한다.
     cumulative=True: 볼륨 지표를 일평균으로 나누지 않고 해당 기간(월/주) 자체의
     '합계값'으로 표시한다. 비율 지표(ROAS·CTR·CPA·객단가 등)는 기간 집계값 그대로다.
     (일 단위는 이미 일자별 합계이므로 두 모드가 동일하다.)"""
+    if bar and comp and val_col in VOLUME_COLS and "구분_비용출처" in df.columns:
+        return comp_year_bar_fig(df, val_col, gran, title, height=height, tickfmt=tickfmt,
+                                 cumulative=cumulative)
     lbl_fmt = tickfmt if tickfmt else ",.0f"
     is_vol = val_col in VOLUME_COLS
     # 누적(=기간 합계) 모드에서는 일평균(÷집행일수) 환산을 건너뛴다.
@@ -2040,7 +2044,76 @@ def render_memo(key: str, title: str = "📝 분석 메모"):
             st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요.")
 
 
-def _render_trend_grid(df, targets, src="TOTAL", bar=False):
+# ───────────────────────────────────────────────
+# 연도별 막대 + 비용출처 목적별(거래액확대/신규고객확대/인지도제고/기타) 구성비
+# ───────────────────────────────────────────────
+COMP_BUCKETS = ["거래액확대", "신규고객확대", "인지도제고"]
+COMP_COLORS = {"거래액확대": "#2a78d6", "신규고객확대": "#e0569b", "인지도제고": "#f0a01e", "기타": "#a3a19b"}
+_COMP_LOOKUP = {_norm_cost(v): b for b in COMP_BUCKETS for v in COST_BUCKETS[b]}
+
+
+def _cost_comp(series):
+    """비용출처 → 목적 묶음. 세 목적에 없는 비용출처(브랜드비용·서비스비용-정산제외 등)는 '기타'."""
+    return series.map(lambda v: _COMP_LOOKUP.get(_norm_cost(v), "기타"))
+
+
+def _year_points(df, val_col, gran, cumulative):
+    """metric_trend_fig(선)와 같은 연도 정렬 값 → {(x, 연도): 값}."""
+    f = metric_trend_fig(df, val_col, gran, "", cumulative=cumulative)
+    out = {}
+    for t in f.data:
+        if t.type != "scatter" or not t.name or t.showlegend is False:
+            continue
+        yr = int(str(t.name)[:4])
+        for x, y in zip(t.x, t.y):
+            if y is not None and not pd.isna(y):
+                out[(x, yr)] = y
+    return out
+
+
+def comp_year_bar_fig(df, val_col, gran, title, height=320, tickfmt=None, cumulative=False):
+    """x축 2줄(기간 / 연도: 1월 → 24년·25년·26년), 연도 막대를 목적별로 쌓아 구성비(%) 표시.
+    구성비는 기간 합계 기준이라 일평균 모드에서도 목적별 막대 합 = 전체 값."""
+    fmt = tickfmt if tickfmt else ",.0f"
+    disp = _year_points(df, val_col, gran, cumulative)
+    total = disp if cumulative else _year_points(df, val_col, gran, True)
+    comp = _cost_comp(df["구분_비용출처"])
+    parts = {c: _year_points(df[comp == c], val_col, gran, True)
+             for c in COMP_BUCKETS + ["기타"] if (comp == c).any()}
+    keys = sorted(disp, key=lambda k: (pd.Timestamp(k[0]) if gran == "일" else k[0], k[1]))
+    cur_year = max((k[1] for k in keys), default=0)
+
+    def lab(x):
+        if gran == "월": return MONTH_LABELS.get(int(x), str(x))
+        if gran == "분기": return f"{int(x)}분기"
+        if gran == "주": return week_of_month_label(cur_year, int(x))
+        return _date_label_kr(x, short=True)
+
+    yl = (lambda yr: f"{yr % 100:02d}") if len(keys) > 16 else (lambda yr: f"{yr % 100:02d}년")  # 막대가 많으면 짧게
+    xs = [[lab(x) for x, _ in keys], [yl(yr) for _, yr in keys]]
+    fig = go.Figure()
+    for c, pts in parts.items():
+        share = [(pts.get(k, 0) / total[k]) if total.get(k) else np.nan for k in keys]
+        fig.add_trace(go.Bar(
+            x=xs, y=[disp[k] * s if not pd.isna(s) else np.nan for k, s in zip(keys, share)],
+            name=c, marker_color=COMP_COLORS[c], customdata=share,
+            text=[f"{s:.0%}" if not pd.isna(s) and s >= 0.05 else "" for s in share],
+            textposition="inside", insidetextanchor="middle", textangle=0,
+            hovertemplate=f"{c}: %{{y:{fmt}}} (%{{customdata:.1%}})<extra></extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=[disp[k] for k in keys], mode="markers", name="합계",
+                             marker=dict(size=1, color="rgba(0,0,0,0)"), showlegend=False,
+                             hovertemplate=f"합계: %{{y:{fmt}}}<extra></extra>"))
+    base_layout(fig, title, height, unified=True)
+    fig.update_layout(barmode="stack", bargap=0.15, uniformtext_minsize=8, uniformtext_mode="hide",
+                      legend=dict(traceorder="normal"))
+    fig.update_xaxes(tickfont=dict(size=9.5), automargin=True)  # x축 2줄(기간/연도)이 잘리지 않게
+    fig.update_yaxes(automargin=True)
+    if tickfmt:
+        fig.update_yaxes(tickformat=tickfmt)
+    return fig
+
+
+def _render_trend_grid(df, targets, src="TOTAL", bar=False, comp=False):
     """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
     '누적으로 보기' 토글로 일평균 ↔ 월 합계값 보기를 전환한다."""
     cumulative = st.toggle(
@@ -2069,7 +2142,7 @@ def _render_trend_grid(df, targets, src="TOTAL", bar=False):
             with cc:
                 fig = metric_trend_fig(df_tab, col, "월", f"{lbl} ({suffix})",
                                        height=chart_h, tickfmt=RATIO_TICKFMT.get(col),
-                                       cumulative=cumulative, bar=bar)
+                                       cumulative=cumulative, bar=bar, comp=comp)
                 st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
 
 
@@ -2246,10 +2319,17 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     chart = st.radio("그래프 형태", ["선 그래프", "막대 그래프"], horizontal=True, key="sum_chart_type",
                      help="막대 그래프는 같은 기간(1월 · 1분기 · 주차 · 동요일 일자)마다 연도별 막대를 나란히 놓습니다.")
     bar = chart == "막대 그래프"
+    comp = bar and st.toggle(
+        "목적별 구성비 (거래액확대 · 신규고객확대 · 인지도제고)", value=False, key="sum_bar_comp",
+        help="연도별 막대를 비용출처 목적별로 쌓아 구성비(%)를 표시합니다. "
+             "광고비 · 거래액 · UV · 가입수 등 더할 수 있는 지표에만 적용되고, "
+             "ROAS · CPA · CR 같은 비율 지표는 연도별 막대 그대로입니다. "
+             "기타 = 세 목적에 속하지 않는 비용출처(브랜드비용 · 서비스비용-정산제외 등).")
     if gran == "월":
-        _render_trend_grid(df, targets, src=src, bar=bar)
+        _render_trend_grid(df, targets, src=src, bar=bar, comp=comp)
     else:
-        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary", bar=bar)
+        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary", bar=bar,
+                             comp=comp)
 
     st.divider()
     _render_period_detail(df, gran, key_prefix=f"sum_{gran}", prev_df=prev_df, src=src)
@@ -2439,7 +2519,8 @@ def _render_period_summary(df, gran, report_targets, targets, prev_df=None, src=
                            key=f"{gran}_sum", prev_tab=prev_tab)
 
 
-def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_key=None, bar=False):
+def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_key=None, bar=False,
+                         comp=False):
     """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
     당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
     전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다.
@@ -2484,7 +2565,7 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_k
             with cc:
                 fig = metric_trend_fig(graph_src, col, gran, f"{lbl}{suffix}",
                                        height=320, tickfmt=RATIO_TICKFMT.get(col),
-                                       cumulative=cumulative, bar=bar)
+                                       cumulative=cumulative, bar=bar, comp=comp)
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart_{col}")
 
 
