@@ -1812,21 +1812,6 @@ def _agg_slim(df: pd.DataFrame) -> pd.DataFrame:
     return df[["기간_일자"] + [c for c in AGG_COLS if c in df.columns]]
 
 
-def _sameday_prev_by_ym(df_tab: pd.DataFrame, days: int = DAYS_Y1) -> dict:
-    """동요일(-364일) 기준, 현재 각 (연도,월)에 대응하는 전년 집계를 반환.
-    반환: {(연도, 월): Series} — 키는 '현재' 기간의 (연도,월)."""
-    cur = df_tab[["기간_일자", "연도", "월"]].drop_duplicates().copy(deep=False)
-    cur["비교일자"] = cur["기간_일자"] - pd.Timedelta(days=days)
-    joined = _agg_slim(df_tab).merge(
-        cur[["비교일자", "연도", "월"]].rename(columns={"연도": "_cy", "월": "_cm"}),
-        left_on="기간_일자", right_on="비교일자", how="inner",
-    )
-    if joined.empty:
-        return {}
-    pa = agg(joined, ["_cy", "_cm"])
-    return {(int(r["_cy"]), int(r["_cm"])): r for _, r in pa.iterrows()}
-
-
 def _hl_total_row(row):
     """첫 컬럼이 'TOTAL'인 행을 굵게+음영 강조(Styler.apply axis=1용)."""
     return (["font-weight:700;background-color:#EEF2FF"] * len(row)
@@ -1902,72 +1887,6 @@ def _raw_dl(num_df, key, label="📥 원본 숫자 CSV 다운로드"):
                    for c in out.columns]
     st.download_button(label, data=out.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"{key}.csv", mime="text/csv", key=f"rawdl_{key}")
-
-
-def _render_monthly_section(df_tab, targets, tab_key, sameday=False, monthly_targets=None,
-                            tab_name=None, weekly_targets=None, weekly_rows=None):
-    """비용출처별 탭 내부: 실적요약 테이블 (2줄 헤더).
-    - 25년(START_YEAR) 행은 전년비/목표비 블락 + 한 표 접이식(체크박스)
-    - 당월(부분월)은 MTD 목표(주차별 목표 기준) 사용"""
-    if df_tab.empty:
-        st.info("해당 비용출처 데이터가 없습니다.")
-        return
-
-    cur = agg(df_tab[df_tab["연도"] >= START_YEAR], ["연도", "월"]).sort_values(["연도", "월"])
-    if cur.empty:
-        st.info("해당 기간 데이터가 없습니다.")
-        return
-
-    prev2_map = _sameday_prev_by_ym(df_tab, DAYS_Y2) if Y2_ON else {}
-    if sameday:
-        prev_map = _sameday_prev_by_ym(df_tab)
-    else:
-        pa = agg(df_tab, ["연도", "월"])
-        prev_map = {(int(r["연도"]), int(r["월"])): r for _, r in pa.iterrows()}
-
-    if tab_name in ("신규고객확대", "인지도제고"):
-        metric_labels, groups = ACQ_METRICS, ("실적", "전년비")
-    elif tab_name == "거래액확대":
-        metric_labels, groups = DEFAULT_METRICS, ("실적", "전년비")
-    else:  # TOTAL, TOTAL(서비스비용미반영)
-        metric_labels, groups = DEFAULT_METRICS, ("실적", "전년비", "목표", "목표비")
-    groups = _groups_with_y2(groups)
-
-    tab_monthly = (monthly_targets or {}).get(tab_name, {}) if monthly_targets else {}
-
-    # 당월(부분월) 판정
-    data_max = df_tab["기간_일자"].max()
-    cy, cm = int(data_max.year), int(data_max.month)
-    last_day = calendar.monthrange(cy, cm)[1]
-    partial = data_max.day < last_day
-
-    latest_yr = int(cur["연도"].max())
-    rows_new, rows_old = [], []
-    for _, r in cur.iterrows():
-        yr, mo = int(r["연도"]), int(r["월"])
-        label = f"{yr % 100:02d}년 {mo}월"
-        prev = prev_map.get((yr, mo)) if sameday else prev_map.get((yr - 1, mo))
-        prev2 = prev2_map.get((yr, mo))
-        tgt = dict(tab_monthly.get((yr, mo), {}) or {})
-        # 당월 MTD 목표 (TOTAL 탭만 weekly 목표 사용)
-        if partial and yr == cy and mo == cm and weekly_rows:
-            mtd = mtd_target_from_weekly(weekly_rows, yr, mo, data_max)
-            if mtd:
-                tgt = mtd
-        block = (yr <= START_YEAR)  # 첫 연도는 전년비/목표비 블락(이전 연도 데이터 혼입 방지)
-        block2 = (yr <= START_YEAR + 1)
-        (rows_old if yr < latest_yr else rows_new).append(
-            (label, r, prev, tgt, block, prev2, block2))
-
-    def _show(rows):
-        # 전체요약 월별 실적요약 표는 TOTAL 행 미표시
-        tbl = summary_table(rows, metric_labels, groups, period_type="월", add_total=False)
-        st.dataframe(_style_summary(tbl, metric_labels, groups),
-                     use_container_width=True, hide_index=True,
-                     height=_fit_height(len(rows), header_rows=2))
-
-    _split_render(rows_new, rows_old, _show, key=f"{tab_key}_yr")
-    _raw_dl(cur, f"{tab_key}_월별요약")
 
 
 # ──────────────────────────────────────────────────────────
@@ -2116,40 +2035,7 @@ def comp_year_bar_fig(df, val_col, gran, title, height=320, tickfmt=None, cumula
     return fig
 
 
-def _render_trend_grid(df, targets, src="TOTAL", bar=False, comp=False):
-    """지표별 추이 그리드 — 월 단위. 비용출처는 상단 선택값(src)을 따른다.
-    '누적으로 보기' 토글로 일평균 ↔ 월 합계값 보기를 전환한다."""
-    cumulative = st.toggle(
-        "📊 누적으로 보기", value=False, key="sum_cumulative",
-        help="켜면 일평균 대신 해당 월의 '합계값'으로 표시합니다. "
-             "비율 지표(ROAS·CTR·CPA·객단가 등)는 월 집계값 그대로입니다.")
-    per_row = 3  # 한 행에 3개 고정
-    mode = "월 · 합계" if cumulative else "월 · 일평균"
-    render_memo("summary")
-    st.markdown(f"#### 📈 지표별 추이 ({mode}) · 비용출처: {src}")
-    if cumulative:
-        st.caption("월별 **합계**(볼륨 지표는 월 합계값). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
-    else:
-        st.caption("월별 **일평균**(합계 지표 ÷ 집행일수). 당월은 전년도 **MTD**(동요일 -364일) 창으로 비교합니다.")
-    df_tab = _filter_cost(df, src)
-    if df_tab.empty:
-        st.info("해당 비용출처 데이터가 없습니다.")
-        return
-    suffix = "월 합계" if cumulative else "월 일평균"
-    # 3열 배치로 폭이 좁아지므로 높이를 약간 키워 라벨 가독성 보정
-    chart_h = 320
-    mlist = list(SUMMARY_CHART_METRICS.items())
-    for i in range(0, len(mlist), per_row):
-        ccols = st.columns(per_row)
-        for (lbl, col), cc in zip(mlist[i:i + per_row], ccols):
-            with cc:
-                fig = metric_trend_fig(df_tab, col, "월", f"{lbl} ({suffix})",
-                                       height=chart_h, tickfmt=RATIO_TICKFMT.get(col),
-                                       cumulative=cumulative, bar=bar, comp=comp)
-                st.plotly_chart(fig, use_container_width=True, key=f"sum_chart_{col}")
-
-
-# 전체요약/주차별/일별 공용 필터 스펙
+# 전체요약 공용 필터 스펙
 _PAGE_FILTER_SPECS = [
     ("비용출처", "구분_비용출처"), ("채널명", "구분_채널"), ("매체명", "구분_매체명"),
     ("상품명", "구분_상품"), ("브랜드/기획전", "구분_브랜드/기획전"),
@@ -2273,7 +2159,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
         st.warning("데이터가 없습니다.")
         return
 
-    # ── 지표별 카드 요약: 이 영역에만 날짜 범위 카드 적용
+    # ── 지표별 카드 요약 · 날짜 범위(아래 표 · 그래프에도 적용)
     st.markdown("##### 📇 지표별 카드 요약")
     kpi_df = date_range_filter(df, key_prefix="sum")
 
@@ -2288,35 +2174,24 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
 
     kpi_cards(kpi_df, targets, full_df=df)
     st.divider()
-    st.caption("아래 표·그래프는 날짜 카드와 무관하게 전체 기간 데이터를 표시합니다.")
 
     # ── 상단: 기간 단위 · 비용출처 선택 (한 번 고르면 아래 요약표·그래프 전체에 동일 적용)
     gran = st.radio("기간 단위", ["분기", "월", "주", "일"], index=1, horizontal=True, key="sum_gran")
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key="sum_src")
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
-               "· 선택한 **기간 단위 · 비용출처가 아래 표·그래프 전체에 적용**됩니다.")
-    sameday = True
+               "· 위 **날짜 범위 · 기간 단위 · 비용출처가 아래 표·그래프 전체에 적용**됩니다.")
 
-    monthly_targets = (report_targets or {}).get("monthly", {})
-    weekly_rows = (report_targets or {}).get("weekly_rows", {})
-    is_total = src in ("TOTAL", "TOTAL(서비스비용미반영)")
-    df, prev_df = with_quarter(df), None
-    # 주 · 일은 표시 범위를 좁혀 보고(기본: 마지막 월 주차 / 최신 월), 전년비 · 전년선은 전체 기간에서 가져온다
-    if gran in ("주", "일"):
-        scoped = _period_scope(df, f"sum_{gran}", month_picker=(gran == "일"),
-                               recent_default=(12 if gran == "주" else None))
-        if scoped is None:
-            return
-        df, prev_df = scoped
+    # 아래 표 · 그래프 = 날짜 범위 안 데이터. 전년비 · 전년선(동요일)은 날짜 미필터 prev_df 에서 가져온다
+    prev_df = with_quarter(df)
+    start, end = pd.Timestamp(st.session_state["sum_start"]), pd.Timestamp(st.session_state["sum_end"])
+    df = prev_df[(prev_df["기간_일자"] >= start) & (prev_df["기간_일자"] <= end)]
+    if df.empty:
+        st.info("선택한 날짜 범위에 데이터가 없습니다.")
+        return
 
     # ── 실적요약표 → 그래프 → 상세 실적표 (동일 비용출처 적용)
-    st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src}")
-    if gran == "월":
-        _render_monthly_section(_filter_cost(df, src), targets, tab_key="sum", sameday=sameday,
-                                monthly_targets=monthly_targets, tab_name=src,
-                                weekly_rows=(weekly_rows if is_total else None))
-    else:
-        _render_period_summary(df, gran, report_targets, targets, prev_df=prev_df, src=src)
+    st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src} · {start.date()} ~ {end.date()}")
+    _render_period_summary(df, gran, report_targets, targets, prev_df=prev_df, src=src)
 
     st.divider()
     chart = st.radio("그래프 형태", ["선 그래프", "막대 그래프"], horizontal=True, key="sum_chart_type",
@@ -2328,11 +2203,8 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
              "광고비 · 거래액 · UV · 가입수 등 더할 수 있는 지표에만 적용되고, "
              "ROAS · CPA · CR 같은 비율 지표는 연도별 막대 그대로입니다. "
              "브랜드비용 · 브랜드/정산제외 · 서비스비용-정산제외는 거래액확대에 포함합니다.")
-    if gran == "월":
-        _render_trend_grid(df, targets, src=src, bar=bar, comp=comp)
-    else:
-        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary", bar=bar,
-                             comp=comp)
+    _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary", bar=bar,
+                         comp=comp)
 
     st.divider()
     _render_period_detail(df, gran, key_prefix=f"sum_{gran}", prev_df=prev_df, src=src)
@@ -2550,8 +2422,12 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_k
     if prev_df is not None:
         prev_tab = _filter_cost(prev_df, src)
         cur_dates = df_tab["기간_일자"].drop_duplicates()
-        prev_dates = pd.concat([pd.Series(cur_dates.values) - pd.Timedelta(days=dd)
-                                for dd in ((DAYS_Y1, DAYS_Y2) if Y2_ON else (DAYS_Y1,))])
+        # 연도별 겹쳐보기는 달력 연도로 선을 나누므로, 동요일 전년일이 같은 해로 넘어가는
+        # 연말(12/31 - 364일 = 같은 해 1/1)은 비교 데이터에서 뺀다.
+        cur_s = pd.Series(cur_dates.values)
+        prev_dates = pd.concat([
+            (cur_s - pd.Timedelta(days=dd))[(cur_s - pd.Timedelta(days=dd)).dt.year == cur_s.dt.year - k]
+            for k, dd in enumerate((DAYS_Y1, DAYS_Y2) if Y2_ON else (DAYS_Y1,), start=1)])
         extra = prev_tab[prev_tab["기간_일자"].isin(prev_dates)
                          & ~prev_tab["기간_일자"].isin(cur_dates)]
         if not extra.empty:
@@ -2626,58 +2502,6 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
         st.markdown(f"##### 📄 {gran}별 실적 (전전년비 · 2년 전 동요일) · 비용출처: {src}")
         _split_render(rows_new, rows_old, _yoy2, key=f"{key_prefix}_detC", latest_first=lf)
     _raw_dl(cur, f"{key_prefix}_상세")
-
-
-def _period_scope(base, key_prefix, month_picker=False, recent_default=None):
-    """주/일 표시 범위 선택 → (df, prev_df). 표시할 데이터가 없으면 None.
-    month_picker=True(일): 기본은 최신 연월만.
-    recent_default=N(주): 기본은 '로데이터 마지막 월 주차', '최근 N주'·'전체 기간' 전환 가능.
-    prev_df: 전년비 · 전년 그래프용(기간 미필터) 소스."""
-    df = base
-    prev_df = None
-    if month_picker and "연월" in base.columns and not base.empty:
-        months = sorted(base["연월"].dropna().unique(), reverse=True)
-        opts = ["전체 기간"] + months
-        sel = st.selectbox("조회 기간", opts, index=(1 if len(opts) > 1 else 0),
-                           key=f"{key_prefix}_month")
-        if sel != "전체 기간":
-            df = base[base["연월"] == sel]
-            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
-        if df.empty:
-            st.info("해당 기간 데이터가 없습니다.")
-            return None
-    elif recent_default and not base.empty:
-        # 디폴트: 로데이터 마지막 월에 속한 주차만 노출.
-        # (주차 경계상 전월 일자가 섞인 주차도 그 주차 전체를 그대로 노출)
-        SCOPE_MONTH = "마지막 월 주차"
-        SCOPE_RECENT = "최근 N주"
-        SCOPE_ALL = "전체 기간"
-        c_scope, c_n = st.columns([2, 1])
-        with c_scope:
-            scope = st.radio("표시 범위", [SCOPE_MONTH, SCOPE_RECENT, SCOPE_ALL],
-                             horizontal=True, key=f"{key_prefix}_scope",
-                             help="기본은 로데이터 마지막 월에 해당하는 주차만 노출합니다. "
-                                  "주차가 전월 일자를 포함해도(예: 6/29~7/5) 해당 주차 전체를 표시합니다.")
-        ordv = base["연도"].astype(int) * 100 + base["주차번호"].astype(int)
-        if scope == SCOPE_RECENT:
-            with c_n:
-                n_weeks = st.number_input(
-                    "최근 표시 주차 수", min_value=1, max_value=520,
-                    value=recent_default, step=1, key=f"{key_prefix}_nweeks",
-                    help="최근 몇 주를 표시할지 직접 입력하세요.")
-            recent = sorted(ordv.unique())[-int(n_weeks):]
-            df = base[ordv.isin(recent)]
-            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
-        elif scope == SCOPE_MONTH:
-            last_ym = base["연월"].dropna().max()  # 'YYYY-MM' 문자열 → 사전순 최대 = 최신 월
-            month_ordv = ordv[base["연월"] == last_ym].unique()
-            df = base[ordv.isin(month_ordv)]
-            prev_df = base  # 전년비는 전체 기간에서 동요일 비교
-        # SCOPE_ALL은 df=base(전체) 그대로 사용
-        if scope != SCOPE_ALL and df.empty:
-            st.info("해당 기간 데이터가 없습니다.")
-            return None
-    return df, prev_df
 
 
 # ───────────────────────────────────────────────
