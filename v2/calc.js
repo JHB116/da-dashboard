@@ -31,6 +31,7 @@
     M('nbr', '신규거래액', 'money', ['nbr'], s => s.nbr),
     M('fp', '첫구매수', 'count', ['fp'], s => s.fp),
     M('fcpa', '첫구매CPA', 'won', ['cost', 'fp'], s => div(s.cost, s.fp), { lowerBetter: true }),
+    M('ncpa', '신규CPA', 'won', ['cost', 'nb'], s => div(s.cost, s.nb), { lowerBetter: true }),
     // 상세 표에만
     M('imp', '노출수', 'count', ['imp'], s => s.imp),
     M('clk', '클릭수', 'count', ['clk'], s => s.clk),
@@ -52,10 +53,10 @@
   ];
   const METRIC = Object.fromEntries(METRIC_LIST.map(m => [m.k, m]));
   // 요약 타일 · 추이 차트 (기존 대시보드 전체요약 순서)
-  const SUMMARY = ['cost', 'nrev', 'roas', 'npr', 'trev', 'troas', 'uv', 'crt', 'aovt', 'cpc', 'ctr', 'cpuv', 'join', 'jcpa', 'nbr', 'fp', 'fcpa'];
+  const SUMMARY = ['cost', 'nrev', 'roas', 'npr', 'trev', 'troas', 'uv', 'crt', 'aovt', 'cpc', 'ctr', 'cpuv', 'join', 'jcpa', 'nbr', 'fp', 'fcpa', 'ncpa'];
   // 기간별 상세 표 (기존 dashboard.py DAILY_DETAIL_SPEC 순서)
   const DETAIL = ['imp', 'clk', 'ctr', 'crn', 'aovn', 'npay', 'cpm', 'cpc', 'cpuv', 'uv', 'cost', 'nrev', 'roas', 'npr', 'trev', 'troas',
-    'uvc', 'crt', 'aovt', 'tpay', 'jr', 'join', 'jcpa', 'fpu', 'fp', 'fcpa', 'fpr', 'fps', 'nb', 'nbr', 'nbs', 'wb', 'wbr'];
+    'uvc', 'crt', 'aovt', 'tpay', 'jr', 'join', 'jcpa', 'fpu', 'fp', 'fcpa', 'fpr', 'fps', 'nb', 'ncpa', 'nbr', 'nbs', 'wb', 'wbr'];
 
   // 비용출처 묶음 — dashboard.py COST_BUCKETS 와 같다 (공백 · 대소문자 · 전각 슬래시 무시하고 비교)
   const COST_BUCKETS = {

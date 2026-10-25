@@ -522,6 +522,7 @@ def calc_kpi(df: pd.DataFrame) -> pd.DataFrame:
     d["총결제ROAS"]  = safe_div(d["지표_총결제거래액"],                   d["지표_광고비"])
     d["가입CPA"]    = safe_div(d["지표_광고비"],                        d["지표_가입회원"])
     d["첫구매CPA"]  = safe_div(d["지표_광고비"],                        d["지표_순결제고객수(첫구매)"])
+    d["신규CPA"]    = safe_div(d["지표_광고비"],                        d["지표_당년신규순결제고객수"])
     d["가입률"]     = safe_div(d["지표_가입회원"],                       d["지표_UV(전체)"])
     d["첫구매율"]   = safe_div(d["지표_순결제고객수(첫구매)"],             d["지표_UV(전체)"])
     d["CPM"]        = safe_div(d["지표_광고비"] * 1000,                 d["지표_노출수"])
@@ -628,6 +629,7 @@ SUMMARY_CHART_METRICS = {
     "가입수": "지표_가입회원", "가입CPA": "가입CPA",
     "신규거래액": "지표_당년신규순결제거래액",
     "첫구매수": "지표_순결제고객수(첫구매)", "첫구매CPA": "첫구매CPA",
+    "신규CPA": "신규CPA",
 }
 RATIO_TICKFMT = {"순결제ROAS": ".0%", "총결제ROAS": ".0%", "순결제비중": ".1%",
                  "CR(총)": ".2%", "CTR": ".2%"}
@@ -671,7 +673,7 @@ _METRIC_CANON_COLS = [
     "UV/클릭", "CR(총)", "객단가(총)", "지표_총결제고객수",
     "가입률", "지표_가입회원", "가입CPA",
     "지표_순결제고객수(첫구매)", "첫구매CPA", "지표_순결제거래액(첫구매)", "첫구매율", "첫구매비중",
-    "지표_당년신규순결제고객수", "지표_당년신규순결제거래액", "신규비중",
+    "지표_당년신규순결제고객수", "신규CPA", "지표_당년신규순결제거래액", "신규비중",
     "지표_순결제고객수(윈백)", "지표_순결제거래액(윈백)", "윈백비중",
     "집행일수", "지표_UV(회원)", "회원UV비중", "지표_PV(전체)", "지표_PV(회원)",
     "지표_총결제고객수(첫구매)", "지표_총결제거래액(첫구매)",
@@ -1667,7 +1669,7 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
     # 목표 KPI 바
     render_goal_bar(targets, spend, rev, roas)
 
-    # 11개 지표 (요청 순서): 광고비, 거래액, ROAS, UV, CR(총), CTR, CPC, 가입률, 가입CPA, 첫구매CPA, 신규거래액
+    # 지표 (요청 순서): 광고비, 거래액, ROAS, 순결제비중, UV, CR(총), CTR, CPC, 가입률, 가입CPA, 첫구매CPA, 신규거래액, 신규CPA
     metrics = [
         ("💰 광고비",       money_tip(spend),                        "지표_광고비",
          targets.get("spend", 0), spend),
@@ -1692,6 +1694,8 @@ def kpi_cards(df: pd.DataFrame, targets: dict, full_df: pd.DataFrame = None):
         ("🧾 첫구매CPA",     money_tip(tot["첫구매CPA"]),             "첫구매CPA",
          None, None),
         ("🆕 신규거래액",    money_tip(tot["지표_당년신규순결제거래액"]), "지표_당년신규순결제거래액",
+         None, None),
+        ("🆕 신규CPA",       money_tip(tot["신규CPA"]),               "신규CPA",
          None, None),
     ]
 
