@@ -2202,14 +2202,18 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     weekly_rows = (report_targets or {}).get("weekly_rows", {})
     is_total = src in ("TOTAL", "TOTAL(서비스비용미반영)")
     if gran != "월":
-        df = with_quarter(df)
+        df, prev_df = with_quarter(df), None
+        # 주 · 일은 주차별/일별 시트처럼 표시 범위를 좁혀 보고, 전년비 · 전년선은 전체 기간에서 가져온다
+        if gran in ("주", "일"):
+            scoped = _period_scope(df, f"sum_{gran}", month_picker=(gran == "일"),
+                                   recent_default=(12 if gran == "주" else None))
+            if scoped is None:
+                return
+            df, prev_df = scoped
         st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src}")
-        _render_period_section(_filter_cost(df, src), gran, src,
-                               weekly_targets=((report_targets or {}).get("weekly", {}) if is_total else None),
-                               monthly_targets=monthly_targets,
-                               weekly_rows=(weekly_rows if is_total else None), key=f"sum_{gran}")
+        _render_period_summary(df, gran, report_targets, targets, prev_df=prev_df, src=src)
         st.divider()
-        _render_period_graph(df, gran, f"sum_{gran}", src=src, memo_key="summary")
+        _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary")
         return
 
     df_tab = _filter_cost(df, src)
@@ -2512,18 +2516,11 @@ def _render_period_detail(df, gran, key_prefix="", prev_df=None, src="TOTAL"):
     _raw_dl(cur, f"{key_prefix}_상세")
 
 
-def render_period_sheet(df, gran, header, report_targets=None, targets=None,
-                        key_prefix=None, month_picker=False, recent_default=None):
-    """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
-    month_picker=True(일별): 기본은 최신 연월만 표시.
-    recent_default=N(주차별): 기본은 '로데이터 마지막 월 주차'만 노출.
-        표시 범위 라디오로 '최근 N주'(기본 N=recent_default)·'전체 기간' 전환 가능."""
-    st.header(header)
-    if df.empty:
-        st.warning("데이터가 없습니다.")
-        return
-    key_prefix = key_prefix or gran
-    base = page_filters(df, f"{key_prefix}f", expanded=False)
+def _period_scope(base, key_prefix, month_picker=False, recent_default=None):
+    """주/일 표시 범위 선택 → (df, prev_df). 표시할 데이터가 없으면 None.
+    month_picker=True(일): 기본은 최신 연월만.
+    recent_default=N(주): 기본은 '로데이터 마지막 월 주차', '최근 N주'·'전체 기간' 전환 가능.
+    prev_df: 전년비 · 전년 그래프용(기간 미필터) 소스."""
     df = base
     prev_df = None
     if month_picker and "연월" in base.columns and not base.empty:
@@ -2536,7 +2533,7 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
             prev_df = base  # 전년비는 전체 기간에서 동요일 비교
         if df.empty:
             st.info("해당 기간 데이터가 없습니다.")
-            return
+            return None
     elif recent_default and not base.empty:
         # 디폴트: 로데이터 마지막 월에 속한 주차만 노출.
         # (주차 경계상 전월 일자가 섞인 주차도 그 주차 전체를 그대로 노출)
@@ -2567,7 +2564,29 @@ def render_period_sheet(df, gran, header, report_targets=None, targets=None,
         # SCOPE_ALL은 df=base(전체) 그대로 사용
         if scope != SCOPE_ALL and df.empty:
             st.info("해당 기간 데이터가 없습니다.")
-            return
+            return None
+    return df, prev_df
+
+
+def render_period_sheet(df, gran, header, report_targets=None, targets=None,
+                        key_prefix=None, month_picker=False, recent_default=None):
+    """주차별/일별 시트: 필터 → 실적요약탭 → 그래프 → 상세표 → 상세표(전년비).
+    month_picker=True(일별): 기본은 최신 연월만 표시.
+    recent_default=N(주차별): 기본은 '로데이터 마지막 월 주차'만 노출.
+        표시 범위 라디오로 '최근 N주'(기본 N=recent_default)·'전체 기간' 전환 가능."""
+    st.header(header)
+    if df.empty:
+        st.warning("데이터가 없습니다.")
+        return
+    key_prefix = key_prefix or gran
+    base = page_filters(df, f"{key_prefix}f", expanded=False)
+    df = base
+    prev_df = None
+    scoped = _period_scope(base, key_prefix, month_picker=month_picker,
+                           recent_default=recent_default)
+    if scoped is None:
+        return
+    df, prev_df = scoped
     # 비용출처 선택(한 번 고르면 요약표·상세표·그래프 전체에 동일 적용)
     src = st.radio("비용출처", COST_SRC_OPTS, horizontal=True, key=f"{key_prefix}_src")
     st.caption("ℹ️ 선택한 **비용출처가 아래 요약표·상세표·그래프 전체에 적용**됩니다. "
