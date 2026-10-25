@@ -2049,11 +2049,14 @@ def render_memo(key: str, title: str = "📝 분석 메모"):
 # ───────────────────────────────────────────────
 COMP_BUCKETS = ["거래액확대", "신규고객확대", "인지도제고"]
 COMP_COLORS = {"거래액확대": "#2a78d6", "신규고객확대": "#e0569b", "인지도제고": "#f0a01e", "기타": "#a3a19b"}
+# 세 목적 탭 목록에 없는 TOTAL 비용출처 → 구성비 그래프에서는 거래액확대로 본다(비용출처 탭 합산은 그대로)
+COMP_EXTRA = {"브랜드비용": "거래액확대", "브랜드/정산제외": "거래액확대", "서비스비용-정산제외": "거래액확대"}
 _COMP_LOOKUP = {_norm_cost(v): b for b in COMP_BUCKETS for v in COST_BUCKETS[b]}
+_COMP_LOOKUP.update({_norm_cost(v): b for v, b in COMP_EXTRA.items()})
 
 
 def _cost_comp(series):
-    """비용출처 → 목적 묶음. 세 목적에 없는 비용출처(브랜드비용·서비스비용-정산제외 등)는 '기타'."""
+    """비용출처 → 목적 묶음. 목록에 없는 비용출처는 '기타'(TOTAL 비용출처는 모두 세 목적 중 하나)."""
     return series.map(lambda v: _COMP_LOOKUP.get(_norm_cost(v), "기타"))
 
 
@@ -2324,7 +2327,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
         help="연도별 막대를 비용출처 목적별로 쌓아 구성비(%)를 표시합니다. "
              "광고비 · 거래액 · UV · 가입수 등 더할 수 있는 지표에만 적용되고, "
              "ROAS · CPA · CR 같은 비율 지표는 연도별 막대 그대로입니다. "
-             "기타 = 세 목적에 속하지 않는 비용출처(브랜드비용 · 서비스비용-정산제외 등).")
+             "브랜드비용 · 브랜드/정산제외 · 서비스비용-정산제외는 거래액확대에 포함합니다.")
     if gran == "월":
         _render_trend_grid(df, targets, src=src, bar=bar, comp=comp)
     else:
