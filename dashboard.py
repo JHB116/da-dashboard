@@ -2181,13 +2181,30 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
                "· 위 **날짜 범위 · 기간 단위 · 비용출처가 아래 표·그래프 전체에 적용**됩니다.")
 
-    # 아래 표 · 그래프 = 날짜 범위 안 데이터. 전년비 · 전년선(동요일)은 날짜 미필터 prev_df 에서 가져온다
-    prev_df = with_quarter(df)
+    # 아래 표 · 그래프 = 날짜 범위 안 데이터. 전년비 · 전년선(동요일)은 범위 날짜의 -364 · -728일 데이터만 쓴다.
+    # 필요한 날짜 · 컬럼만 한 번 잘라 두고 그 안에서 나눈다(전체 데이터 사본이 여러 번 생기면 Cloud 메모리가 터진다).
+    full = with_quarter(df)
     start, end = pd.Timestamp(st.session_state["sum_start"]), pd.Timestamp(st.session_state["sum_end"])
-    df = prev_df[(prev_df["기간_일자"] >= start) & (prev_df["기간_일자"] <= end)]
-    if df.empty:
+    dcol = full["기간_일자"]
+    in_range = (dcol >= start) & (dcol <= end)
+    if not in_range.any():
         st.info("선택한 날짜 범위에 데이터가 없습니다.")
         return
+    # 그래프: 범위가 기간 1개뿐이면(예: 이번달 · 월 단위) 추이가 안 보이므로 올해 1/1(일 단위는 그 달 1일)부터 끝일까지
+    g_start = start
+    if len(full.loc[in_range, PERIOD_COLS[gran]].drop_duplicates()) < 2:
+        g_start = min(start, end.replace(day=1) if gran == "일" else end.replace(month=1, day=1))
+
+    def _need(lo):
+        dates = pd.Series(dcol[(dcol >= lo) & (dcol <= end)].unique())
+        return pd.concat([dates] + [dates - pd.Timedelta(days=k) for k in (DAYS_Y1, DAYS_Y2)])
+
+    keep = [c for c in ["기간_일자", "연도", "월", "분기", "주차번호", "연월", "구분_비용출처"] + AGG_COLS if c in full.columns]
+    slim = full.loc[dcol.isin(_need(g_start)), keep]
+    sd = slim["기간_일자"]
+    df = slim[(sd >= start) & (sd <= end)]
+    prev_df = slim[sd.isin(_need(start))]
+    graph_df, graph_prev = (df, prev_df) if g_start == start else (slim[(sd >= g_start) & (sd <= end)], slim)
 
     # ── 실적요약표 → 그래프 → 상세 실적표 (동일 비용출처 적용)
     st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src} · {start.date()} ~ {end.date()}")
@@ -2203,7 +2220,10 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
              "광고비 · 거래액 · UV · 가입수 등 더할 수 있는 지표에만 적용되고, "
              "ROAS · CPA · CR 같은 비율 지표는 연도별 막대 그대로입니다. "
              "브랜드비용 · 브랜드/정산제외 · 서비스비용-정산제외는 거래액확대에 포함합니다.")
-    _render_period_graph(df, gran, f"sum_{gran}", prev_df=prev_df, src=src, memo_key="summary", bar=bar,
+    if graph_df is not df:
+        st.caption(f"ℹ️ 선택한 날짜 범위가 {gran} 하나뿐이라 그래프는 "
+                   f"{graph_df['기간_일자'].min().date()} ~ {end.date()} 추이로 보여줍니다. (표는 선택 범위 그대로)")
+    _render_period_graph(graph_df, gran, f"sum_{gran}", prev_df=graph_prev, src=src, memo_key="summary", bar=bar,
                          comp=comp)
 
     st.divider()
