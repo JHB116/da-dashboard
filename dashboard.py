@@ -2181,30 +2181,29 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     st.caption("ℹ️ 전년비는 **동요일 기준**(전년 동일 요일, -364일)으로 비교합니다. "
                "· 위 **날짜 범위 · 기간 단위 · 비용출처가 아래 표·그래프 전체에 적용**됩니다.")
 
-    # 아래 표 · 그래프 = 날짜 범위 안 데이터. 전년비 · 전년선(동요일)은 범위 날짜의 -364 · -728일 데이터만 쓴다.
-    # 필요한 날짜 · 컬럼만 한 번 잘라 두고 그 안에서 나눈다(전체 데이터 사본이 여러 번 생기면 Cloud 메모리가 터진다).
-    full = with_quarter(df)
+    # 아래 표 · 그래프는 지표 합만 쓰므로 먼저 날짜 × 비용출처 합계로 줄인다(수십만 행 → 수만 행).
+    # 원본 사본을 여러 번 만들지 않아 Cloud 메모리가 터지지 않는다. 전년비 · 전년선(동요일)은 같은 합계에서 가져온다.
+    daily = summary_daily(df)
     start, end = pd.Timestamp(st.session_state["sum_start"]), pd.Timestamp(st.session_state["sum_end"])
-    dcol = full["기간_일자"]
-    in_range = (dcol >= start) & (dcol <= end)
-    if not in_range.any():
+    dd = daily["기간_일자"]
+    df = daily[(dd >= start) & (dd <= end)]
+    if df.empty:
         st.info("선택한 날짜 범위에 데이터가 없습니다.")
         return
+
+    def _with_prev(cur):
+        dates = cur["기간_일자"].drop_duplicates()
+        need = pd.concat([dates] + [dates - pd.Timedelta(days=k) for k in (DAYS_Y1, DAYS_Y2)])
+        return daily[dd.isin(need)]
+
+    prev_df = _with_prev(df)
     # 그래프: 범위가 기간 1개뿐이면(예: 이번달 · 월 단위) 추이가 안 보이므로 올해 1/1(일 단위는 그 달 1일)부터 끝일까지
-    g_start = start
-    if len(full.loc[in_range, PERIOD_COLS[gran]].drop_duplicates()) < 2:
-        g_start = min(start, end.replace(day=1) if gran == "일" else end.replace(month=1, day=1))
-
-    def _need(lo):
-        dates = pd.Series(dcol[(dcol >= lo) & (dcol <= end)].unique())
-        return pd.concat([dates] + [dates - pd.Timedelta(days=k) for k in (DAYS_Y1, DAYS_Y2)])
-
-    keep = [c for c in ["기간_일자", "연도", "월", "분기", "주차번호", "연월", "구분_비용출처"] + AGG_COLS if c in full.columns]
-    slim = full.loc[dcol.isin(_need(g_start)), keep]
-    sd = slim["기간_일자"]
-    df = slim[(sd >= start) & (sd <= end)]
-    prev_df = slim[sd.isin(_need(start))]
-    graph_df, graph_prev = (df, prev_df) if g_start == start else (slim[(sd >= g_start) & (sd <= end)], slim)
+    graph_df, graph_prev = df, prev_df
+    if len(df[PERIOD_COLS[gran]].drop_duplicates()) < 2:
+        g_start = end.replace(day=1) if gran == "일" else end.replace(month=1, day=1)
+        if g_start < start:
+            graph_df = daily[(dd >= g_start) & (dd <= end)]
+            graph_prev = _with_prev(graph_df)
 
     # ── 실적요약표 → 그래프 → 상세 실적표 (동일 비용출처 적용)
     st.markdown(f"##### 📋 {gran}별 실적요약 · 비용출처: {src} · {start.date()} ~ {end.date()}")
@@ -2237,11 +2236,18 @@ PERIOD_COLS = {"분기": ["연도", "분기"], "월": ["연도", "월"], "주": 
 PERIOD_TYPE = {"분기": "분기", "월": "월", "주": "주차", "일": "일"}
 
 
-def with_quarter(df):
-    """'분기' 컬럼 보장(load_data 캐시가 예전 버전이어도 동작하도록)."""
-    if "분기" in df.columns or "월" not in df.columns:
-        return df
-    return df.assign(분기=(df["월"] - 1) // 3 + 1)
+def summary_daily(df):
+    """전체요약 아래 표 · 그래프용: 날짜 × 비용출처 지표 합계 + 기간 컬럼.
+    agg · 전년비 · 그래프가 모두 합계로 계산하므로 원본 행 대신 써도 숫자가 같다(집행일수 = 날짜 수)."""
+    cols = [c for c in AGG_COLS if c in df.columns]
+    d = (df.groupby(["기간_일자", "구분_비용출처"], dropna=False, observed=True, sort=False)[cols]
+         .sum().reset_index())
+    t = d["기간_일자"]
+    d["연도"], d["월"] = t.dt.year, t.dt.month
+    d["분기"] = (d["월"] - 1) // 3 + 1
+    d["연월"] = t.dt.to_period("M").astype(str)
+    d["주차번호"] = t.dt.isocalendar().week.astype(int)
+    return d
 
 
 def _row_year(gran, r):
