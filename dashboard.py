@@ -1957,8 +1957,10 @@ def render_memo(key: str, title: str = "📝 분석 메모"):
         else:
             st.session_state.pop(ak, None)  # 다음 편집 때 저장된 내용으로 다시 시작
         if not editing and text.strip():
-            # 줄바꿈 그대로 보이도록 마크다운 강제 개행 처리
-            st.markdown(text.replace("\n", "  \n"))
+            # 입력한 글자 그대로 보이게: ~(취소선) · * _(굵게/기울임) · $(수식) · `(코드)는 이스케이프,
+            # 줄바꿈은 마크다운 강제 개행 처리
+            shown = re.sub(r"([\\`*_~$])", r"\\\1", text)
+            st.markdown(shown.replace("\n", "  \n"))
         elif not editing:
             st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요.")
 
