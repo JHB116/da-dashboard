@@ -516,7 +516,14 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
     }
     log(f'[백업] 집계 {len(g):,}행 · {len(dates)}일 ({src["from"]} ~ {src["to"]})' + (f' · 고정 ~{lock}' if lock else ''))
     return {'format': FORMAT, 'version': VERSION, 'created': dt.datetime.now().isoformat(timespec='seconds'),
-            'lastDate': src['to'], 'source': src, 'row': sec}
+            'lastDate': src['to'], 'source': src, 'row': sec,
+            'targets': (base or {}).get('targets'), 'memos': (base or {}).get('memos') or {}}
+
+
+def targets_payload(targets: dict) -> dict:
+    """목표만 담은 백업 — 대시보드가 저장된 데이터에 목표만 바꿔 넣는다"""
+    return {'format': FORMAT, 'version': VERSION, 'created': dt.datetime.now().isoformat(timespec='seconds'),
+            'source': {}, 'targets': targets}
 
 
 def backup_bytes(payload: dict) -> bytes:
@@ -553,12 +560,21 @@ def main(argv=None):
     ap.add_argument('--row', type=Path, nargs='*', help='25·26년 로데이터(매일) 파일들 (기본: raw 폴더 전부, 수정시각 순)')
     ap.add_argument('--y24', type=Path, nargs='*', help='24년 로데이터 파일 (기본: raw/2024 폴더) — 2024-12-31 까지만 쓰고 고정')
     ap.add_argument('--base', type=Path, help='이어 붙일 기존 백업(.json.gz)')
+    ap.add_argument('--targets', type=Path, help='목표 파일(보고서 엑셀 .xlsx) — 실적 요약표 목표 · 목표비')
     a = ap.parse_args(argv)
+    tg = None
+    if a.targets:
+        import targets as tgm
+        tg = tgm.parse_targets(a.targets.read_bytes(), a.targets.name)
+        log(f'[목표] {a.targets.name}: 월 {tgm.count(tg)[0]}건 · 주 {tgm.count(tg)[1]}건')
 
-    use_folder = a.row is None and a.y24 is None
+    use_folder = a.row is None and a.y24 is None and not a.targets
     rows = by_mtime(_raw_files(RAW_DIR)) if use_folder else list(a.row or [])
     y24 = by_mtime(_raw_files(RAW24_DIR)) if use_folder and RAW24_DIR.exists() else list(a.y24 or [])
     base = read_backup(a.base) if a.base else None
+    if tg and not rows and not y24 and not base:
+        write_backup(targets_payload(tg))
+        return
     if not rows and not y24 and not base:
         sys.exit(f'원천 파일이 없습니다. {RAW_DIR} 에 로데이터(xlsb · csv · xlsx)를, 24년 파일은 {RAW24_DIR} 에 넣거나 --row / --y24 로 지정하세요.')
     log(f'매일 파일: {[Path(p).name for p in rows] or "(없음)"} / 24년 파일: {[Path(p).name for p in y24] or "(없음)"}'
@@ -567,6 +583,8 @@ def main(argv=None):
         payload = build(rows, y24, base=base)
     except ValueError as e:
         sys.exit(str(e))
+    if tg:
+        payload['targets'] = tg
     write_backup(payload)
 
 

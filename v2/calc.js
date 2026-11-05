@@ -21,8 +21,8 @@
     M('trev', '거래액(총결제)', 'money', ['trev'], s => s.trev),
     M('troas', 'ROAS(총결제)', 'roas', ['trev', 'cost'], s => div(s.trev, s.cost)),
     M('uv', 'UV', 'count', ['uv'], s => s.uv),
-    M('crt', 'CR(총결제)', 'ratio', ['tpay', 'uv'], s => div(s.tpay, s.uv), { dp: 3 }),
-    M('crct', 'CR(클릭기준·총결제)', 'ratio', ['tpay', 'clk'], s => div(s.tpay, s.clk), { dp: 3 }),
+    M('crt', 'CR(총결제)', 'ratio', ['tpay', 'uv'], s => div(s.tpay, s.uv), { dp: 2 }),
+    M('crct', 'CR(클릭기준·총결제)', 'ratio', ['tpay', 'clk'], s => div(s.tpay, s.clk), { dp: 2 }),
     M('aovt', '객단가(총결제)', 'won', ['trev', 'tpay'], s => div(s.trev, s.tpay)),
     M('cpc', 'CPC', 'won', ['cost', 'clk'], s => div(s.cost, s.clk), { lowerBetter: true }),
     M('ctr', 'CTR', 'ratio', ['clk', 'imp'], s => div(s.clk, s.imp), { dp: 2 }),
@@ -38,7 +38,7 @@
     M('clk', '클릭수', 'count', ['clk'], s => s.clk),
     M('cpm', 'CPM', 'won', ['cost', 'imp'], s => div(s.cost * 1000, s.imp), { lowerBetter: true }),
     M('npay', '결제고객수(순)', 'count', ['npay'], s => s.npay),
-    M('crn', 'CR(순결제)', 'ratio', ['npay', 'uv'], s => div(s.npay, s.uv), { dp: 3 }),
+    M('crn', 'CR(순결제)', 'ratio', ['npay', 'uv'], s => div(s.npay, s.uv), { dp: 2 }),
     M('aovn', '객단가(순결제)', 'won', ['nrev', 'npay'], s => div(s.nrev, s.npay)),
     M('tpay', '결제고객수(총)', 'count', ['tpay'], s => s.tpay),
     M('uvc', 'UV/클릭', 'ratio', ['uv', 'clk'], s => div(s.uv, s.clk), { dp: 2 }),
@@ -197,6 +197,12 @@
     for (const i of cur) take(ds.dn[i] - shift);
     return out;
   }
+  // 날짜 범위(포함) → 데이터 날짜 인덱스
+  function rangeIdx(ds, from, to) {
+    const a = dnum(from), b = dnum(to), out = [];
+    for (let i = 0; i < ds.dates.length; i++) if (ds.dn[i] >= a && ds.dn[i] <= b) out.push(i);
+    return out;
+  }
   function cmpLabel(cmp, grain) { return cmp === 'yoy' ? '전년비' : cmp === 'yoy2' ? '전전년비' : ({ month: '전월비', week: '전주비', day: '전일비' })[grain]; }
   function cmpName(cmp, grain) { return cmp === 'yoy' ? '전년' : cmp === 'yoy2' ? '전전년' : ({ month: '전월', week: '전주', day: '전일' })[grain]; }
 
@@ -216,14 +222,97 @@
     return v;
   }
 
+  // ── 드릴다운 트리 ──────────────────────────────────────────────────
+  // 날짜 집합 여러 개(sets[0]=현재, [1]=비교 …)에 대해 dims 순서대로 단계별 합계 (광고 신규 실적 대시보드와 같은 방식)
+  // 노드 키 = 값 인덱스를 '|' 로 이은 접두사. 노드.s[k] = k번째 집합의 합계(+ days)
+  function tree(ds, filt, dims, sets) {
+    const nd = ds.dates.length, K = sets.length, test = rowTest(ds, filt);
+    const slots = sets.map(set => { const a = new Uint8Array(nd); for (const i of set) a[i] = 1; return a; });
+    const cols = dims.map(k => ds.f[k]), F = BASE.map(m => ds.f[m]);
+    const zero = () => { const o = {}; for (const m of BASE) o[m] = 0; o._d = new Set(); return o; };
+    const nodes = new Map(), total = sets.map(zero), hit = new Int8Array(K);
+    const add = (o, i, d) => { for (let j = 0; j < BASE.length; j++) o[BASE[j]] += F[j][i]; o._d.add(d); };
+    for (let i = 0; i < ds.n; i++) {
+      const d = ds.f.d[i];
+      let any = false;
+      for (let k = 0; k < K; k++) { hit[k] = slots[k][d]; if (hit[k]) any = true; }
+      if (!any || (test && !test(i))) continue;
+      let key = '';
+      for (let L = 0; L < cols.length; L++) {
+        key = L ? key + '|' + cols[L][i] : String(cols[L][i]);
+        let node = nodes.get(key);
+        if (!node) { node = { key, level: L, dim: dims[L], v: ds.dims[dims[L]][cols[L][i]], s: sets.map(zero) }; nodes.set(key, node); }
+        for (let k = 0; k < K; k++) if (hit[k]) add(node.s[k], i, d);
+      }
+      for (let k = 0; k < K; k++) if (hit[k]) add(total[k], i, d);
+    }
+    const fin = o => { o.days = o._d.size; delete o._d; };
+    total.forEach(fin); for (const n of nodes.values()) n.s.forEach(fin);
+    return { nodes, total };
+  }
+  function children(t, parentKey, level) {
+    const out = [];
+    for (const n of t.nodes.values()) {
+      if (n.level !== level) continue;
+      if (level > 0 && n.key.slice(0, n.key.lastIndexOf('|')) !== parentKey) continue;
+      out.push(n);
+    }
+    return out;
+  }
+  // 노드 키 → 그 노드만 고르는 조건 (추이 그리기용)
+  function keyWhere(ds, dims, key) {
+    const w = {};
+    key.split('|').map(Number).forEach((ix, L) => { w[dims[L]] = [ds.dims[dims[L]][ix]]; });
+    return w;
+  }
+
+  // ── 목표 (보고서 엑셀 → targets.py) ──────────────────────────────────
+  // T = {monthly: {묶음: {'YYYY-MM': {spend, rev}}}, weekly: {'월요일 YYYY-MM-DD': {spend, rev}}, weekly_rows: {'YYYY-MM': [[시작일, spend, rev], …]}}
+  // dashboard.py _period_target 과 같다: TOTAL · TOTAL(서비스비용미반영) 만, 진행 중인 달 = 주차 목표 MTD, 진행 중인 주 = 주 목표 × 경과일/7
+  function tgtOf(sp, rv) { return (sp > 0 || rv > 0) ? { spend: sp, rev: rv, roas: sp ? rv / sp : null } : null; }
+  function periodTarget(T, bucket, grain, p, lastDate) {
+    if (!T || !['TOTAL', 'TOTAL(서비스비용미반영)'].includes(bucket)) return null;
+    const last = dnum(lastDate);
+    if (grain === 'month') {
+      const ym = p.key, base = ((T.monthly || {})[bucket] || {})[ym];
+      if (p.partial && last >= p.start && last < p.end) {
+        const rows = (T.weekly_rows || {})[ym];
+        if (rows && rows.length) {
+          let sp = 0, rv = 0;
+          rows.forEach((r, i) => {
+            const sd = dnum(r[0]); if (sd > last) return;
+            const nxt = i + 1 < rows.length ? dnum(rows[i + 1][0]) : null;
+            const f = nxt != null && nxt <= last ? 1 : Math.min(Math.max(last - sd + 1, 0), 7) / 7;
+            sp += r[1] * f; rv += r[2] * f;
+          });
+          const t = tgtOf(sp, rv); if (t) return t;
+        }
+      }
+      return base ? tgtOf(base.spend || 0, base.rev || 0) : null;
+    }
+    if (grain === 'week') {
+      const w = (T.weekly || {})[p.key]; if (!w) return null;
+      const f = last < p.end ? Math.min(Math.max(last - p.start + 1, 0), 7) / 7 : 1;
+      return tgtOf((w.spend || 0) * f, (w.rev || 0) * f);
+    }
+    return null;
+  }
+  function sumTargets(list) { let sp = 0, rv = 0, n = 0; for (const t of list) if (t) { sp += t.spend; rv += t.rev; n++; } return n ? tgtOf(sp, rv) : null; }
+
   // ── 백업 합치기 ────────────────────────────────────────────────────
   // 브라우저에 저장된 백업(base)에 새 백업(add)을 합친다
   //  - add 가 24년 파일(lock 있음): base 의 고정 구간(~lock) 전체와 add 의 날짜를 add 로 교체
   //  - base 에 고정 구간이 있으면: add 의 그 구간 날짜는 버린다(24년 파일 값 유지)
   //  - 그 외: add 에 있는 날짜는 교체, 나머지는 base 유지
+  // 백업에 같이 담는 목표(보고서 엑셀) · 리뷰 메모 — 새 쪽 목표가 이기고, 메모는 최근 수정본
+  function extras(base, add) {
+    const memos = { ...((base && base.memos) || {}) };
+    for (const [k, v] of Object.entries((add && add.memos) || {})) if (!memos[k] || (v.ts || 0) >= (memos[k].ts || 0)) memos[k] = v;
+    return { targets: (add && add.targets) || (base && base.targets) || null, memos };
+  }
   function mergeBackup(base, add) {
-    if (!base || !base.row) return add;
-    if (!add || !add.row) return base;
+    if (!base || !base.row) return base && add && !add.row ? { ...base, ...extras(base, add) } : add;
+    if (!add || !add.row) return add ? { ...base, ...extras(base, add) } : base;
     const B = base.row, A = add.row, sb = base.source || {}, sa = add.source || {};
     const lock = sa.lock || sb.lock || null;
     const addLock = !!sa.lock;
@@ -262,7 +351,7 @@
     };
     const replaced = B.dates.filter(d => addDates.has(d) || (addLock && d <= lock)).length;
     return {
-      format: add.format, version: add.version, created: add.created, lastDate: source.to, source,
+      format: add.format, version: add.version, created: add.created, lastDate: source.to, source, ...extras(base, add),
       row: { dates, dims, f, n: f.d.length, zero: BASE.filter(m => !mets.includes(m)) },
       merged: { added: addDates.size - B.dates.filter(d => addDates.has(d)).length, replaced, kept: keepB.filter(Boolean).length, ignored: keepA.filter(x => !x).length },
     };
@@ -305,8 +394,8 @@
   const api = {
     BASE, METRIC_LIST, METRIC, SUMMARY, DETAIL, COST_BUCKETS, EVENTS, WD,
     normCost, bucketValues, div, pct, dnum, iso, dow, monthDays, weekInfo,
-    prepare, nameMatcher, rowTest, daily, emptySeries, periods, curIdx, compareIdx, cmpLabel, cmpName, sumIdx, value,
-    mergeBackup, fmtNum, fmt, unit, scaled, signed, additive,
+    prepare, nameMatcher, rowTest, daily, emptySeries, periods, curIdx, compareIdx, rangeIdx, cmpLabel, cmpName, sumIdx, value,
+    mergeBackup, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
   };
   root.DaCalc = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

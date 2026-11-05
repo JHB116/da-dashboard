@@ -19,6 +19,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import build_data as bd
+import targets as tgm
 
 ROOT = Path(__file__).resolve().parent
 MARKER = '<script src="calc.js"></script>'
@@ -47,9 +48,13 @@ def page(stamp):
     return html.replace(MARKER, f'<script>\n{calc}\n</script>', 1)
 
 
-def run_build(y24_files, row_files):
-    """올린 원천 → 백업 bytes. pyxlsb 는 경로가 필요해 임시 폴더에 잠깐 쓴 뒤 지운다"""
+def run_build(y24_files, row_files, target_file=None):
+    """올린 원천(+목표 파일) → 백업 bytes. pyxlsb 는 경로가 필요해 임시 폴더에 잠깐 쓴 뒤 지운다"""
     log = io.StringIO()
+    tg = tgm.parse_targets(target_file.getvalue(), target_file.name) if target_file is not None else None
+    if not (y24_files or row_files):
+        payload = bd.targets_payload(tg)
+        return bd.backup_bytes(payload), {}, f'[목표] {target_file.name}: 월 {tgm.count(tg)[0]}건 · 주 {tgm.count(tg)[1]}건', tg
     with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(log):
         def save(f, k):
             d = Path(tmp) / f'{k:02d}'                       # 올린 순서 유지 (같은 날짜는 뒤 파일이 이김)
@@ -58,7 +63,9 @@ def run_build(y24_files, row_files):
         y24 = [p for k, f in enumerate(y24_files or []) for p in save(f, k)]
         rows = [p for k, f in enumerate(row_files or []) for p in save(f, 50 + k)]
         payload = bd.build(rows, y24, use_cache=False)
-    return bd.backup_bytes(payload), payload['source'], log.getvalue()
+    if tg:
+        payload['targets'] = tg
+    return bd.backup_bytes(payload), payload['source'], log.getvalue(), tg
 
 
 with st.expander('📂 원천 파일 올리기 (24년 파일은 처음 한 번 · 25·26년 파일은 매일)', expanded=st.session_state.pop('just_built', False)):
@@ -67,19 +74,23 @@ with st.expander('📂 원천 파일 올리기 (24년 파일은 처음 한 번 �
                '대시보드 위쪽에 **24년 저장됨**이 보이면 24년 파일은 다시 올리지 않아도 됩니다. '
                '큰 csv 는 zip 으로 압축해 올리면 서버 메모리를 훨씬 덜 씁니다. 데이터는 서버가 아니라 이 브라우저에만 저장됩니다.')
     n = st.session_state.get('up_n', 0)                    # 처리 후 키를 바꿔 올린 파일을 서버 메모리에서 비운다
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         y24_files = st.file_uploader('① 24년 파일 (처음 한 번 · 2024-12-31 까지만 쓰고 고정)', type=['xlsb', 'csv', 'xlsx', 'zip', 'gz'],
                                      accept_multiple_files=True, key=f'y24_{n}')
     with c2:
         row_files = st.file_uploader('② 25·26년 파일 (매일 · 같은 날짜는 교체)', type=['xlsb', 'csv', 'xlsx', 'zip', 'gz'],
                                      accept_multiple_files=True, key=f'rows_{n}')
-    if st.button('올리기', type='primary', disabled=not (y24_files or row_files)):
+    with c3:
+        target_file = st.file_uploader('③ 목표 파일 (보고서 엑셀 · 목표가 바뀔 때만)', type=['xlsx'], key=f'tg_{n}',
+                                       help='월별/주차별 목표가 있는 보고서 엑셀 — 실적 요약표의 목표 · 목표비')
+    if st.button('올리기', type='primary', disabled=not (y24_files or row_files or target_file)):
         ok = False
         with st.spinner('읽는 중… 큰 파일은 몇 분 걸릴 수 있습니다'):
             try:
-                data, source, log = run_build(y24_files, row_files)
-                st.session_state['built'] = {'data': data, 'source': source, 'log': log, 'id': hashlib.sha1(data).hexdigest()[:12]}
+                data, source, log, tg = run_build(y24_files, row_files, target_file)
+                st.session_state['built'] = {'data': data, 'source': source, 'log': log, 'id': hashlib.sha1(data).hexdigest()[:12],
+                                             'targets': tgm.count(tg) if tg else None}
                 ok = True
             except Exception as e:  # 원천 형식 오류를 화면에 보여 준다
                 st.session_state.pop('built', None)
@@ -87,14 +98,18 @@ with st.expander('📂 원천 파일 올리기 (24년 파일은 처음 한 번 �
         if ok:
             st.session_state['up_n'] = n + 1
             st.session_state['just_built'] = True
-            del y24_files, row_files
+            del y24_files, row_files, target_file
             gc.collect()
             st.rerun()
     built = st.session_state.get('built')
     if built:
         s = built['source']
-        st.success(f"{s['from']} ~ {s['to']} ({s['days']}일)을 읽어 아래 대시보드의 저장된 데이터에 합쳤습니다"
-                   + (' · 24년 구간 고정' if s.get('files24') else ''))
+        if s:
+            st.success(f"{s['from']} ~ {s['to']} ({s['days']}일)을 읽어 아래 대시보드의 저장된 데이터에 합쳤습니다"
+                       + (' · 24년 구간 고정' if s.get('files24') else ''))
+        if built.get('targets'):
+            nm, nw = built['targets']
+            (st.success if nm or nw else st.warning)(f'목표 저장: 월별 {nm}건 · 주차별 {nw}건' if nm or nw else '목표 파일에서 목표를 찾지 못했습니다. 시트 · 열 구조를 확인해주세요.')
         for line in built['log'].splitlines():      # 읽기 중 경고
             if line.strip().startswith('!'):
                 st.warning(line.strip().lstrip('! '))

@@ -66,3 +66,25 @@ test('병합: 24년 고정 구간은 매일 파일로 바뀌지 않는다', () =
   assert.deepEqual([...s2.cost], [...s1.cost]);
   assert.deepEqual(m2.row.dates, m1.row.dates);
 });
+test('드릴다운 트리: 단계 합 = 전체 합', () => {
+  const t = C.tree(R, { bucket: 'TOTAL' }, ['md', 'src'], [R.dates.map((_, i) => i), []]);
+  const kids = C.children(t, '', 0);
+  assert.equal(kids.reduce((a, n) => a + n.s[0].cost, 0), t.total[0].cost);
+  const sub = C.children(t, kids[0].key, 1);
+  assert.equal(sub.reduce((a, n) => a + n.s[0].cost, 0), kids[0].s[0].cost);
+  assert.deepEqual(C.keyWhere(R, ['md', 'src'], sub[0].key), { md: ['카카오'], src: ['거래액확대'] });
+});
+test('목표: 진행 중인 주 = 주 목표 × 경과일/7 · 묶음 밖은 없음', () => {
+  const T = { weekly: { '2026-10-05': { spend: 700, rev: 1400 } }, monthly: {} };
+  const p = { key: '2026-10-05', start: C.dnum('2026-10-05'), end: C.dnum('2026-10-11') };
+  assert.deepEqual(C.periodTarget(T, 'TOTAL', 'week', p, '2026-10-07'), { spend: 300, rev: 600, roas: 2 });
+  assert.equal(C.periodTarget(T, '신규고객확대', 'week', p, '2026-10-07'), null);
+});
+test('병합: 목표 · 메모 유지', () => {
+  const a = { format: 'da-dashboard-backup', source: {}, row: make('2026-10-01', '2026-10-02'), memos: { k: { text: 'a', ts: 1 } } };
+  const t = { format: 'da-dashboard-backup', source: {}, targets: { monthly: {} } };
+  const m = C.mergeBackup(a, t);
+  assert.ok(m.row && m.targets && m.memos.k.text === 'a');
+  const m2 = C.mergeBackup(m, { format: 'da-dashboard-backup', source: {}, row: make('2026-10-03', '2026-10-03'), memos: { k: { text: 'b', ts: 2 } } });
+  assert.equal(m2.memos.k.text, 'b'); assert.ok(m2.targets);
+});

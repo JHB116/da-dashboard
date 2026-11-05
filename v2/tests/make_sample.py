@@ -72,3 +72,24 @@ def main(out):
 
 if __name__ == '__main__':
     main(sys.argv[1] if len(sys.argv) > 1 else 'data/sample')
+
+
+def make_targets(out):
+    """가짜 목표 파일(보고서 엑셀 신규 양식) — 월TOTAL요약(누계) · 통합_전체"""
+    out = Path(out)
+    months = pd.period_range('2025-01', '2026-12', freq='M')
+    m = pd.DataFrame({'연도': months.year, '월': months.month})
+    for i, md in enumerate(['SNS', '버즈빌', '포탈']):
+        m[f'{md}_광고비'] = 200_000_000 + i * 1e7
+        m[f'{md}_거래액'] = 420_000_000 + i * 2e7
+        m[f'{md}_ROAS'] = m[f'{md}_거래액'] / m[f'{md}_광고비']
+    rows = []
+    for mon in pd.date_range('2025-12-29', '2026-12-28', freq='W-MON'):
+        thu = mon + pd.Timedelta(days=3)
+        for md in ['SNS', '버즈빌', '포탈']:
+            rows.append({'연도': thu.year, '월': thu.month, '기간': f'{thu.month}월 {(thu.day - 1) // 7 + 1}주차({mon.month}/{mon.day}~)', '광고유형': md,
+                         'UV': 1, '광고비': 45_000_000, '거래액': 95_000_000, 'ROAS': 95 / 45})
+    with pd.ExcelWriter(out / 'sample_target.xlsx') as w:
+        m.to_excel(w, sheet_name='월TOTAL요약(누계)', index=False)
+        pd.DataFrame(rows).to_excel(w, sheet_name='통합_전체', index=False)
+    return out / 'sample_target.xlsx'
