@@ -232,6 +232,35 @@ details.memo summary .hint{font-weight:400;margin-left:6px}
 .grid tr.sel td{background-color:#EFF6FF!important}
 .grid tr.etc td{color:#64748B}
 #srcRow{flex:1 1 100%;max-height:72px}
+/* 실적 요약표 2단 머리글 */
+.grid.g2 thead tr.h1 th{height:30px;top:0;text-align:center;font-size:12.5px;font-weight:700;color:#0F172A;border-left:1px solid #CBD5E1}
+.grid.g2 thead tr.h1 th:first-child{text-align:left;vertical-align:bottom;z-index:4;border-left:0}
+.grid.g2 thead tr.h2 th{top:30px}
+.grid.g2 thead th.gh-cur{background:#F8FAFC!important}
+.grid.g2 thead th.gh-yoy{background:#EEF6FF!important;color:#1E4E8C}
+.grid.g2 thead th.gh-yoy2{background:#F3F0FF!important;color:#4B3A9E}
+.grid.g2 thead th.gh-tgt,.grid.g2 thead th.gh-tgtr{background:#FFF7E8!important;color:#8A5A00}
+.grid .bl{border-left:1px solid #CBD5E1!important}
+/* 상단바 — 광고 신규 실적 대시보드 모양, 포인트 색 = 민트 */
+:root,:root[data-theme]{--mint:#12b886;--mint-d:#087f5b;--mint-l:#e6fcf5;--mint-t:#d3f5ea;--accent:#12b886;--sel:rgba(18,184,134,.18);--wash:#effbf6}
+header.top{background:rgba(255,255,255,.95);border-bottom:2px solid var(--mint)}
+header.top .menu button[aria-pressed="true"]{color:var(--mint-d);border-bottom-color:var(--mint)}
+header.top .menu button:hover{color:var(--mint-d)}
+header.top .seg{background:var(--mint-t)}
+header.top .seg button{color:#0b5c46}
+header.top .seg button[aria-pressed="true"]{background:var(--mint);color:#fff;box-shadow:0 1px 2px rgba(8,127,91,.25)}
+header.top .filt-tg[aria-expanded="true"]{background:var(--mint-l)}
+header.top .filt-tg b{background:var(--mint)}
+header.top .chip[aria-pressed="true"]{border-color:var(--mint);color:var(--mint-d)}
+header.top .chip[aria-pressed="true"] i{background:var(--mint)}
+header.top .btn:hover{border-color:var(--mint);color:var(--mint-d)}
+header.top .field{color:#52605a}
+.seg button[aria-pressed="true"]{background:var(--mint);border-color:var(--mint)}
+.chip[aria-pressed="true"] i{background:var(--mint)}
+.btn.pri{background:var(--mint);border-color:var(--mint)}
+.grid td.selc{box-shadow:inset 0 0 0 1px var(--mint)}
+.grid tr.sel td{background-color:var(--mint-l)!important}
+.grid tr.cur td{background-color:#f3fbf8}
 </style>
 </head>
 <body>
@@ -298,7 +327,7 @@ const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['tre
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa'];
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 14 }, bucket: 'TOTAL',
-  filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null,
+  filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
   drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], open: [], sel: '', q: '', hideSmall: true, sort: 'cost', cols: 'core', top: 20 }, sv: 3 };
 let S = load();
 let P = null, R = null;
@@ -358,7 +387,7 @@ async function openFile(file) {
 function toast(msg) { const d = document.createElement('div'); d.className = 'card pad warn'; d.style.cssText = 'position:fixed;bottom:64px;left:50%;transform:translateX(-50%);z-index:50;font-size:13px;max-width:90vw'; d.textContent = msg; document.body.appendChild(d); setTimeout(() => d.remove(), 8000); }
 
 function use(p) {
-  if (!p.row) { P = R = null; showEmpty(p.targets ? '<p>목표 파일은 저장했습니다. 이제 원천(로데이터) 파일을 올리세요.</p>' : ''); return; }
+  if (!p.row) { P = R = null; showEmpty(p.targets ? '<p>목표 파일은 저장했습니다. 이제 원천(로데이터)으로 만든 백업을 넣으세요.</p>' : ''); return; }
   P = p;
   R = C.prepare(p.row);
   for (const k in cache) delete cache[k];
@@ -369,8 +398,8 @@ function use(p) {
 }
 function showEmpty(extra = '') {
   $id('main').innerHTML = `<div class="drop-empty"><h2>DA 광고 실적 대시보드</h2>
-    <p>Streamlit 화면 맨 위 <b>📂 원천 파일 올리기</b>에서 <b>24년 파일은 처음 한 번</b>, <b>25·26년 파일은 매일</b> 올리면 이 브라우저에 저장됩니다. 다음부터는 새 파일만 올리면 날짜 단위로 이어 붙습니다.</p>
-    <p class="hint">PC에서 <code>make_backup.bat</code>(또는 <code>python build_data.py</code>)으로 만든 백업(.json.gz)은 여기에 끌어다 놓거나 <b>백업 파일 열기</b>로 고르세요. 데이터는 서버가 아니라 이 브라우저에만 저장됩니다.</p>${extra}
+    <p>PC 에서 만든 <b>백업 파일(.json.gz)을 여기에 끌어다 놓거나 백업 파일 열기</b>로 고르면 이 브라우저에 저장됩니다. 다음부터는 새로 만든 백업만 넣으면 날짜 단위로 이어 붙습니다.</p>
+    <p class="hint">백업 만들기(대시보드 폴더): <b>make_backup_24.bat</b> 에 24년 파일 끌어다 놓기(처음 한 번) · <b>make_backup.bat</b> 에 25·26년 파일(매일) · <b>make_targets.bat</b> 에 목표 파일(목표가 바뀔 때) → 열린 backup 폴더의 최신 파일을 여기로. 원천은 PC 에서만 읽어 서버 메모리를 쓰지 않습니다.</p>${extra}
     <p><button class="btn" type="button" onclick="document.getElementById('fileOpen').click()">백업 파일 열기</button></p></div>`;
 }
 
@@ -497,7 +526,7 @@ function numCell(m, v, extra = '', cls = '') {
   return `<td${cls ? ` class="${cls}"` : ''}${sv == null ? '' : ` data-v="${+sv.toFixed(6)}" data-m="${m.k}"`} data-csv="${sv == null ? '' : +sv.toFixed(4)}">${C.fmt(m, v, S.mode)}${extra}</td>`;
 }
 function tableCSV(table, name) {
-  const rows = [...table.querySelectorAll('tr')].map(tr => [...tr.children].map(td => {
+  const rows = [...table.querySelectorAll('tr')].map(tr => [...(tr.classList.contains('h2') ? [{ dataset: { csv: '' } }] : []), ...tr.children].map(td => {
     const t = (td.dataset.csv != null ? td.dataset.csv : td.innerText).replace(/\s*\n\s*/g, ' ').trim();
     return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   }).join(','));
@@ -545,27 +574,46 @@ function tgtVal(m, t, days) {
 // ════════════════════════════════════════════════════════════════════
 // 리뷰 메모 — 1차 초안은 자동으로 쓰고, 고치면 그 글을 저장 (백업에 함께 담김)
 // ════════════════════════════════════════════════════════════════════
-const memoDrafts = {};
-let memoEdit = '';
-function memoKey(sec, at) { return [sec, S.grain, at.key === 'custom' ? `${S.cu.r0}~${S.cu.r1}` : at.key, S.bucket].join('|'); }
+const memoDrafts = {}, aiPending = {}, aiFail = {};
+let memoEdit = '', aiTimer = null;
+const gem = () => window.DA_GEMINI || null;
+function memoKey(sec, at) { return [sec, S.grain, at.key === 'custom' ? `${S.cu.r0}~${S.cu.r1}` : at.key, S.bucket, filterSummary(), S.mode].join('|'); }
 function memoHTML(sec, title, at, draft) {
   const key = memoKey(sec, at), saved = (P.memos || {})[key];
   memoDrafts[key] = draft;
-  const text = saved ? saved.text : draft, editing = memoEdit === key;
-  return `<details class="memo" open><summary>${esc(title)} <span class="hint">${saved ? `직접 수정함 · ${esc(new Date(saved.ts).toLocaleString('ko-KR'))}` : '자동 작성 초안 — 확인 후 고쳐 쓰세요'}</span></summary>
+  const text = saved ? saved.text : draft, editing = memoEdit === key, g = gem();
+  const when = saved ? new Date(saved.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const tag = saved ? (saved.src === 'ai' ? `Gemini 초안 · ${when}` : `직접 수정 · ${when}`) : aiPending[key] ? 'Gemini 로 쓰는 중…' : aiFail[key] ? esc(aiFail[key]) : '';
+  return `<details class="memo" open data-memo="${esc(key)}"><summary>${esc(title)} <span class="hint">${tag}</span></summary>
     <div class="memo-b">${editing
       ? `<textarea id="memoTa" data-key="${esc(key)}" rows="${Math.max(8, text.split('\n').length + 2)}">${esc(text)}</textarea>
          <div class="memo-t"><button class="btn pri" data-memo-save="${esc(key)}">저장</button><button class="btn" data-memo-cancel="1">취소</button></div>`
       : `<div class="memo-v">${esc(text).replace(/\n/g, '<br>')}</div>
-         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${saved ? `<button class="lnk" data-memo-reset="${esc(key)}">자동 초안으로 되돌리기</button>` : ''}</div>`}</div></details>`;
+         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${g && g.ready ? `<button class="btn" data-memo-ai="${esc(key)}"${aiPending[key] ? ' disabled' : ''}>Gemini 로 다시 쓰기</button>` : ''}${saved ? `<button class="lnk" data-memo-reset="${esc(key)}">기본 초안으로 되돌리기</button>` : ''}</div>`}</div></details>`;
 }
-async function memoSave(key, text) {
+async function memoSave(key, text, src = 'user') {
   P.memos = { ...(P.memos || {}) };
-  if (text == null) delete P.memos[key]; else P.memos[key] = { text, ts: Date.now() };
-  memoEdit = '';
+  if (text == null) delete P.memos[key]; else P.memos[key] = { text, ts: Date.now(), src };
+  if (src === 'user') memoEdit = '';
   await idbPut(P);
-  render(true);
+  if (!memoEdit) render(true);
 }
+// Gemini 에 초안 요청 — 화면이 계산한 숫자(기본 초안)만 보낸다. 같은 메모는 한 번만 자동으로 쓴다
+function memoAsk(key, force) {
+  const g = gem();
+  if (!g || !g.ready || !P || aiPending[key] || !memoDrafts[key]) return;
+  if (!force && ((P.memos || {})[key] || aiFail[key])) return;
+  aiPending[key] = true; delete aiFail[key];
+  g.request({ type: 'gemini_memo', id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, key, facts: memoDrafts[key] });
+  const hint = document.querySelector(`details.memo[data-memo="${CSS.escape(key)}"] summary .hint`); if (hint) hint.textContent = 'Gemini 로 쓰는 중…';
+}
+window.DA_GEMINI_RECEIVE = r => {
+  if (!r || !r.key) return;
+  delete aiPending[r.key];
+  if (r.ok && r.text && P) { const cur = (P.memos || {})[r.key]; if (!cur || cur.src === 'ai') memoSave(r.key, r.text, 'ai'); }
+  else { aiFail[r.key] = r.message || 'Gemini 초안을 받지 못해 기본 초안을 보여 줍니다'; if (!memoEdit) render(true); }
+};
+window.DA_GEMINI_STATUS = () => { if (P && !memoEdit) { clearTimeout(aiTimer); aiTimer = setTimeout(() => document.querySelectorAll('details.memo[data-memo]').forEach(d => memoAsk(d.dataset.memo)), 1200); } };
 // 초안 문구 도우미
 const pctS = p => (p == null ? '–' : C.signed(p));
 const pp = (a, b) => (a == null || b == null ? null : (a - b) * 100);           // %p
@@ -603,17 +651,19 @@ function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
   }
   const acq = ['join', 'jcpa', 'fp', 'fcpa'].map(k => [M[k], v(k), w(k)]).filter(([, a]) => a != null);
   if (acq.length) L.push(`• 가입 · 첫구매: ${acq.map(([m, a, b]) => `${m.n} ${C.fmt(m, a, S.mode)}${C.unit(m, S.mode).startsWith('%') ? '' : C.unit(m, S.mode)} (${pctS(C.pct(a, b))})`).join(' · ')}`);
-  L.push('※ 자동 작성 초안입니다. 원인은 데이터로 본 가설이니 확인 후 고쳐 쓰세요.');
   return L.join('\n');
 }
 function draftTrend(c, ys) {
   const M = C.METRIC, L = [], unitN = { month: '개월', week: '주', day: '일' }[S.grain];
   const line = (k, kk) => ys.lines.find(l => l.k === kk);
   const vals = (k, kk) => { const l = line(k, kk); return l ? l.sums.map(t => (t ? val(M[k], t) : null)) : []; };
-  L.push(`■ 지표별 추이 · ${GRAIN_N[S.grain]} · ${bucketName()}`);
+  L.push(`[추이 · ${GRAIN_N[S.grain]}]`);
   for (const k of ['cost', 'nrev', 'roas']) {
     const v0 = vals(k, 0), v1 = vals(k, 1), m = M[k];
-    const pts = v0.map((v, i) => [i, v]).filter(([, v]) => v != null);
+    let pts = v0.map((v, i) => [i, v]).filter(([, v]) => v != null);
+    // 누계에서 진행 중인 기간은 덜 쌓인 값이라 추세 판단에서 뺀다 (일평균 · 비율은 그대로)
+    const partialSum = c.at.partial && S.mode === 'sum' && C.additive(m) && pts.length && pts[pts.length - 1][0] === (S.grain === 'month' ? c.at.m - 1 : ys.labels.length - 1);
+    if (partialSum) pts = pts.slice(0, -1);
     if (pts.length < 2) continue;
     const last3 = pts.slice(-3), seq = last3.map(([i, v]) => `${ys.labels[i]} ${C.fmt(m, v, S.mode)}`).join(' → ');
     const a = last3[0][1], b = last3[last3.length - 1][1], ch = C.pct(b, a);
@@ -624,7 +674,7 @@ function draftTrend(c, ys) {
       const best = gaps.reduce((x, y) => (y[1] > x[1] ? y : x)), worst = gaps.reduce((x, y) => (y[1] < x[1] ? y : x));
       gap = ` · 전년 대비 가장 좋았던 때 ${ys.labels[best[0]]}(${pctS(best[1])}), 가장 낮았던 때 ${ys.labels[worst[0]]}(${pctS(worst[1])})`;
     }
-    L.push(`• ${m.n}: 최근 ${last3.length}${unitN} ${seq} (${dir})${gap}`);
+    L.push(`• ${m.n}: 최근 ${last3.length}${unitN} ${seq} (${dir})${partialSum ? ` · 진행 중인 ${c.at.short || ''}은 덜 쌓인 누계라 제외` : ''}${gap}`);
   }
   if (S.grain === 'month') {
     const ytd = [0, 1].map(kk => (line('cost', kk) || { sums: [] }).sums.slice(0, c.at.m).filter(Boolean));
@@ -634,7 +684,6 @@ function draftTrend(c, ys) {
       L.push(`• 올해 누적(1~${c.at.m}월): 광고비 ${pctS(C.pct(c0, c1))} · 거래액 ${pctS(C.pct(n0, n1))} · ROAS ${C.fmt(M.roas, n0 / c0)} (전년 ${C.fmt(M.roas, n1 / c1)}) — 진행 중인 달은 전년도 같은 요일 기간`);
     }
   }
-  L.push('※ 자동 작성 초안입니다. 확인 후 고쳐 쓰세요.');
   return L.join('\n');
 }
 
@@ -673,15 +722,18 @@ function summaryTableHTML(c) {
     body += row(label, sub, cur, totCmp(rs, x), yr, C.sumTargets(ts), 'tot');
   };
   if (S.grain === 'month' && !c.custom) {
-    rows = ps.filter(p => p.y >= at.y - 2 && p.start <= at.start);
+    rows = ps.filter(p => p.y >= (S.prevY ? at.y - 2 : at.y) && p.start <= at.start);   // 지난 연도는 선택했을 때만
     for (const yr of [...new Set(rows.map(p => p.y))].sort((a, b) => b - a)) { const yp = rows.filter(p => p.y === yr); block(yp, `${String(yr).slice(2)}년 합계`, `${yp.length}개월`, yr); }
   } else { rows = sh; block(rows, `합계 · ${rows.length}개 기간`, '', at.y); }
-  const head = `<tr><th>${S.grain === 'month' ? '월' : S.grain === 'week' ? '주차' : '일자'}</th>${groups.map(([g, , gm], gi) => gm.map((m, mi) => `<th${mi === 0 && gi > 0 ? ' class="bl"' : ''}><b>${m.n}</b>${g}${gi === 0 || g === '목표' ? ` · ${C.unit(m, S.mode)}` : ''}</th>`).join('')).join('')}</tr>`;
-  const scope = c.custom ? `직접 지정 기간 안의 ${rows.length}개 ${S.grain === 'month' ? '월' : S.grain === 'week' ? '주' : '일'}` : S.grain === 'month' ? `${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}·${String(at.y).slice(2)}년 전체 월` : `${rows.length}개 ${S.grain === 'week' ? '주' : '일'} (위 '범위'에서 최근 N개 · 전체 선택)`;
+  // 2단 머리글 — 위 = 실적 · 전년비 · 전전년비 · 목표 · 목표비 묶음, 아래 = 지표 (기존 대시보드 실적요약표와 같은 모양)
+  const head = `<tr class="h1"><th rowspan="2">${S.grain === 'month' ? '월' : S.grain === 'week' ? '주차' : '일자'}</th>${groups.map(([g, k, gm]) => `<th colspan="${gm.length}" class="gh gh-${k || 'cur'}">${g}</th>`).join('')}</tr>
+    <tr class="h2">${groups.map(([g, , gm], gi) => gm.map((m, mi) => `<th${mi === 0 && gi > 0 ? ' class="bl"' : ''}><b>${m.n}</b>${gi === 0 || g === '목표' ? C.unit(m, S.mode) : ''}</th>`).join('')).join('')}</tr>`;
+  const prevTg = S.grain === 'month' && !c.custom ? `<label class="field"><input type="checkbox" id="chkPrevY"${S.prevY ? ' checked' : ''}> 지난 연도(${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}년) 보기</label>` : '';
+  const scope = c.custom ? `직접 지정 기간 안의 ${rows.length}개 ${S.grain === 'month' ? '월' : S.grain === 'week' ? '주' : '일'}` : S.grain === 'month' ? (S.prevY ? `${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}·${String(at.y).slice(2)}년 전체 월` : `${String(at.y).slice(2)}년 전체 월`) : `${rows.length}개 ${S.grain === 'week' ? '주' : '일'} (위 '범위'에서 최근 N개 · 전체 선택)`;
   const tNote = useT ? ` · 목표 = ${esc(P.targets.file || '목표 파일')} (진행 중인 달은 주차 목표 MTD, 진행 중인 주는 경과일/7)` : (P.targets && !c.custom && S.grain !== 'day' ? ' · 목표는 TOTAL 묶음에서 표시' : !P.targets ? ' · 목표 파일을 올리면 목표 · 목표비 표시' : '');
   return `<section><div class="sec-h"><h2>실적 요약표 · ${GRAIN_N[S.grain]}</h2><span class="desc">${scope} · ${S.mode === 'avg' ? '일평균' : '누계'} · 전년비 · 전전년비 = 같은 요일 기간 · 비용출처 ${esc(bucketName())}${tNote}</span>
-    <div class="tools"><button class="btn" data-csv-for="tblSum" data-name="DA_실적요약_${S.grain}_${esc(at.key)}">CSV</button></div></div>
-    <div class="card tbl-wrap"><table class="grid" id="tblSum"><thead>${head}</thead><tbody>${body}</tbody></table></div></section>`;
+    <div class="tools">${prevTg}<button class="btn" data-csv-for="tblSum" data-name="DA_실적요약_${S.grain}_${esc(at.key)}">CSV</button></div></div>
+    <div class="card tbl-wrap"><table class="grid g2" id="tblSum"><thead>${head}</thead><tbody>${body}</tbody></table></div></section>`;
 }
 // 기간별 상세 실적 — 행 = 기간(최근이 아래), 열 = 지표, 칸 아래 = 비교 증감
 function periodTableHTML(c) {
@@ -723,18 +775,19 @@ function renderSummary(main) {
   let h = `<section><div class="sec-h"><h2>실적 요약 · ${esc(at.label)}${at.partial ? ' (진행 중)' : ''}</h2><span class="desc">${esc(at.range)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 집행 ${sAt.days}일 · ${esc(cmpTxt)} · 비용출처 ${esc(bucketName())}${filt ? ' · ' + esc(filt) : ''}</span></div>
     <div class="grp">${main0[0]}</div><div class="tiles">${main0[1].map(tile).join('')}</div>
     <div class="bar2 grp-tg"><span class="field">다른 지표</span>${rest.map(([g]) => `<button class="chip" data-grp="${esc(g)}" aria-pressed="${open.has(g)}"><i></i>${esc(g)}</button>`).join('')}<button class="lnk" data-grp-all="${rest.every(([g]) => open.has(g)) ? '0' : '1'}">${rest.every(([g]) => open.has(g)) ? '모두 접기' : '모두 보기'}</button></div>
-    ${rest.filter(([g]) => open.has(g)).map(([g, ks]) => `<div class="grp">${g}</div><div class="tiles">${ks.map(tile).join('')}</div>`).join('')}
-    ${memoHTML('card', '리뷰 메모 · 실적 요약', at, draftCards(c, sAt, c.custom ? sCu : sY1, c.custom ? '비교 기간' : '전년', c.custom ? c.cmpIdx : y1Idx, atCur, tgt))}</section>`;
+    ${rest.filter(([g]) => open.has(g)).map(([g, ks]) => `<div class="grp">${g}</div><div class="tiles">${ks.map(tile).join('')}</div>`).join('')}</section>`;
   h += summaryTableHTML(c);
   const ys = yearSeries(s, ps, sh, at);
+  const draft = draftCards(c, sAt, c.custom ? sCu : sY1, c.custom ? '비교 기간' : '전년', c.custom ? c.cmpIdx : y1Idx, atCur, tgt) + '\n' + draftTrend(c, ys);
+  h += `<section>${memoHTML('summary', '리뷰 메모', at, draft)}</section>`;
   const span = S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
   h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span} · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)</span></div>
-    ${memoHTML('trend', '리뷰 메모 · 지표별 추이', at, draftTrend(c, ys))}
     ${GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
   h += periodTableHTML(c);
   h += notes();
   main.innerHTML = h;
   drawYearCharts(ys, C.SUMMARY, 'ch-');
+  clearTimeout(aiTimer); aiTimer = setTimeout(() => memoAsk(memoKey('summary', at)), 1200);
 }
 function drawYearCharts(ys, keys, prefix) {
   for (const k of keys) {
@@ -834,7 +887,7 @@ function notes() {
     <li><b>비용출처</b> TOTAL · 거래액확대 · 신규고객확대 · 인지도제고는 기존 대시보드와 같은 목록(공백 · 대소문자 무시)으로 합산합니다. <b>비용출처(상세)</b>를 고르면 원천의 비용출처가 모두 나오고 원하는 것만 골라 볼 수 있습니다(처음엔 전부 선택).</li>
     <li><b>목표 · 목표비</b> 보고서 엑셀(③ 목표 파일)의 월 · 주차 목표 — TOTAL · TOTAL(서비스비용 제외)에서만, 진행 중인 달은 주차 목표 MTD · 진행 중인 주는 목표 × 경과일/7 (기존 대시보드와 같다). ${P.targets ? `지금 목표: ${esc(P.targets.file || '')}` : '목표 파일 없음'}</li>
     <li><b>직접 지정</b> 기준에서 '직접 지정'을 고르면 실적 기간 · 비교 기간을 날짜로 정합니다. 카드는 실적 vs 비교 기간(+ 전년 동요일), 표 · 그래프는 실적 기간 안의 기간만 보여 줍니다.</li>
-    <li><b>리뷰 메모</b> 처음엔 데이터로 자동 작성한 초안이 보이고, '편집'으로 고쳐 저장하면 그 글이 남습니다(기간 · 단위 · 비용출처별). 메모는 이 브라우저와 '백업 내려받기' 파일에 함께 저장됩니다.</li>
+    <li><b>리뷰 메모</b> 요약 시트 전체(카드 · 실적 요약표 · 추이)를 한 번에 정리합니다. Gemini 가 연결돼 있으면 화면이 계산한 숫자로 Gemini 가 1차 초안을 쓰고(원본 데이터는 보내지 않음), 아니면 규칙으로 만든 기본 초안이 보입니다. '편집'으로 고쳐 저장하면 그 글이 남습니다(기간 · 단위 · 비용출처 · 필터별). 메모는 이 브라우저와 '백업 내려받기' 파일에 함께 저장됩니다.</li>
     <li><b>ROAS</b> = 거래액 ÷ 광고비 · <b>CPA</b> = 광고비 ÷ 가입수/첫구매수/신규고객수(당년신규 순결제) · <b>CR</b> = 결제고객수 ÷ UV · <b>CR(클릭기준)</b> = 총결제고객수 ÷ 클릭 · <b>CTR</b> = 클릭 ÷ 노출 · 비율 · 단가는 기간 합계끼리 나눕니다(일평균의 평균 아님).</li>
     <li><b>일평균</b> = 기간 합계 ÷ 집행일수(고른 조건에 데이터가 있는 날짜 수). 비율 · 단가 지표는 일평균 모드에서도 같은 값입니다.</li>
     <li><b>전년비</b> = 동요일 기준(364일 전 같은 요일들) · <b>전전년비</b> = 728일 전 · 진행 중인 기간은 데이터가 있는 날짜만 비교(MTD). <b>전월비</b> = 전월(진행 중이면 같은 일자까지) · <b>전주비</b> = 7일 전 · <b>전일비</b> = 하루 전.</li>
@@ -998,7 +1051,8 @@ document.addEventListener('click', e => {
   if (ds.memoEdit) { memoEdit = ds.memoEdit; render(true); const ta = $id('memoTa'); if (ta) ta.focus(); return; }
   if (ds.memoCancel) { memoEdit = ''; render(true); return; }
   if (ds.memoSave) { memoSave(ds.memoSave, $id('memoTa').value); return; }
-  if (ds.memoReset) { if (confirm('직접 고친 메모를 지우고 자동 초안으로 되돌릴까요?')) memoSave(ds.memoReset, null); return; }
+  if (ds.memoReset) { if (confirm('저장된 메모를 지우고 기본 초안으로 되돌릴까요?')) memoSave(ds.memoReset, null); return; }
+  if (ds.memoAi) { memoAsk(ds.memoAi, true); return; }
   if (t.id === 'cuYoy') { const sh = d => C.iso(C.dnum(d) - 364); S.cu = { ...S.cu, c0: sh(S.cu.r0), c1: sh(S.cu.r1), auto: true }; render(true); return; }
   if (ds.grp != null) { const o = new Set(S.grpOpen || []); o.has(ds.grp) ? o.delete(ds.grp) : o.add(ds.grp); S.grpOpen = [...o]; render(true); return; }
   if (ds.grpAll != null) { S.grpOpen = ds.grpAll === '1' ? GROUPS.slice(1).map(([g]) => g) : []; render(true); return; }
@@ -1046,6 +1100,7 @@ document.addEventListener('change', e => {
   else if (t.id === 'selRange') { S.range[S.grain] = t.value === 'all' ? 'all' : +t.value; render(true); }
   else if (t.id === 'fileOpen') { if (t.files[0]) openFile(t.files[0]); t.value = ''; }
   else if (t.id === 'chkCmp') { S.showCmp = t.checked; render(true); }
+  else if (t.id === 'chkPrevY') { S.prevY = t.checked; render(true); }
 });
 let qTimer = null;
 document.addEventListener('input', e => {

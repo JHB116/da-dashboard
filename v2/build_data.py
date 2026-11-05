@@ -535,6 +535,8 @@ def backup_bytes(payload: dict) -> bytes:
 
 
 def backup_name(payload: dict) -> str:
+    if not payload.get('row'):
+        return f'DA대시보드_목표_{dt.date.today().strftime("%Y%m%d")}.json.gz'
     return f'DA대시보드_백업_{(payload.get("lastDate") or dt.date.today().isoformat()).replace("-", "")}.json.gz'
 
 

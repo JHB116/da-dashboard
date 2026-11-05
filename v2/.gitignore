@@ -5,3 +5,4 @@ backup/
 __pycache__/
 node_modules/
 tests/local/
+.streamlit/secrets.toml

@@ -311,7 +311,7 @@
     return { targets: (add && add.targets) || (base && base.targets) || null, memos };
   }
   function mergeBackup(base, add) {
-    if (!base || !base.row) return base && add && !add.row ? { ...base, ...extras(base, add) } : add;
+    if (!base || !base.row) return base && add ? { ...(add.row ? add : base), ...extras(base, add) } : add;   // 목표만 먼저 넣은 경우도 목표 유지
     if (!add || !add.row) return add ? { ...base, ...extras(base, add) } : base;
     const B = base.row, A = add.row, sb = base.source || {}, sa = add.source || {};
     const lock = sa.lock || sb.lock || null;

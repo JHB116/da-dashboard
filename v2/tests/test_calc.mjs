@@ -88,3 +88,9 @@ test('병합: 목표 · 메모 유지', () => {
   const m2 = C.mergeBackup(m, { format: 'da-dashboard-backup', source: {}, row: make('2026-10-03', '2026-10-03'), memos: { k: { text: 'b', ts: 2 } } });
   assert.equal(m2.memos.k.text, 'b'); assert.ok(m2.targets);
 });
+test('병합: 목표만 먼저 넣고 데이터를 넣어도 목표 유지', () => {
+  const t = { format: 'da-dashboard-backup', source: {}, targets: { monthly: { TOTAL: {} } } };
+  const d = { format: 'da-dashboard-backup', source: {}, row: make('2026-10-01', '2026-10-02') };
+  const m = C.mergeBackup(C.mergeBackup(null, t), d);
+  assert.ok(m.row && m.targets && m.targets.monthly);
+});
