@@ -269,6 +269,8 @@ header.top .bar2:last-child,#barRow{padding-bottom:7px}
 header.top .seg button{padding:4px 12px}
 #filtWrap{border-top:1px dashed var(--grid);max-height:56vh;overflow:auto}
 #filtWrap #filtRows{border-top:0;max-height:none}
+/* 끌어다 놓는 동안 '백업 파일 열기' 버튼 강조 */
+header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#fff;font-weight:700;box-shadow:0 0 0 4px var(--mint-t);transform:scale(1.06)}
 </style>
 </head>
 <body>
@@ -283,7 +285,7 @@ header.top .seg button{padding:4px 12px}
       <div class="bk-tools">
         <button class="btn" id="btnSave" type="button" title="이 브라우저에 저장된 데이터를 파일로 받아 두기 (다른 PC · 브라우저로 옮길 때)" hidden>백업 내려받기</button>
         <button class="btn" id="btnOpen" type="button" title="PC에서 만든 백업(.json.gz)을 저장된 데이터에 합치기 (같은 날짜는 교체)">백업 파일 열기</button>
-        <input type="file" id="fileOpen" accept=".gz,.json,application/json,application/gzip" hidden>
+        <input type="file" id="fileOpen" accept=".gz,.json,application/json,application/gzip" multiple hidden>
       </div>
     </div>
     <div class="bar2" id="barRow">
@@ -383,13 +385,22 @@ async function mergeAndStore(add) {
   const stored = await idbPut(merged);
   use(merged);
   const m = merged.merged, r = merged.source;
+  if (!add.row && add.targets) { toast(`목표를 저장했습니다 · ${add.targets.file || '목표 파일'}`); return; }
   toast(m ? `저장된 데이터에 합쳤습니다 · 새 날짜 ${m.added}일 · 교체 ${m.replaced}일 · 유지 ${m.kept}일${m.ignored ? ` · 24년 고정 구간이라 건너뜀 ${m.ignored}일` : ''} → ${r.from} ~ ${r.to}` : `저장했습니다 · ${r.from} ~ ${r.to}`);
   if (!stored) toast('브라우저 저장소를 쓸 수 없어 새로고침하면 사라집니다 — 백업 내려받기로 받아 두세요');
 }
-async function openFile(file) {
-  $id('main').innerHTML = '<div class="loading">백업 읽어서 합치는 중…</div>';
-  try { await mergeAndStore(await readBackup(file)); } catch (e) { showEmpty(`<p class="neg">${esc(e.message)}</p>`); }
+// 백업 여러 개(예: 매일 백업 + 목표)를 한 번에 넣어도 차례로 합친다
+async function openFiles(files) {
+  files = [...files].filter(Boolean);
+  if (!files.length) return;
+  $id('main').innerHTML = `<div class="loading">백업 읽어서 합치는 중… (${files.length}개)</div>`;
+  const bad = [];
+  for (const f of files) {
+    try { await mergeAndStore(await readBackup(f)); } catch (e) { bad.push(`${f.name}: ${e.message}`); }
+  }
+  if (bad.length) { if (P) { render(); toast(bad.join(' / ')); } else showEmpty(`<p class="neg">${esc(bad.join(' / '))}</p>`); }
 }
+const openFile = f => openFiles([f]);
 function toast(msg) { const d = document.createElement('div'); d.className = 'card pad warn'; d.style.cssText = 'position:fixed;bottom:64px;left:50%;transform:translateX(-50%);z-index:50;font-size:13px;max-width:90vw'; d.textContent = msg; document.body.appendChild(d); setTimeout(() => d.remove(), 8000); }
 
 function use(p) {
@@ -1107,7 +1118,7 @@ document.addEventListener('change', e => {
   else if (t.id === 'drTop') { S.drill.top = +t.value; render(true); }
   else if (t.id === 'drSmall') { S.drill.hideSmall = t.checked; render(true); }
   else if (t.id === 'selRange') { S.range[S.grain] = t.value === 'all' ? 'all' : +t.value; render(true); }
-  else if (t.id === 'fileOpen') { if (t.files[0]) openFile(t.files[0]); t.value = ''; }
+  else if (t.id === 'fileOpen') { if (t.files.length) openFiles(t.files); t.value = ''; }
   else if (t.id === 'chkCmp') { S.showCmp = t.checked; render(true); }
   else if (t.id === 'chkPrevY') { S.prevY = t.checked; render(true); }
 });
@@ -1127,9 +1138,12 @@ document.addEventListener('input', e => {
   }
 });
 // 끌어다 놓기
-['dragenter', 'dragover'].forEach(n => document.addEventListener(n, e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); document.body.classList.add('dragging'); } }));
-['dragleave', 'drop'].forEach(n => document.addEventListener(n, e => { if (n === 'dragleave' && e.relatedTarget) return; document.body.classList.remove('dragging'); }));
-document.addEventListener('drop', e => { const f = e.dataTransfer?.files?.[0]; if (f) { e.preventDefault(); openFile(f); } });
+// 끌어다 놓기 — 화면 어디에 놓아도 되고, 끄는 동안 '백업 파일 열기' 버튼이 '여기에 놓기'로 바뀐다
+const btnOpenLabel = '백업 파일 열기';
+const dragOn = on => { document.body.classList.toggle('dragging', on); const b = $id('btnOpen'); b.classList.toggle('drop-hot', on); b.textContent = on ? '여기에 놓기' : btnOpenLabel; };
+['dragenter', 'dragover'].forEach(n => document.addEventListener(n, e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; dragOn(true); } }));
+['dragleave', 'drop'].forEach(n => document.addEventListener(n, e => { if (n === 'dragleave' && e.relatedTarget) return; dragOn(false); }));
+document.addEventListener('drop', e => { const fs = e.dataTransfer?.files; if (fs && fs.length) { e.preventDefault(); openFiles(fs); } });
 let rzT = null, lastW = innerWidth;
 addEventListener('resize', () => { if (Math.abs(innerWidth - lastW) < 40) return; lastW = innerWidth; clearTimeout(rzT); rzT = setTimeout(() => render(true), 250); });
 
