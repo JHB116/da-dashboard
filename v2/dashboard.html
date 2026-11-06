@@ -1118,7 +1118,9 @@ function render(keepScroll) {
     PAGES[S.page](main);
   } catch (e) {
     console.error(e);
-    main.innerHTML = `<div class="card pad warn" style="margin-top:24px">화면을 그리다 오류가 났습니다: ${esc(e.message)}</div>`;
+    // 어디서 났는지 알 수 있게 함수 이름 · 줄 번호를 같이 보여 준다 (화면을 캡처해 보내 주면 바로 찾을 수 있게)
+    const at = String(e.stack || '').split('\n').slice(1, 4).map(l => l.trim().replace(/^at /, '').replace(/\(?(about:srcdoc|https?:[^)]*|blob:[^)]*):(\d+):\d+\)?/, '$2행')).join(' ← ');
+    main.innerHTML = `<div class="card pad warn" style="margin-top:24px">화면을 그리다 오류가 났습니다: ${esc(e.message)}<div class="hint" style="margin-top:6px">위치: ${esc(at)} · 화면 ${esc(S.page)} · ${esc(S.grain)} · 단계 ${esc((S.drill.dims || []).join('›'))}</div></div>`;
   }
   if (keepScroll) window.scrollTo(0, y);
 }

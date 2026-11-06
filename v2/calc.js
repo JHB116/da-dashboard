@@ -97,7 +97,7 @@
     const ds = { dates: sec.dates, dn: Int32Array.from(sec.dates.map(dnum)), n, dims: sec.dims, dimKeys: Object.keys(sec.dims), f: {}, byNum: new Map() };
     ds.dates.forEach((d, i) => ds.byNum.set(ds.dn[i], i));
     ds.f.d = Int32Array.from(sec.f.d);
-    for (const k of ds.dimKeys) ds.f[k] = Int32Array.from(sec.f[k]);
+    for (const k of ds.dimKeys) ds.f[k] = sec.f[k] ? Int32Array.from(sec.f[k]) : new Int32Array(n);   // 값 배열이 빠진 구분은 첫 값으로
     const zero = new Float64Array(n);
     for (const m of BASE) ds.f[m] = sec.f[m] ? Float64Array.from(sec.f[m]) : zero;
     return ds;
