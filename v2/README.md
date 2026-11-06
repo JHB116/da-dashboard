@@ -16,9 +16,9 @@
 원천은 **PC 에서만** 읽는다 — Streamlit 서버는 원천을 받지 않아 메모리가 거의 들지 않고, 큰 파일 때문에 앱이 멈추지 않는다(광고 신규 실적 대시보드에서 권장하던 방식).
 
 1. 이 저장소를 PC 에 내려받는다(GitHub → Code → Download ZIP, 또는 `git clone`) → `v2` 폴더.
-2. **처음 한 번**: 24년 파일을 `make_backup_24.bat` 아이콘 위에 끌어다 놓는다(2024-12-31 까지만 쓰고 고정).
-3. **매일**: 그날 25·26년 파일을 `make_backup.bat` 위에 끌어다 놓는다.
-4. **목표가 바뀔 때**: 목표 파일(보고서 엑셀 — `월TOTAL요약(누계)` · `통합_전체` 시트)을 `make_targets.bat` 위에 끌어다 놓는다.
+2. **처음 한 번**: 24년 파일을 `★make_backup_24.bat` 아이콘 위에 끌어다 놓는다(2024-12-31 까지만 쓰고 고정).
+3. **매일**: 그날 25·26년 파일을 `★make_backup.bat` 위에 끌어다 놓는다.
+4. **목표가 바뀔 때**: 목표 파일(보고서 엑셀 — `월TOTAL요약(누계)` · `통합_전체` 시트)을 `★make_targets.bat` 위에 끌어다 놓는다.
 5. 열린 `backup` 폴더의 최신 `.json.gz` 를 대시보드 화면에 끌어다 놓는다(또는 **백업 파일 열기**) → 이 브라우저에 날짜 단위로 합쳐진다(같은 날짜는 교체, 24년 고정 구간은 24년 파일로만 바뀜, 목표 · 메모는 유지).
 
 - 대시보드 위쪽에 `24년 저장됨(~24.12.31)`이 보이면 24년은 다시 넣지 않아도 된다.
@@ -83,7 +83,7 @@ Streamlit Cloud → New app → 이 저장소 · Branch `main` · **Main file pa
 | `targets.py` | 목표 파일(보고서 엑셀) 읽기 — 기존 `load_targets_from_report` 와 같은 규칙 |
 | `app.py` · `streamlit_component/` | Streamlit 래퍼(화면 + Gemini 리뷰 메모 중계) |
 | `gemini_memo.py` | 서버 쪽 Gemini 호출(키는 Secrets 에만) |
-| `make_backup.bat` · `make_backup_24.bat` · `make_targets.bat` · `run_dashboard.bat` | PC 에서 백업 만들기 · 대시보드 띄우기 |
+| `★make_backup.bat` · `★make_backup_24.bat` · `★make_targets.bat` · `run_dashboard.bat` | PC 에서 백업 만들기 · 대시보드 띄우기 |
 | `tests/` | 가짜 원본 생성 · 기존 대시보드 대조 · 산식 단위 테스트 |
 
 ## 확인

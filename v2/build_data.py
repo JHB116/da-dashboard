@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DA 광고 실적 대시보드 v2 — 원천(DA 로데이터 xlsb · csv · xlsx) → 백업 파일(.json.gz)
 
-사용법 (PC — make_backup.bat 을 더블클릭해도 같다)
+사용법 (PC — ★make_backup.bat 을 더블클릭해도 같다)
     python build_data.py                          # raw/ 폴더의 로데이터 전부 → 백업 (raw/2024/ 안의 파일은 24년 고정 파일로)
     python build_data.py --row 0612.xlsb          # 25·26년 파일(매일) 직접 지정
     python build_data.py --y24 24년.csv           # 24년 파일(처음 한 번) — 2024-12-31 까지만 쓰고 고정

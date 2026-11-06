@@ -384,7 +384,7 @@ async function readBackup(file) {
   if (head[0] === 0x1f && head[1] === 0x8b) text = await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
   else text = await file.text();
   const p = JSON.parse(text);
-  if (p.format !== 'da-dashboard-backup') throw new Error('DA 대시보드 백업이 아닙니다 (build_data.py · make_backup.bat 로 만든 .json.gz 파일을 여세요)');
+  if (p.format !== 'da-dashboard-backup') throw new Error('DA 대시보드 백업이 아닙니다 (build_data.py · ★make_backup.bat 로 만든 .json.gz 파일을 여세요)');
   return p;
 }
 // 새 백업을 이 브라우저에 저장된 데이터에 합친다 — 새 백업에 있는 날짜는 교체, 나머지 날짜는 그대로 (24년 고정 구간은 24년 파일로만 바뀜)
@@ -425,7 +425,7 @@ function use(p) {
 function showEmpty(extra = '') {
   $id('main').innerHTML = `<div class="drop-empty"><h2>DA 광고 실적 대시보드</h2>
     <p>PC 에서 만든 <b>백업 파일(.json.gz)을 여기에 끌어다 놓거나 백업 파일 열기</b>로 고르면 이 브라우저에 저장됩니다. 다음부터는 새로 만든 백업만 넣으면 날짜 단위로 이어 붙습니다.</p>
-    <p class="hint">백업 만들기(대시보드 폴더): <b>make_backup_24.bat</b> 에 24년 파일 끌어다 놓기(처음 한 번) · <b>make_backup.bat</b> 에 25·26년 파일(매일) · <b>make_targets.bat</b> 에 목표 파일(목표가 바뀔 때) → 열린 backup 폴더의 최신 파일을 여기로. 원천은 PC 에서만 읽어 서버 메모리를 쓰지 않습니다.</p>${extra}
+    <p class="hint">백업 만들기(대시보드 폴더): <b>★make_backup_24.bat</b> 에 24년 파일 끌어다 놓기(처음 한 번) · <b>★make_backup.bat</b> 에 25·26년 파일(매일) · <b>★make_targets.bat</b> 에 목표 파일(목표가 바뀔 때) → 열린 backup 폴더의 최신 파일을 여기로. 원천은 PC 에서만 읽어 서버 메모리를 쓰지 않습니다.</p>${extra}
     <p><button class="btn" type="button" onclick="document.getElementById('fileOpen').click()">백업 파일 열기</button></p></div>`;
 }
 

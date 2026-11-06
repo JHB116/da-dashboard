@@ -2,7 +2,7 @@
 """DA 광고 실적 대시보드 v2 — Streamlit 배포용 (Main file path: v2/app.py)
 
 dashboard.html 을 화면 가득 띄운다. 실적 데이터는 저장소에도 서버에도 없다.
-- 원천은 PC 에서 make_backup.bat(매일) · make_backup_24.bat(24년, 처음 한 번) · make_targets.bat(목표 파일)로 백업(.json.gz)을 만들어
+- 원천은 PC 에서 ★make_backup.bat(매일) · ★make_backup_24.bat(24년, 처음 한 번) · ★make_targets.bat(목표 파일)로 백업(.json.gz)을 만들어
   화면에 끌어다 놓는다 → 이 브라우저(IndexedDB)에 날짜 단위로 합쳐 저장. 서버는 원천을 받지 않아 메모리가 거의 들지 않는다.
 - 리뷰 메모 1차 초안: Gemini 키(Streamlit Secrets 의 GEMINI_API_KEY)가 있으면 서버가 Gemini 로 쓰고, 없으면 화면의 규칙 기반 초안.
   Gemini 에는 화면이 계산한 요약 숫자만 보낸다.

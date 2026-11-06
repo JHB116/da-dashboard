@@ -1,7 +1,7 @@
 @echo off
 rem DA dashboard v2 backup builder
 rem  - Drag 25/26 raw file(s) onto this .bat : build a backup from just those files (daily)
-rem  - Drag the 24 raw file onto make_backup_24.bat instead (once)
+rem  - Drag the 24 raw file onto the 24 backup .bat instead (once)
 rem  - Double-click                          : build from everything in "raw" (and "raw\2024" as the 24 file)
 setlocal
 set "HERE=%~dp0"
