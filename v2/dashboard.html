@@ -230,7 +230,7 @@ details.memo summary .hint{font-weight:400;margin-left:6px}
 .lv{display:inline-block;font-size:10px;color:#64748B;border:1px solid #E2E8F0;border-radius:4px;padding:0 4px;margin-right:6px}
 .grid tr.sel td{background-color:#EFF6FF!important}
 .grid tr.etc td{color:#64748B}
-#srcRow{flex:1 1 100%;max-height:72px}
+#srcRow{flex:1 1 400px;max-height:72px}
 /* 실적 요약표 2단 머리글 */
 .grid.g2 thead tr.h1 th{height:30px;top:0;text-align:center;font-size:12.5px;font-weight:700;color:#0F172A;border-left:1px solid #CBD5E1}
 .grid.g2 thead tr.h1 th:first-child{text-align:left;vertical-align:bottom;z-index:4;border-left:0}
@@ -261,6 +261,14 @@ header.top .field{color:#52605a}
 /* 칩 색 점 — 값마다 다른 색 */
 .chip i{background:var(--sw,#52514e)!important;opacity:.28}
 .chip[aria-pressed="true"] i{opacity:1}
+/* 상단바 높이 줄이기 */
+header.top .brand{padding-block:8px}
+header.top .menu button{padding:10px 0 8px}
+header.top .bar2{padding-block:3px}
+header.top .bar2:last-child,#barRow{padding-bottom:7px}
+header.top .seg button{padding:4px 12px}
+#filtWrap{border-top:1px dashed var(--grid);max-height:56vh;overflow:auto}
+#filtWrap #filtRows{border-top:0;max-height:none}
 </style>
 </head>
 <body>
@@ -276,7 +284,6 @@ header.top .field{color:#52605a}
         <button class="btn" id="btnSave" type="button" title="이 브라우저에 저장된 데이터를 파일로 받아 두기 (다른 PC · 브라우저로 옮길 때)" hidden>백업 내려받기</button>
         <button class="btn" id="btnOpen" type="button" title="PC에서 만든 백업(.json.gz)을 저장된 데이터에 합치기 (같은 날짜는 교체)">백업 파일 열기</button>
         <input type="file" id="fileOpen" accept=".gz,.json,application/json,application/gzip" hidden>
-        <button class="btn" id="btnClear" type="button" title="이 브라우저에 저장된 데이터 지우기" hidden>데이터 지우기</button>
       </div>
     </div>
     <div class="bar2" id="barRow">
@@ -298,14 +305,13 @@ header.top .field{color:#52605a}
         <button data-set="cmp" data-v="pop" id="btnPop">전월</button>
         <button data-set="cmp" data-v="yoy2" id="btnYoy2">전전년</button>
       </div>
+      <button class="filt-tg" id="btnFilt" type="button" aria-expanded="false" aria-controls="filtWrap"><span class="filt-ic" aria-hidden="true">▸</span>필터<b id="filtN" hidden></b><span class="filt-sum" id="filtSum"></span></button>
     </div>
-    <div class="bar2">
-      <span class="field">비용출처</span>
-      <div class="seg" role="group" aria-label="비용출처 묶음" id="bucketSeg"></div>
-      <span id="srcRow" class="chips" hidden></span>
-      <button class="filt-tg" id="btnFilt" type="button" aria-expanded="false" aria-controls="filtRows"><span class="filt-ic" aria-hidden="true">▸</span>필터<b id="filtN" hidden></b><span class="filt-sum" id="filtSum"></span></button>
+    <div id="filtWrap" hidden>
+      <div class="bar2"><span class="flabel">비용출처</span><div class="seg" role="group" aria-label="비용출처 묶음" id="bucketSeg"></div></div>
+      <div class="bar2" id="srcBar" hidden><span class="flabel">비용출처(상세)</span><span id="srcRow" class="chips"></span></div>
+      <div id="filtRows"></div>
     </div>
-    <div id="filtRows" hidden></div>
   </div>
 </header>
 
@@ -391,7 +397,7 @@ function use(p) {
   P = p;
   R = C.prepare(p.row);
   for (const k in cache) delete cache[k];
-  $id('btnClear').hidden = false; $id('btnSave').hidden = false;
+  $id('btnSave').hidden = false;
   const s = p.source || {}, yy = d => d.slice(2).replace(/-/g, '.');
   $id('asof').textContent = `데이터 ${yy(s.from)} ~ ${yy(s.to)}` + (s.lock ? ` · 24년 저장됨(~${yy(s.lock)})` : ' · 24년 없음');
   render();
@@ -593,7 +599,7 @@ function memoHTML(sec, title, at, draft) {
       ? `<textarea id="memoTa" data-key="${esc(key)}" rows="${Math.max(8, text.split('\n').length + 2)}">${esc(text)}</textarea>
          <div class="memo-t"><button class="btn pri" data-memo-save="${esc(key)}">저장</button><button class="btn" data-memo-cancel="1">취소</button></div>`
       : `<div class="memo-v">${esc(text).replace(/\n/g, '<br>')}</div>
-         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${g && g.ready ? `<button class="btn" data-memo-ai="${esc(key)}"${aiPending[key] ? ' disabled' : ''}>Gemini 로 다시 쓰기</button>` : ''}${saved ? `<button class="lnk" data-memo-reset="${esc(key)}">기본 초안으로 되돌리기</button>` : ''}</div>`}</div></details>`;
+         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${saved || aiFail[key] ? `<button class="lnk" data-memo-reset="${esc(key)}" title="${g && g.ready ? '저장된 메모를 지우고 Gemini 가 다시 씁니다' : '저장된 메모를 지우고 기본 초안으로 되돌립니다'}">초안 다시 쓰기</button>` : ''}</div>`}</div></details>`;
 }
 async function memoSave(key, text, src = 'user') {
   P.memos = { ...(P.memos || {}) };
@@ -904,6 +910,7 @@ function notes() {
 // ── 필터 ────────────────────────────────────────────────────────────
 function filterSummary() {
   const p = [];
+  if (S.bucket && S.bucket !== 'TOTAL' && R) p.push(bucketName());
   for (const [k, n] of FILT_DIMS) { const v = S.filt[k]; if (v && R && R.dims[k]) p.push(v.length <= 2 ? `${n} ${v.join('·')}` : `${n} ${v.length}개`); }
   for (const [k, n] of NAME_DIMS) if (S.names[k]) p.push(`${n} '${S.names[k]}'`);
   return p.join(' · ');
@@ -912,7 +919,7 @@ function filterCount() { return FILT_DIMS.filter(([k]) => S.filt[k]).length + NA
 let chipQ = {};
 function renderFilt() {
   const el = $id('filtRows');
-  el.hidden = !S.filtOpen;
+  $id('filtWrap').hidden = !S.filtOpen;
   if (!S.filtOpen || !R) return;
   let h = '';
   for (const [k, n] of FILT_DIMS) {
@@ -1008,14 +1015,14 @@ function syncBar() {
   $id('fCustom').hidden = !S.cu;
   if (S.cu) { $id('cuR0').value = S.cu.r0; $id('cuR1').value = S.cu.r1; $id('cuC0').value = S.cu.c0; $id('cuC1').value = S.cu.c1; for (const id of ['cuR0', 'cuR1', 'cuC0', 'cuC1']) { $id(id).min = R.dates[0]; $id(id).max = lastDate(); } }
   // 비용출처(상세) — 원천의 비용출처 전체를 칩으로
-  const sr = $id('srcRow'); sr.hidden = S.bucket !== '상세';
+  const sr = $id('srcRow'); $id('srcBar').hidden = S.bucket !== '상세';
   if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null; sr.innerHTML = R.dims.src.map(v => `<button class="chip" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" style="--sw:${chipColor('src', v)}"><i></i>${esc(v || '(빈 값)')}</button>`).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
   $id('fRange').hidden = !!S.cu || (S.page === 'summary' && S.grain === 'month');
   $id('fCmp').hidden = $id('segCmp').hidden = S.page !== 'drill' || !!S.cu;   // 요약 카드 · 표는 전년 · 전전년 고정, 펼쳐보기만 비교 선택
   $id('selRange').innerHTML = RANGES[S.grain].map(([v, l]) => `<option value="${v}"${String(S.range[S.grain]) === String(v) ? ' selected' : ''}>${l}</option>`).join('');
   const nf = filterCount();
-  $id('filtSum').textContent = filterSummary() || '채널 · 매체 · 상품 · 부서 · 캠페인 …';
-  $id('filtN').hidden = !nf; $id('filtN').textContent = nf;
+  $id('filtSum').textContent = filterSummary() || '비용출처 TOTAL · 채널 · 매체 · 상품 · 캠페인 …';
+  $id('filtN').hidden = !(nf + (S.bucket !== 'TOTAL' ? 1 : 0)); $id('filtN').textContent = nf + (S.bucket !== 'TOTAL' ? 1 : 0);
   $id('btnFilt').setAttribute('aria-expanded', S.filtOpen);
   renderFilt();
 }
@@ -1055,8 +1062,7 @@ document.addEventListener('click', e => {
   if (ds.memoEdit) { memoEdit = ds.memoEdit; render(true); const ta = $id('memoTa'); if (ta) ta.focus(); return; }
   if (ds.memoCancel) { memoEdit = ''; render(true); return; }
   if (ds.memoSave) { memoSave(ds.memoSave, $id('memoTa').value); return; }
-  if (ds.memoReset) { if (confirm('저장된 메모를 지우고 기본 초안으로 되돌릴까요?')) memoSave(ds.memoReset, null); return; }
-  if (ds.memoAi) { memoAsk(ds.memoAi, true); return; }
+  if (ds.memoReset) { const k = ds.memoReset; if (!(P.memos || {})[k] || confirm('저장된 메모를 지우고 초안을 다시 쓸까요? (직접 고친 내용은 사라집니다)')) { delete aiFail[k]; memoSave(k, null); } return; }
   if (t.id === 'cuYoy') { const sh = d => C.iso(C.dnum(d) - 364); S.cu = { ...S.cu, c0: sh(S.cu.r0), c1: sh(S.cu.r1), auto: true }; render(true); return; }
   if (ds.grp != null) { const o = new Set(S.grpOpen || []); o.has(ds.grp) ? o.delete(ds.grp) : o.add(ds.grp); S.grpOpen = [...o]; render(true); return; }
   if (ds.grpAll != null) { S.grpOpen = ds.grpAll === '1' ? GROUPS.slice(1).map(([g]) => g) : []; render(true); return; }
@@ -1070,13 +1076,12 @@ document.addEventListener('click', e => {
     render(true); return;
   }
   if (ds.fall) { delete S.filt[ds.fall]; render(true); return; }
-  if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; render(true); return; }
+  if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; S.bucket = 'TOTAL'; render(true); return; }
   if (t.id === 'btnFilt') { S.filtOpen = !S.filtOpen; syncBar(); save(); return; }
   if (t.id === 'btnOpen') { $id('fileOpen').click(); return; }
   if (t.id === 'btnSave') { downloadBackup(); return; }
   if (t.id === 'selCopy') { copySel(); return; }
   if (t.id === 'selClear') { clearSel(); return; }
-  if (t.id === 'btnClear') { if (confirm('이 브라우저에 저장된 데이터(24년 포함)를 지울까요? 지운 뒤에는 원천 파일을 다시 올려야 합니다.')) { idbDel().then(() => { P = R = null; $id('btnClear').hidden = true; $id('btnSave').hidden = true; $id('asof').textContent = ''; showEmpty(); }); } return; }
 });
 document.addEventListener('change', e => {
   const t = e.target;
