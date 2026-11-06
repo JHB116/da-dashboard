@@ -30,7 +30,7 @@
 요약 시트의 리뷰 메모는 Gemini 가 1차 초안을 쓴다. 키가 없거나 실패하면 규칙으로 만든 기본 초안이 보인다.
 
 1. [Google AI Studio](https://aistudio.google.com/apikey) 에서 API 키 만들기(무료 등급 · 카드 등록 불필요).
-2. Streamlit Cloud → 앱 → **Settings → Secrets** 에 `GEMINI_API_KEY = "발급받은 키"` (선택: `GEMINI_MODEL = "gemini-2.5-flash-lite"`).
+2. Streamlit Cloud → 앱 → **Settings → Secrets** 에 `GEMINI_API_KEY = "발급받은 키"` (선택: `GEMINI_MODEL = "모델 이름"` — 없으면 최신 Flash-Lite, 그 모델이 없으면 이 키로 쓸 수 있는 Flash 계열을 자동 선택).
 3. Gemini 에는 화면이 계산한 요약 숫자(기본 초안)만 보낸다 — 원본 로데이터는 보내지 않는다. 무료 등급은 Google 이 보낸 내용을 서비스 개선에 쓸 수 있으니 사내 기준을 확인할 것.
 4. 같은 조건(기간 · 단위 · 비용출처 · 필터)의 메모는 한 번만 자동으로 쓰고 저장한다. 다시 쓰려면 **Gemini 로 다시 쓰기**, 고치려면 **편집**.
 

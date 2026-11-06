@@ -47,7 +47,7 @@ api_key, model = gm.load_config(st.secrets)
 stamp = tuple((ROOT / f).stat().st_mtime for f in ('dashboard.html', 'calc.js'))
 request = DASHBOARD(
     html=page(stamp), pageStamp='|'.join(map(str, stamp)),
-    gemini={'configured': bool(api_key), 'model': model},
+    gemini={'configured': bool(api_key), 'model': st.session_state.get('gemini_model', model)},
     memoResponse=st.session_state.get('memo_response'),
     key='da-dashboard-v2', default=None,
 )
@@ -55,8 +55,10 @@ if isinstance(request, dict) and request.get('type') == 'gemini_memo' and reques
     rid = str(request['id'])[:100]
     if rid != st.session_state.get('memo_last_id'):
         try:
-            text = gm.write_memo(request.get('facts', ''), api_key, model=model)
-            resp = {'id': rid, 'key': request.get('key'), 'ok': True, 'text': text}
+            # 설정한 모델이 없으면(404) 쓸 수 있는 모델로 바꿔 부르고, 그 모델을 이 세션 동안 기억한다
+            text, used = gm.write_memo(request.get('facts', ''), api_key, model=st.session_state.get('gemini_model', model))
+            st.session_state['gemini_model'] = used
+            resp = {'id': rid, 'key': request.get('key'), 'ok': True, 'text': text, 'model': used}
         except gm.GeminiError as e:
             resp = {'id': rid, 'key': request.get('key'), 'ok': False, 'message': str(e)}
         st.session_state['memo_last_id'] = rid
