@@ -1,12 +1,13 @@
 # DA dashboard v2 - update: download the latest main ZIP from GitHub and replace the da-dashboard-main folder.
 # Keeps v2\backup, v2\raw, v2\data (cache) and v2\.streamlit\secrets.toml. Copies the new make_*.bat next to the updater.
-param([Parameter(Mandatory = $true)][string]$Dst, [string]$BatDir = '')
+param([Parameter(Mandatory = $true)][string]$Dst, [string]$OldV2 = '', [string]$BatDir = '')
 $ErrorActionPreference = 'Stop'
 $url = 'https://github.com/JHB116/da-dashboard/archive/refs/heads/main.zip'
 $zip = Join-Path $env:TEMP 'da-dashboard-main.zip'
 $tmp = Join-Path $env:TEMP 'da-dashboard-update'
 $Dst = [IO.Path]::GetFullPath($Dst.TrimEnd('\'))
 $old = $Dst + '_old'
+if (-not $OldV2) { $OldV2 = Join-Path $Dst 'v2' }   # where the current v2 is (may be one level deeper if the ZIP was unzipped twice)
 try {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Write-Host "[1/4] Downloading the latest version from GitHub..."
@@ -18,10 +19,10 @@ try {
   $new = Join-Path $tmp 'da-dashboard-main'
   if (-not (Test-Path (Join-Path $new 'v2\build_data.py'))) { throw 'The downloaded ZIP does not contain v2\build_data.py' }
   Write-Host "[3/4] Keeping your backups / raw files / cache..."
-  foreach ($k in @('v2\backup', 'v2\raw', 'v2\data', 'v2\.streamlit\secrets.toml')) {
-    $src = Join-Path $Dst $k
+  foreach ($k in @('backup', 'raw', 'data', '.streamlit\secrets.toml')) {
+    $src = Join-Path $OldV2 $k
     if (Test-Path $src) {
-      $to = Join-Path $new $k
+      $to = Join-Path (Join-Path $new 'v2') $k
       $parent = Split-Path $to -Parent
       if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
       if (Test-Path $to) { Remove-Item $to -Recurse -Force }

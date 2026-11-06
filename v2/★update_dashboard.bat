@@ -9,7 +9,9 @@ if exist "%HERE%build_data.py" (
   pause
   exit /b 1
 )
-set "PS1=%HERE%da-dashboard-main\v2\update_dashboard.ps1"
+set "V2=%HERE%da-dashboard-main\v2"
+if not exist "%V2%\build_data.py" if exist "%HERE%da-dashboard-main\da-dashboard-main\v2\build_data.py" set "V2=%HERE%da-dashboard-main\da-dashboard-main\v2"
+set "PS1=%V2%\update_dashboard.ps1"
 if not exist "%PS1%" (
   echo [ERROR] da-dashboard-main\v2\update_dashboard.ps1 not found next to this .bat.
   echo Download the ZIP from GitHub once by hand and unzip it here as da-dashboard-main.
@@ -18,6 +20,6 @@ if not exist "%PS1%" (
 )
 copy /y "%PS1%" "%TEMP%\da_update_dashboard.ps1" >nul
 cd /d "%HERE%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\da_update_dashboard.ps1" -Dst "%HERE%da-dashboard-main" -BatDir "%HERE%."
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\da_update_dashboard.ps1" -Dst "%HERE%da-dashboard-main" -OldV2 "%V2%" -BatDir "%HERE%."
 echo.
 pause
