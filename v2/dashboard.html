@@ -959,8 +959,8 @@ function renderDrill(main) {
     ds.dates.forEach((d, i) => { const j = R.byNum.get(ds.dn[i]); if (j == null) return; for (const m of C.BASE) o[m][j] = s2[m][i]; o.has[j] = s2.has[i]; });
     s2 = o;
   }
-  const ys = yearSeries(s2, c.ps, c.sh, at), tk = ['cost', 'nrev', 'roas', 'trev', 'join', 'fp'];
-  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기${useAf ? ' · AF코드는 최근 92일만' : ''}</span></div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
+  const ys = yearSeries(s2, c.ps, c.sh, at), tk = keys;   // 위 표의 핵심 지표 · 전체 지표와 같은 목록
+  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기 · ${D.cols === 'all' ? '전체' : '핵심'} 지표 ${keys.length}개(위 표와 같음)${useAf ? ' · AF코드는 최근 92일만' : ''}</span></div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
   drawYearCharts(ys, tk, 'dc-');
 }
 
