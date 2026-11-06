@@ -94,3 +94,12 @@ test('병합: 목표만 먼저 넣고 데이터를 넣어도 목표 유지', () 
   const m = C.mergeBackup(C.mergeBackup(null, t), d);
   assert.ok(m.row && m.targets && m.targets.monthly);
 });
+
+test('AF코드 섹션 합치기: 새 쪽 날짜 우선 · 최근 92일만', () => {
+  const sec = (from, n, v) => { const dates = []; for (let i = 0; i < n; i++) dates.push(C.iso(C.dnum(from) + i)); return { dates, dims: { af: ['A'] }, f: { d: dates.map((_, i) => i), af: dates.map(() => 0), cost: dates.map(() => v) }, n }; };
+  const m = C.mergeAf(sec('2026-06-01', 100, 1), sec('2026-09-01', 10, 2), '2026-09-10');
+  assert.equal(m.dates.length, 92);
+  assert.equal(m.dates[m.dates.length - 1], '2026-09-10');
+  assert.equal(m.f.cost[m.f.d.indexOf(m.dates.indexOf('2026-09-05'))], 2);
+  assert.equal(C.mergeAf(null, null, '2026-09-10'), null);
+});

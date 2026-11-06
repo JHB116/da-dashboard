@@ -223,11 +223,19 @@ details.memo summary .hint{font-weight:400;margin-left:6px}
 .memo-v{font-size:13px;line-height:1.65;color:#1E293B;white-space:normal}
 .memo-t{display:flex;gap:8px;align-items:center;margin-top:8px}
 #memoTa{width:100%;font:inherit;font-size:13px;line-height:1.6;border:1px solid #CBD5E1;border-radius:8px;padding:8px 10px;background:#fff;color:#0F172A}
-/* 펼쳐보기 */
+/* 드릴다운 */
 .tw{display:inline-block;border:0;background:none;width:18px;padding:0;color:#52514e;cursor:pointer;font-size:12px}
 .nm{border:0;background:none;padding:0;cursor:pointer;text-align:left;color:#0F172A;max-width:360px;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;font:inherit}
 .nm:hover{text-decoration:underline}
-.lv{display:inline-block;font-size:10px;color:#64748B;border:1px solid #E2E8F0;border-radius:4px;padding:0 4px;margin-right:6px}
+/* 드릴다운 — 펼침 단계마다 배경 (기존 대시보드와 같은 색) */
+.grid.dr tbody tr.d0 td{background:#edeff2!important;font-weight:700}
+.grid.dr tbody tr.d1 td,.grid.dr tbody tr.d3 td,.grid.dr tbody tr.d5 td,.grid.dr tbody tr.d7 td{background:#f4f5f7!important}
+.grid.dr tbody tr.d2 td,.grid.dr tbody tr.d4 td,.grid.dr tbody tr.d6 td{background:#fff!important}
+.grid.dr tbody tr.tot td{background:#dbe9fe!important;font-weight:700}
+.grid.dr tbody tr:hover td{background:#eef3ff!important}
+.grid.dr tbody tr.sel td{background:var(--mint-l)!important}
+.grid.dr tbody td.selc{background-color:var(--sel)!important}
+.grid.dr th.pno,.grid.dr td.pno{text-align:left;color:#374151;padding-left:6px;font-variant-numeric:tabular-nums}
 .grid tr.sel td{background-color:#EFF6FF!important}
 .grid tr.etc td{color:#64748B}
 #srcRow{flex:1 1 400px;max-height:72px}
@@ -258,8 +266,8 @@ header.top .field{color:#52605a}
 .grid td.selc{box-shadow:inset 0 0 0 1px var(--mint)}
 .grid tr.sel td{background-color:var(--mint-l)!important}
 .grid tr.cur td{background-color:#f3f8fe}
-/* 칩 색 점 — 값마다 다른 색 */
-.chip i{background:var(--sw,#52514e)!important;opacity:.28}
+/* 칩 — 색 점 없이 글자만 */
+.chip i{display:none!important}
 .chip[aria-pressed="true"] i{opacity:1}
 /* 상단바 높이 줄이기 */
 header.top .brand{padding-block:8px}
@@ -280,7 +288,7 @@ header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#
       <div class="brand"><h1>DA 광고 실적</h1><span class="asof" id="asof"></span></div>
       <nav class="menu" aria-label="화면">
         <button data-page="summary">요약</button>
-        <button data-page="drill">펼쳐보기</button>
+        <button data-page="drill">드릴다운</button>
       </nav>
       <div class="bk-tools">
         <button class="btn" id="btnSave" type="button" title="이 브라우저에 저장된 데이터를 파일로 받아 두기 (다른 PC · 브라우저로 옮길 때)" hidden>백업 내려받기</button>
@@ -301,16 +309,16 @@ header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#
         <button data-set="mode" data-v="sum">누계</button>
         <button data-set="mode" data-v="avg">일평균</button>
       </div>
+      <label class="field">비용출처 <select id="selBucket" aria-label="비용출처"></select></label>
       <span class="field" id="fCmp">비교</span>
       <div class="seg" role="group" aria-label="비교 기준" id="segCmp">
-        <button data-set="cmp" data-v="yoy">전년 동기간</button>
-        <button data-set="cmp" data-v="pop" id="btnPop">전월</button>
-        <button data-set="cmp" data-v="yoy2" id="btnYoy2">전전년</button>
+        <button data-set="cmp" data-v="yoy" title="364일 전 같은 요일">전년</button>
+        <button data-set="cmp" data-v="yoy2" id="btnYoy2" title="728일 전 같은 요일">전전년</button>
+        <button data-set="cmp" data-v="pop" id="btnPop" title="월 = 전월 같은 날짜 · 주 = 7일 전 · 일 = 하루 전">전월</button>
       </div>
       <button class="filt-tg" id="btnFilt" type="button" aria-expanded="false" aria-controls="filtWrap"><span class="filt-ic" aria-hidden="true">▸</span>필터<b id="filtN" hidden></b><span class="filt-sum" id="filtSum"></span></button>
     </div>
     <div id="filtWrap" hidden>
-      <div class="bar2"><span class="flabel">비용출처</span><div class="seg" role="group" aria-label="비용출처 묶음" id="bucketSeg"></div></div>
       <div class="bar2" id="srcBar" hidden><span class="flabel">비용출처(상세)</span><span id="srcRow" class="chips"></span></div>
       <div id="filtRows"></div>
     </div>
@@ -336,7 +344,7 @@ const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fc
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 14 }, bucket: 'TOTAL',
   filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], open: [], sel: '', q: '', hideSmall: true, sort: 'cost', cols: 'core', top: 20 }, sv: 3 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'cost', cols: 'core', top: 20 }, sv: 4 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -346,6 +354,7 @@ function load() {
     const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
     if (s) {
       if ((s.sv || 0) < 3) { s.range = { ...(s.range || {}), week: 8, day: 14 }; if (s.bucket === '') s.bucket = 'TOTAL'; if (s.page === 'period') s.page = 'summary'; s.sv = 3; }
+      if (s.sv < 4) { if (s.drill) { delete s.drill.open; delete s.drill.hideSmall; } s.sv = 4; }   // 드릴다운: 다 펼친 상태 · 비교는 끈 상태가 기본
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
@@ -406,7 +415,7 @@ function toast(msg) { const d = document.createElement('div'); d.className = 'ca
 function use(p) {
   if (!p.row) { P = R = null; showEmpty(p.targets ? '<p>목표 파일은 저장했습니다. 이제 원천(로데이터)으로 만든 백업을 넣으세요.</p>' : ''); return; }
   P = p;
-  R = C.prepare(p.row);
+  R = addPeriodDims(C.prepare(p.row));
   for (const k in cache) delete cache[k];
   $id('btnSave').hidden = false;
   const s = p.source || {}, yy = d => d.slice(2).replace(/-/g, '.');
@@ -556,9 +565,6 @@ function tableCSV(table, name) {
 // 공통 — 기간 맥락(기준 기간 · 직접 지정), 값 · 비교
 // ════════════════════════════════════════════════════════════════════
 const GRAIN_N = { month: '월별', week: '주별', day: '일별' };
-// 칩 색 — 광고 신규 실적 대시보드 팔레트(같은 값은 늘 같은 색: 값 목록의 순서대로 돌려 쓴다)
-const CHIP_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948', '#0aa5b8', '#8a6d3b'];
-const chipColor = (k, v) => { const i = R && R.dims[k] ? R.dims[k].indexOf(v) : -1; return CHIP_COLORS[(i < 0 ? 0 : i) % CHIP_COLORS.length]; };
 const bucketArg = () => (S.bucket && S.bucket !== '상세' ? S.bucket : null);
 const bucketName = () => (S.bucket === '상세' ? '비용출처(상세)' + (S.filt.src ? ` ${S.filt.src.length}개` : ' 전체') : S.bucket);
 // 전년 · 전전년 비교 날짜 — 그 날짜가 데이터에 모두 있을 때만 (없으면 빈 배열 → '–')
@@ -767,7 +773,7 @@ function periodTableHTML(c) {
   for (const p of sh) { const cc = C.curIdx(p, s); curAll.push(...cc); cmpAll.push(...(cmp === 'pop' ? C.compareIdx(R, p, S.grain, cmp, cc) : fullCmp(p, S.grain, cmp, cc))); }
   const tot = { cur: C.sumIdx(s, curAll), cmp: C.sumIdx(s, cmpAll.length >= curAll.length ? [...new Set(cmpAll)] : []), y: at.y };
   const cell = (m, r) => { const v = vy(m, r.cur, r.y), cv = vy(m, r.cmp, r.y - (cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0)); return numCell(m, v, S.showCmp ? `<span class="sub">${deltaHTML(m, v, cv)}</span>` : ''); };
-  const cmps = [['yoy', '전년비'], ['pop', C.cmpLabel('pop', S.grain)], ...(hasYoy2() ? [['yoy2', '전전년비']] : [])];
+  const cmps = [['yoy', '전년비'], ...(hasYoy2() ? [['yoy2', '전전년비']] : []), ['pop', C.cmpLabel('pop', S.grain)]];
   return `<section><div class="sec-h"><h2>기간별 상세 실적 · ${GRAIN_N[S.grain]}</h2><span class="desc">${esc(sh[0].label)} ~ ${esc(sh[sh.length - 1].label)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 칸 아래 = ${cmpL} · 비용출처 ${esc(bucketName())}</span>
     <div class="tools"><div class="seg" role="group" aria-label="칸 아래 비교">${cmps.map(([k, l]) => `<button data-set="cmp" data-v="${k}" aria-pressed="${cmp === k}">${l}</button>`).join('')}</div>
     <div class="seg" role="group" aria-label="지표 묶음"><button data-cols="core" aria-pressed="${S.cols === 'core'}">핵심 지표</button><button data-cols="all" aria-pressed="${S.cols === 'all'}">전체 지표</button></div>
@@ -795,7 +801,7 @@ function renderSummary(main) {
   const cmpTxt = c.custom ? `비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (${sCu.days}일) · 전년 = 실적 기간의 364일 전 같은 요일` : '전년 · 전전년 = 같은 요일 기간(364 · 728일 전)';
   let h = `<section><div class="sec-h"><h2>실적 요약 · ${esc(at.label)}${at.partial ? ' (진행 중)' : ''}</h2><span class="desc">${esc(at.range)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 집행 ${sAt.days}일 · ${esc(cmpTxt)} · 비용출처 ${esc(bucketName())}${filt ? ' · ' + esc(filt) : ''}</span></div>
     <div class="grp">${main0[0]}</div><div class="tiles">${main0[1].map(tile).join('')}</div>
-    <div class="bar2 grp-tg"><span class="field">다른 지표</span>${rest.map(([g], gi) => `<button class="chip" data-grp="${esc(g)}" aria-pressed="${open.has(g)}" style="--sw:${CHIP_COLORS[gi + 1]}"><i></i>${esc(g)}</button>`).join('')}<button class="lnk" data-grp-all="${rest.every(([g]) => open.has(g)) ? '0' : '1'}">${rest.every(([g]) => open.has(g)) ? '모두 접기' : '모두 보기'}</button></div>
+    <div class="bar2 grp-tg"><span class="field">다른 지표</span>${rest.map(([g]) => `<button class="chip" data-grp="${esc(g)}" aria-pressed="${open.has(g)}" >${esc(g)}</button>`).join('')}<button class="lnk" data-grp-all="${rest.every(([g]) => open.has(g)) ? '0' : '1'}">${rest.every(([g]) => open.has(g)) ? '모두 접기' : '모두 보기'}</button></div>
     ${rest.filter(([g]) => open.has(g)).map(([g, ks]) => `<div class="grp">${g}</div><div class="tiles">${ks.map(tile).join('')}</div>`).join('')}</section>`;
   h += summaryTableHTML(c);
   const ys = yearSeries(s, ps, sh, at);
@@ -825,78 +831,136 @@ function drawYearCharts(ys, keys, prefix) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// 2. 펼쳐보기 — 단계(기본: 비용출처 › 채널 › 매체 › 상품 › 캠페인)를 펼치는 표 · 이름을 누르면 추이
+// 2. 드릴다운 — 단계(기본: 비용출처 › 채널 › 매체 › 상품 › 캠페인)를 펼치는 표 · 이름을 누르면 추이
 //    순서 · 지표는 기존 DA 대시보드 '펼쳐보기 실적', 화면은 광고 신규 실적 대시보드 '광고 드릴다운'과 같다
 // ════════════════════════════════════════════════════════════════════
-const DIM_NAME = { src: '비용출처', ch: '채널', md: '매체', pr: '상품', camp: '캠페인', sub: '하위캠페인', bpu: '부서(BPU)', cat: '카테고리', dev: '디바이스', pno: '기획전번호', bp: '브랜드/기획전', tg: '대상여부', at: '광고유형' };
+const DIM_NAME = { src: '비용출처', ch: '채널', md: '매체', pr: '상품', camp: '캠페인', sub: '하위캠페인', bpu: '부서(BPU)', cat: '카테고리', dev: '디바이스', pno: '기획전번호', bp: '브랜드/기획전', tg: '대상여부', at: '광고유형', af: 'AF코드', afn: 'AF코드이름', pd: '기간(일)', pw: '기간(주)', pm: '기간(월)' };
 const DRILL_CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'imp', 'clk', 'ctr', 'cpc', 'uv', 'crt', 'join', 'jcpa', 'fp', 'fcpa', 'nbr'];
-const NO_DELTA_DIMS = new Set(['camp', 'sub', 'pno']);     // 매년 바뀌는 캠페인 · 하위캠페인 · 기획전은 전년비를 달지 않는다 (기존과 같다)
-function renderDrill(main) {
-  const D = S.drill, c = ctx(), { s, at } = c;
-  const avail = Object.keys(DIM_NAME).filter(k => R.dims[k] && R.dims[k].length > 1);
+const NO_DELTA_DIMS = new Set(['camp', 'sub', 'pno', 'af', 'afn']);   // 매년 바뀌는 캠페인 · 하위캠페인 · 기획전 · 소재는 증감을 달지 않는다 (기존과 같다)
+const PERIOD_DIMS = new Set(['pd', 'pw', 'pm']);
+const AF_DIMS = new Set(['af', 'afn']);
+const DRILL_MAX_ROWS = 3000;
+// 기간(일 · 주 · 월) 단계 — 날짜에서 만드는 가상 구분 (값 이름이 날짜순으로 정렬되게)
+function addPeriodDims(ds) {
+  const y2 = d => d.slice(2).replace(/-/g, '.');
+  ds.dims.pd = ds.dates.map((d, i) => `${y2(d)}(${C.WD[C.dow(ds.dn[i])]})`);
+  ds.f.pd = ds.f.d;
+  const wk = ds.dates.map((d, i) => { const w = C.weekInfo(ds.dn[i]); return `${y2(C.iso(w.mon))}~${C.iso(w.mon + 6).slice(5).replace('-', '.')} (${w.m}월 ${w.w}주)`; });
+  const mo = ds.dates.map(d => `${d.slice(0, 4)}년 ${d.slice(5, 7)}월`);
+  for (const [k, lab] of [['pw', wk], ['pm', mo]]) {
+    const vals = [...new Set(lab)], ix = new Map(vals.map((v, i) => [v, i])), byDate = lab.map(v => ix.get(v));
+    ds.dims[k] = vals; ds.f[k] = Int32Array.from(ds.f.d, d => byDate[d]);
+  }
+  return ds;
+}
+// AF코드 단계는 최근 92일 AF 데이터(백업의 af)로 계산한다
+function afData() { return P && P.af ? (cache.RA || (cache.RA = addPeriodDims(C.prepare(P.af)))) : null; }
+function mapIdx(ds, idx) { if (ds === R) return idx; const out = []; for (const i of idx) { const j = ds.byNum.get(R.dn[i]); if (j != null) out.push(j); } return out; }
+function drillDims() {
+  const D = S.drill, RA = afData();
+  const avail = Object.keys(DIM_NAME).filter(k => AF_DIMS.has(k) ? RA && RA.dims[k] && RA.dims[k].length > 1 : PERIOD_DIMS.has(k) || (R.dims[k] && R.dims[k].length > 1));
   D.dims = D.dims.filter((d, i) => avail.includes(d) && D.dims.indexOf(d) === i);
   if (!D.dims.length) D.dims = ['md', 'camp'];
-  const cur = C.curIdx(at, s), cmp = c.custom ? 'custom' : S.cmp;
-  const cmpIdx = c.custom ? c.cmpIdx : cmp === 'pop' ? C.compareIdx(R, at, S.grain, 'pop', cur) : fullCmp(at, S.grain, cmp, cur);
+  return avail;
+}
+const drillHasPeriod = () => S.drill.dims.some(d => PERIOD_DIMS.has(d));
+function renderDrill(main) {
+  const D = S.drill, c = ctx(), { s, at } = c;
+  const avail = drillDims();
+  const useAf = D.dims.some(d => AF_DIMS.has(d)), ds = useAf ? afData() : R;
+  const hasPeriod = drillHasPeriod();
+  // 기간 단계가 있으면 범위(최근 N개 기간) 전체, 없으면 기준 기간
+  const curR = hasPeriod && !c.custom ? c.sh.flatMap(p => C.curIdx(p, s)) : C.curIdx(at, s);
+  const cmp = c.custom ? 'custom' : S.cmp;
+  let cmpR = [];
+  const cmpWant = D.cmp && !hasPeriod;
+  if (cmpWant) cmpR = c.custom ? c.cmpIdx : cmp === 'pop' ? C.compareIdx(R, at, S.grain, 'pop', curR) : fullCmp(at, S.grain, cmp, curR);
+  const cur = mapIdx(ds, curR), cmpIdx = mapIdx(ds, cmpR);
+  const cmpOk = cmpWant && cmpIdx.length && cmpIdx.length >= cmpR.length;
   const cmpL = c.custom ? '비교 기간' : C.cmpLabel(cmp, S.grain), cmpY = c.custom ? 0 : cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0;
   const filt = { bucket: bucketArg(), where: S.filt, names: S.names };
-  const t = C.tree(R, filt, D.dims, [cur, cmpIdx]);
+  const promoAt = D.dims.findIndex(d => ['camp', 'sub', 'bp', 'af', 'afn'].includes(d));
+  const showPromo = promoAt >= 0 && !D.dims.includes('pno') && ds.dims.pno;
+  const t = C.tree(ds, filt, D.dims, cmpOk ? [cur, cmpIdx] : [cur], showPromo ? 'pno' : null);
   const keys = D.cols === 'all' ? C.DETAIL : DRILL_CORE, ms = keys.map(k => C.METRIC[k]);
   const q = (D.q || '').trim().toLowerCase();
   const dimSel = L => `<select data-dim="${L}" aria-label="${L + 1}단계">${L > 0 ? '<option value="">(없음)</option>' : ''}${avail.map(k => `<option value="${k}"${D.dims[L] === k ? ' selected' : ''}>${DIM_NAME[k]}</option>`).join('')}</select>`;
   const slots = Math.min(6, D.dims.length + 1);
-  main.innerHTML = `<section><div class="sec-h"><h2>펼쳐보기 · ${esc(at.label)}${at.partial ? ' (진행 중)' : ''}</h2><span class="desc">${esc(at.range)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 실적 ${t.total[0].days}일 vs ${cmpL} ${t.total[1].days}일 · 비용출처 ${esc(bucketName())} · 이름을 누르면 아래에 추이, ▸ 로 하위 단계 펼치기</span></div>
+  const span = curR.length ? `${C.iso(R.dn[curR[0]])} ~ ${C.iso(R.dn[curR[curR.length - 1]])}` : at.range;
+  const title = hasPeriod && !c.custom ? `${c.sh[0].label} ~ ${at.label}` : `${at.label}${at.partial ? ' (진행 중)' : ''}`;
+  const notes = [];
+  if (useAf) notes.push(`AF코드는 최근 ${P.af.dates.length}일(${P.af.dates[0]} ~ ${P.af.dates[P.af.dates.length - 1]})만 담겨 있어${cur.length < curR.length ? ` 이 기간 중 ${cur.length}일만` : ''} 계산합니다`);
+  if (D.cmp && hasPeriod) notes.push('기간 단계가 있으면 비교는 표시하지 않습니다');
+  else if (D.cmp && !cmpOk) notes.push(`${cmpL} 데이터가 없어 비교를 표시하지 않습니다`);
+  main.innerHTML = `<section><div class="sec-h"><h2>드릴다운 · ${esc(title)}</h2><span class="desc">${esc(span)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 실적 ${t.total[0].days}일${cmpOk ? ` vs ${cmpL} ${t.total[1].days}일` : ''} · 비용출처 ${esc(bucketName())} · 이름을 누르면 아래에 추이</span></div>
     <div class="card pad"><div class="bar2" style="padding:0">
       <span class="field">단계 ${Array.from({ length: slots }, (_, L) => dimSel(L)).join(' › ')}</span>
       <label class="field">검색 <input type="search" id="drQ" placeholder="매체 · 캠페인 이름" value="${esc(D.q || '')}"></label>
       <label class="field">정렬 <select id="drSort">${ms.map(m => `<option value="${m.k}"${D.sort === m.k ? ' selected' : ''}>${m.n}</option>`).join('')}</select></label>
       <label class="field">단계별 <select id="drTop">${[[10, '상위 10'], [20, '상위 20'], [50, '상위 50'], [0, '전체']].map(([v, l]) => `<option value="${v}"${+D.top === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="field"><input type="checkbox" id="drSmall"${D.hideSmall ? ' checked' : ''}> 실적 미미 항목 숨김</label>
+      <label class="field" title="노출이 없는(집행되지 않은) 항목을 숨깁니다 — 기존 대시보드와 같은 기준. 노출 없이 비용 · 매출만 있는 서비스비용 같은 항목도 숨겨지니 합계와 맞춰 볼 때는 끄세요"><input type="checkbox" id="drImp"${D.impOnly ? ' checked' : ''}> 노출수 0 초과만 보기</label>
+      <label class="field" title="각 칸 아래에 비교 기간 대비 증감 — 비교 기준은 위쪽 조작 줄에서"><input type="checkbox" id="drCmp"${D.cmp ? ' checked' : ''}> 비교 표시</label>
       <div class="seg" role="group" aria-label="지표 묶음"><button data-dcols="core" aria-pressed="${D.cols !== 'all'}">핵심 지표</button><button data-dcols="all" aria-pressed="${D.cols === 'all'}">전체 지표</button></div>
-      <button class="lnk" id="drFold" type="button">모두 접기</button>
-      <button class="btn" data-csv-for="drTbl" data-name="DA_펼쳐보기_${esc(at.key)}">CSV</button>
-    </div></div></section>
-    <section><div class="card tbl-wrap"><table class="grid" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 단계는 매년 바뀌어 증감을 달지 않습니다 · 숫자 칸 드래그 = 합계</p></section>
+      <button class="lnk" id="drExp" type="button">${D.exp === 'all' && !D.tg.length ? '모두 접기' : '모두 펼치기'}</button>
+      <button class="btn" data-csv-for="drTbl" data-name="DA_드릴다운_${esc(at.key)}">CSV</button>
+    </div>${notes.length ? `<p class="hint" style="margin:6px 0 0">${notes.map(esc).join(' · ')}</p>` : ''}</div></section>
+    <section><div class="card tbl-wrap"><table class="grid dr" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">${cmpOk ? `칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 · AF코드 단계는 매년 바뀌어 증감을 달지 않습니다 · ` : ''}단계별 상위 N = 정렬 지표 기준 · 숫자 칸 드래그 = 합계</p></section>
     <section id="drSelSec"></section>`;
   const v = (m, sm, yr) => vy(m, sm, yr);
   const cellRow = (n, dim) => ms.map(m => {
-    const a = v(m, n.s[0], at.y), b = v(m, n.s[1], at.y - cmpY);
-    return numCell(m, a, dim && NO_DELTA_DIMS.has(dim) ? '' : `<span class="sub">${deltaHTML(m, a, b)}</span>`);
+    const a = v(m, n.s[0], at.y);
+    if (!cmpOk || (dim && NO_DELTA_DIMS.has(dim))) return numCell(m, a);
+    return numCell(m, a, `<span class="sub">${deltaHTML(m, a, v(m, n.s[1], at.y - cmpY))}</span>`);
   }).join('');
-  const small = n => Math.abs(n.s[0].cost) + Math.abs(n.s[1].cost) < 1e4 * Math.max(1, n.s[0].days) && n.s[0].nrev + n.s[1].nrev + n.s[0].join + n.s[1].join < 1;
-  const open = new Set(D.open), sortM = C.METRIC[D.sort] || C.METRIC.cost;
+  const tg = new Set(D.tg), sortM = C.METRIC[D.sort] || C.METRIC.cost;
   const sortV = n => { const x = v(sortM, n.s[0], at.y); return x == null ? -Infinity : (sortM.lowerBetter ? -x : x); };
   const matches = new Set(), direct = new Set();
   if (q) for (const n of t.nodes.values()) if (String(n.v).toLowerCase().includes(q)) { direct.add(n.key); let k = n.key; for (;;) { matches.add(k); const j = k.lastIndexOf('|'); if (j < 0) break; k = k.slice(0, j); } }
   const visible = key => { if (matches.has(key)) return true; let k = key; while (k.includes('|')) { k = k.slice(0, k.lastIndexOf('|')); if (direct.has(k)) return true; } return false; };
-  let body = '';
+  const pnoName = ix => ix >= 0 && ds.dims.pno ? String(ds.dims.pno[ix] || '').replace(/\.0$/, '') : '';
+  let body = '', rows = 0, cut = 0;
   const walk = (parentKey, level) => {
     let kids = C.children(t, parentKey, level);
-    if (D.hideSmall) kids = kids.filter(n => !small(n));
+    const dim = D.dims[level], isP = PERIOD_DIMS.has(dim);
+    kids = kids.filter(n => n.s[0].days > 0 && (isP || !D.impOnly || n.s[0].imp > 0));
     if (q) kids = kids.filter(n => visible(n.key));
-    kids.sort((a, b) => sortV(b) - sortV(a));
-    const top = +D.top || 0, extra = top && kids.length > top ? kids.slice(top) : [];
+    if (isP) kids.sort((a, b) => (a.v < b.v ? -1 : a.v > b.v ? 1 : 0));        // 기간은 날짜순, 모두 보인다
+    else kids.sort((a, b) => sortV(b) - sortV(a));
+    const top = isP ? 0 : +D.top || 0, extra = top && kids.length > top ? kids.slice(top) : [];
     if (extra.length) kids = kids.slice(0, top);
     for (const n of kids) {
-      const canOpen = level < D.dims.length - 1, isOpen = canOpen && (open.has(n.key) || (!!q && matches.has(n.key) && !direct.has(n.key)));
-      body += `<tr data-key="${esc(n.key)}" class="${D.sel === n.key ? 'sel' : ''}"><td style="padding-left:${10 + level * 18}px" data-csv="${esc('  '.repeat(level) + n.v)}">${canOpen ? `<button class="tw" data-tw="${esc(n.key)}" aria-expanded="${isOpen}" aria-label="펼치기">${isOpen ? '▾' : '▸'}</button>` : '<span class="tw"></span>'}<span class="lv">${DIM_NAME[n.dim]}</span><button class="nm" data-dsel="${esc(n.key)}" title="${esc(n.v)}">${esc(n.v || '(빈 값)')}</button></td>${cellRow(n, n.dim)}</tr>`;
+      if (rows >= DRILL_MAX_ROWS) { cut++; continue; }
+      const canOpen = level < D.dims.length - 1;
+      const isOpen = canOpen && ((D.exp === 'all') !== tg.has(n.key) || (!!q && matches.has(n.key) && !direct.has(n.key)));
+      const pno = showPromo && level >= promoAt ? pnoName(n.pk) : '';
+      rows++;
+      body += `<tr data-key="${esc(n.key)}" class="d${Math.min(level, 7)}${D.sel === n.key ? ' sel' : ''}"><td style="padding-left:${10 + level * 18}px" data-csv="${esc('  '.repeat(level) + n.v)}">${canOpen ? `<button class="tw" data-tw="${esc(n.key)}" aria-expanded="${isOpen}" aria-label="${isOpen ? '접기' : '펼치기'}">${isOpen ? '▾' : '▸'}</button>` : '<span class="tw"></span>'}<button class="nm" data-dsel="${esc(n.key)}" title="${esc(n.v)}">${esc(n.v || '(빈 값)')}</button></td>${showPromo ? `<td class="pno">${esc(pno)}</td>` : ''}${cellRow(n, n.dim)}</tr>`;
       if (isOpen) walk(n.key, level + 1);
     }
-    if (extra.length) {
-      const agg = [0, 1].map(k => { const o = { days: Math.max(...extra.map(n => n.s[k].days)) }; for (const b of C.BASE) o[b] = extra.reduce((a, n) => a + n.s[k][b], 0); return o; });
-      body += `<tr class="etc"><td style="padding-left:${28 + level * 18}px" data-csv="${esc('  '.repeat(level) + `그 외 ${extra.length}개`)}"><span class="hint">그 외 ${extra.length}개 (합계)</span></td>${cellRow({ s: agg }, 'camp')}</tr>`;
+    if (extra.length && rows < DRILL_MAX_ROWS) {
+      rows++;
+      const agg = t.total.map((_, k) => { const o = { days: Math.max(...extra.map(n => n.s[k].days)) }; for (const b of C.BASE) o[b] = extra.reduce((a, n) => a + n.s[k][b], 0); return o; });
+      body += `<tr class="etc d${Math.min(level, 7)}"><td style="padding-left:${28 + level * 18}px" data-csv="${esc('  '.repeat(level) + `그 외 ${extra.length}개`)}"><span class="hint">그 외 ${extra.length}개 (합계)</span></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: agg }, 'camp')}</tr>`;
     }
   };
   walk('', 0);
-  $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${ms.map(m => `<th><b>${m.n}</b>${C.unit(m, S.mode)}</th>`).join('')}</tr></thead>
-    <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1}" class="hint">조건에 맞는 항목이 없습니다</td></tr>`}</tbody>`;
-  // 선택 항목 추이 (연도 겹쳐보기)
+  if (cut) body += `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">행이 많아 ${DRILL_MAX_ROWS.toLocaleString()}행까지만 보여 줍니다 — 단계별 상위 N 을 줄이거나 일부를 접으세요</td></tr>`;
+  $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${showPromo ? '<th class="pno">기획전번호</th>' : ''}${ms.map(m => `<th><b>${m.n}</b>${C.unit(m, S.mode)}</th>`).join('')}</tr></thead>
+    <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">조건에 맞는 항목이 없습니다</td></tr>`}</tbody>`;
+  // 선택 항목 추이 (연도 겹쳐보기) — 기간 단계는 조건에서 뺀다, AF코드는 최근 92일만
   const selKey = D.sel && t.nodes.has(D.sel) ? D.sel : '';
-  const name = selKey ? selKey.split('|').map((ix, L) => R.dims[D.dims[L]][+ix] || '(빈 값)').join(' › ') : '합계';
-  const where = selKey ? { ...S.filt, ...C.keyWhere(R, D.dims, selKey) } : S.filt;
-  const s2 = C.daily(R, { bucket: bucketArg(), where, names: S.names });
+  const name = selKey ? selKey.split('|').map((ix, L) => ds.dims[D.dims[L]][+ix] || '(빈 값)').join(' › ') : '합계';
+  const kw = selKey ? C.keyWhere(ds, D.dims, selKey) : {};
+  for (const k of PERIOD_DIMS) delete kw[k];
+  const where = { ...S.filt, ...kw };
+  let s2 = C.daily(ds, { bucket: bucketArg(), where, names: S.names });
+  if (ds !== R) {                                    // AF 날짜 → 전체 날짜 축
+    const o = C.emptySeries(R.dates.length);
+    ds.dates.forEach((d, i) => { const j = R.byNum.get(ds.dn[i]); if (j == null) return; for (const m of C.BASE) o[m][j] = s2[m][i]; o.has[j] = s2.has[i]; });
+    s2 = o;
+  }
   const ys = yearSeries(s2, c.ps, c.sh, at), tk = ['cost', 'nrev', 'roas', 'trev', 'join', 'fp'];
-  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기</span></div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
+  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기${useAf ? ' · AF코드는 최근 92일만' : ''}</span></div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
   drawYearCharts(ys, tk, 'dc-');
 }
 
@@ -919,9 +983,9 @@ function notes() {
 }
 
 // ── 필터 ────────────────────────────────────────────────────────────
-function filterSummary() {
+function filterSummary(noBucket = false) {     // noBucket: 상단바 필터 버튼 옆 (비용출처는 따로 보임)
   const p = [];
-  if (S.bucket && S.bucket !== 'TOTAL' && R) p.push(bucketName());
+  if (!noBucket && S.bucket && S.bucket !== 'TOTAL' && R) p.push(bucketName());
   for (const [k, n] of FILT_DIMS) { const v = S.filt[k]; if (v && R && R.dims[k]) p.push(v.length <= 2 ? `${n} ${v.join('·')}` : `${n} ${v.length}개`); }
   for (const [k, n] of NAME_DIMS) if (S.names[k]) p.push(`${n} '${S.names[k]}'`);
   return p.join(' · ');
@@ -939,7 +1003,7 @@ function renderFilt() {
     const sel = S.filt[k] ? new Set(S.filt[k]) : null, q = (chipQ[k] || '').toLowerCase();
     const list = q ? vals.filter(v => v.toLowerCase().includes(q)) : vals;
     h += `<div class="bar2"><span class="flabel">${n}</span>${vals.length > 12 ? `<input type="search" data-chipq="${k}" placeholder="${n} 찾기" value="${esc(chipQ[k] || '')}" style="width:120px">` : ''}
-      <div class="chips" role="group" aria-label="${n} 선택">${list.map(v => `<button class="chip" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" style="--sw:${chipColor(k, v)}"><i></i>${esc(v || '(빈 값)')}</button>`).join('')}</div>
+      <div class="chips" role="group" aria-label="${n} 선택">${list.map(v => `<button class="chip" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`).join('')}</div>
       <button class="lnk" data-fall="${k}">모두</button>${sel ? `<span class="hint">${sel.size}개 선택</span>` : ''}</div>`;
   }
   h += `<div class="bar2">${NAME_DIMS.filter(([k]) => R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
@@ -1019,7 +1083,7 @@ function syncBar() {
   document.querySelectorAll('[data-set]').forEach(b => b.setAttribute('aria-pressed', S[b.dataset.set] === b.dataset.v));
   $id('btnPop').textContent = ({ month: '전월', week: '전주', day: '전일' })[S.grain];
   $id('btnYoy2').hidden = !hasYoy2();
-  $id('bucketSeg').innerHTML = BUCKETS.map(([v, l]) => `<button data-bucket="${esc(v)}" aria-pressed="${S.bucket === v}">${esc(l)}</button>`).join('');
+  $id('selBucket').innerHTML = BUCKETS.map(([v, l]) => `<option value="${esc(v)}"${S.bucket === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
   if (!R) return;
   const ps = plist(), ai = atIndex(ps);
   $id('selAt').innerHTML = `<option value="__custom"${S.cu ? ' selected' : ''}>직접 지정…</option>` + ps.map((p, i) => `<option value="${p.key}"${!S.cu && i === ai ? ' selected' : ''}>${esc(p.label)}${p.partial ? ' (진행 중)' : ''}</option>`).reverse().join('');
@@ -1027,13 +1091,15 @@ function syncBar() {
   if (S.cu) { $id('cuR0').value = S.cu.r0; $id('cuR1').value = S.cu.r1; $id('cuC0').value = S.cu.c0; $id('cuC1').value = S.cu.c1; for (const id of ['cuR0', 'cuR1', 'cuC0', 'cuC1']) { $id(id).min = R.dates[0]; $id(id).max = lastDate(); } }
   // 비용출처(상세) — 원천의 비용출처 전체를 칩으로
   const sr = $id('srcRow'); $id('srcBar').hidden = S.bucket !== '상세';
-  if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null; sr.innerHTML = R.dims.src.map(v => `<button class="chip" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" style="--sw:${chipColor('src', v)}"><i></i>${esc(v || '(빈 값)')}</button>`).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
-  $id('fRange').hidden = !!S.cu || (S.page === 'summary' && S.grain === 'month');
-  $id('fCmp').hidden = $id('segCmp').hidden = S.page !== 'drill' || !!S.cu;   // 요약 카드 · 표는 전년 · 전전년 고정, 펼쳐보기만 비교 선택
+  if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null; sr.innerHTML = R.dims.src.map(v => `<button class="chip" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
+  // 범위: 요약 월별 · 직접 지정은 안 씀, 드릴다운은 기간(일 · 주 · 월) 단계를 골랐을 때만
+  $id('fRange').hidden = !!S.cu || (S.page === 'summary' && S.grain === 'month') || (S.page === 'drill' && !drillHasPeriod());
+  // 비교 기준: 드릴다운에서 '비교 표시'를 켰을 때만 (요약 카드 · 표는 전년 · 전전년 고정)
+  $id('fCmp').hidden = $id('segCmp').hidden = S.page !== 'drill' || !S.drill.cmp || !!S.cu || drillHasPeriod();
   $id('selRange').innerHTML = RANGES[S.grain].map(([v, l]) => `<option value="${v}"${String(S.range[S.grain]) === String(v) ? ' selected' : ''}>${l}</option>`).join('');
   const nf = filterCount();
-  $id('filtSum').textContent = filterSummary() || '비용출처 TOTAL · 채널 · 매체 · 상품 · 캠페인 …';
-  $id('filtN').hidden = !(nf + (S.bucket !== 'TOTAL' ? 1 : 0)); $id('filtN').textContent = nf + (S.bucket !== 'TOTAL' ? 1 : 0);
+  $id('filtSum').textContent = filterSummary(true) || '채널 · 매체 · 상품 · 캠페인 …';
+  $id('filtN').hidden = !nf; $id('filtN').textContent = nf;
   $id('btnFilt').setAttribute('aria-expanded', S.filtOpen);
   renderFilt();
 }
@@ -1067,9 +1133,9 @@ document.addEventListener('click', e => {
   if (ds.bucket != null) { if (S.bucket === '상세' && ds.bucket !== '상세') delete S.filt.src; S.bucket = ds.bucket; render(true); return; }
   if (ds.cols) { S.cols = ds.cols; render(true); return; }
   if (ds.dcols) { S.drill.cols = ds.dcols; render(true); return; }
-  if (ds.tw != null) { const o = new Set(S.drill.open); o.has(ds.tw) ? o.delete(ds.tw) : o.add(ds.tw); S.drill.open = [...o]; render(true); return; }
+  if (ds.tw != null) { const o = new Set(S.drill.tg); o.has(ds.tw) ? o.delete(ds.tw) : o.add(ds.tw); S.drill.tg = [...o]; render(true); return; }
   if (ds.dsel != null) { S.drill.sel = ds.dsel; render(true); const sc = $id('drSelSec'); if (sc) sc.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
-  if (t.id === 'drFold') { S.drill.open = []; render(true); return; }
+  if (t.id === 'drExp') { S.drill.exp = S.drill.exp === 'all' && !S.drill.tg.length ? 'none' : 'all'; S.drill.tg = []; render(true); return; }
   if (ds.memoEdit) { memoEdit = ds.memoEdit; render(true); const ta = $id('memoTa'); if (ta) ta.focus(); return; }
   if (ds.memoCancel) { memoEdit = ''; render(true); return; }
   if (ds.memoSave) { memoSave(ds.memoSave, $id('memoTa').value); return; }
@@ -1087,7 +1153,7 @@ document.addEventListener('click', e => {
     render(true); return;
   }
   if (ds.fall) { delete S.filt[ds.fall]; render(true); return; }
-  if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; S.bucket = 'TOTAL'; render(true); return; }
+  if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; render(true); return; }
   if (t.id === 'btnFilt') { S.filtOpen = !S.filtOpen; syncBar(); save(); return; }
   if (t.id === 'btnOpen') { $id('fileOpen').click(); return; }
   if (t.id === 'btnSave') { downloadBackup(); return; }
@@ -1113,10 +1179,12 @@ document.addEventListener('change', e => {
       S.cu = cu; render(true);
     }
   }
-  else if (t.dataset.dim != null) { const L = +t.dataset.dim, d = S.drill.dims.slice(); if (t.value) d[L] = t.value; else d.length = L; S.drill.dims = d.filter((x, i) => x && d.indexOf(x) === i); S.drill.open = []; S.drill.sel = ''; render(true); }
+  else if (t.dataset.dim != null) { const L = +t.dataset.dim, d = S.drill.dims.slice(); if (t.value) d[L] = t.value; else d.length = L; S.drill.dims = d.filter((x, i) => x && d.indexOf(x) === i); S.drill.tg = []; S.drill.sel = ''; render(true); }
   else if (t.id === 'drSort') { S.drill.sort = t.value; render(true); }
   else if (t.id === 'drTop') { S.drill.top = +t.value; render(true); }
-  else if (t.id === 'drSmall') { S.drill.hideSmall = t.checked; render(true); }
+  else if (t.id === 'drImp') { S.drill.impOnly = t.checked; render(true); }
+  else if (t.id === 'drCmp') { S.drill.cmp = t.checked; render(true); }
+  else if (t.id === 'selBucket') { if (S.bucket === '상세' && t.value !== '상세') delete S.filt.src; S.bucket = t.value; if (t.value === '상세') S.filtOpen = true; render(true); }
   else if (t.id === 'selRange') { S.range[S.grain] = t.value === 'all' ? 'all' : +t.value; render(true); }
   else if (t.id === 'fileOpen') { if (t.files.length) openFiles(t.files); t.value = ''; }
   else if (t.id === 'chkCmp') { S.showCmp = t.checked; render(true); }

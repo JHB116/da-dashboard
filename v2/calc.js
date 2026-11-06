@@ -225,12 +225,13 @@
   // ── 드릴다운 트리 ──────────────────────────────────────────────────
   // 날짜 집합 여러 개(sets[0]=현재, [1]=비교 …)에 대해 dims 순서대로 단계별 합계 (광고 신규 실적 대시보드와 같은 방식)
   // 노드 키 = 값 인덱스를 '|' 로 이은 접두사. 노드.s[k] = k번째 집합의 합계(+ days)
-  function tree(ds, filt, dims, sets) {
+  // promo(구분 키, 예: 'pno')를 주면 노드.pk = 그 노드 행들의 값이 하나뿐일 때 그 값 인덱스, 여럿이면 -1 (기존 _drill_promo_of)
+  function tree(ds, filt, dims, sets, promo = null) {
     const nd = ds.dates.length, K = sets.length, test = rowTest(ds, filt);
     const slots = sets.map(set => { const a = new Uint8Array(nd); for (const i of set) a[i] = 1; return a; });
     const cols = dims.map(k => ds.f[k]), F = BASE.map(m => ds.f[m]);
     const zero = () => { const o = {}; for (const m of BASE) o[m] = 0; o._d = new Set(); return o; };
-    const nodes = new Map(), total = sets.map(zero), hit = new Int8Array(K);
+    const nodes = new Map(), total = sets.map(zero), hit = new Int8Array(K), pc = promo && ds.f[promo] ? ds.f[promo] : null;
     const add = (o, i, d) => { for (let j = 0; j < BASE.length; j++) o[BASE[j]] += F[j][i]; o._d.add(d); };
     for (let i = 0; i < ds.n; i++) {
       const d = ds.f.d[i];
@@ -241,7 +242,8 @@
       for (let L = 0; L < cols.length; L++) {
         key = L ? key + '|' + cols[L][i] : String(cols[L][i]);
         let node = nodes.get(key);
-        if (!node) { node = { key, level: L, dim: dims[L], v: ds.dims[dims[L]][cols[L][i]], s: sets.map(zero) }; nodes.set(key, node); }
+        if (!node) { node = { key, level: L, dim: dims[L], v: ds.dims[dims[L]][cols[L][i]], s: sets.map(zero), pk: pc ? pc[i] : -1 }; nodes.set(key, node); }
+        else if (pc && node.pk !== pc[i]) node.pk = -1;
         for (let k = 0; k < K; k++) if (hit[k]) add(node.s[k], i, d);
       }
       for (let k = 0; k < K; k++) if (hit[k]) add(total[k], i, d);
@@ -312,14 +314,44 @@
   }
   function mergeBackup(base, add) {
     if (!base || !base.row) return base && add ? { ...(add.row ? add : base), ...extras(base, add) } : add;   // 목표만 먼저 넣은 경우도 목표 유지
-    if (!add || !add.row) return add ? { ...base, ...extras(base, add) } : base;
+    if (!add || !add.row) return add ? { ...base, ...extras(base, add) } : base;   // 목표만 담긴 백업
     const B = base.row, A = add.row, sb = base.source || {}, sa = add.source || {};
     const lock = sa.lock || sb.lock || null;
     const addLock = !!sa.lock;
     const keepA = A.dates.map(d => addLock || !lock || d > lock);
     const addDates = new Set(A.dates.filter((d, i) => keepA[i]));
     const keepB = B.dates.map(d => !addDates.has(d) && !(addLock && d <= lock));
-    const dates = [...new Set([...B.dates.filter((d, i) => keepB[i]), ...addDates])].sort();
+    const row = mergeSec(B, A, keepB, keepA);
+    const dates = row.dates;
+    const files = [...(sb.files || []), ...(sa.files || [])];
+    const source = {
+      files, files24: (sa.files24 && sa.files24.length ? sa.files24 : sb.files24) || [], lock,
+      missing: [...new Set([...(sb.missing || []), ...(sa.missing || [])])].sort(),
+      from: dates[0], to: dates[dates.length - 1], days: dates.length, rows: row.n,
+    };
+    const replaced = B.dates.filter(d => addDates.has(d) || (addLock && d <= lock)).length;
+    return {
+      format: add.format, version: add.version, created: add.created, lastDate: source.to, source, ...extras(base, add),
+      row, af: mergeAf(base.af, add.af, source.to),
+      merged: { added: addDates.size - B.dates.filter(d => addDates.has(d)).length, replaced, kept: keepB.filter(Boolean).length, ignored: keepA.filter(x => !x).length },
+    };
+  }
+  // AF코드 섹션 — 새 쪽 날짜가 이기고, 전체 마지막 날 기준 최근 AF_DAYS 일만 남긴다
+  const AF_DAYS = 92;
+  function mergeAf(B, A, lastDate) {
+    if (!B && !A) return null;
+    const cut = dnum(lastDate) - AF_DAYS;
+    if (!B || !A) {
+      const S = A || B;
+      if (!S.dates.length || dnum(S.dates[0]) > cut) return S;
+      return mergeSec(S, { dates: [], dims: {}, f: { d: [] } }, S.dates.map(d => dnum(d) > cut), []);
+    }
+    const ad = new Set(A.dates);
+    return mergeSec(B, A, B.dates.map(d => !ad.has(d) && dnum(d) > cut), A.dates.map(d => dnum(d) > cut));
+  }
+  // 두 섹션을 날짜 단위로 합친다 (keepB · keepA = 날짜 인덱스별로 그 쪽 행을 남길지)
+  function mergeSec(B, A, keepB, keepA) {
+    const dates = [...new Set([...B.dates.filter((d, i) => keepB[i]), ...A.dates.filter((d, i) => keepA[i])])].sort();
     const dIx = new Map(dates.map((d, i) => [d, i]));
     const dimKeys = [...new Set([...Object.keys(B.dims), ...Object.keys(A.dims)])];
     const mets = BASE.filter(m => B.f[m] || A.f[m]);
@@ -343,18 +375,7 @@
     };
     push(B, 'B', keepB);
     push(A, 'A', keepA);
-    const files = [...(sb.files || []), ...(sa.files || [])];
-    const source = {
-      files, files24: (sa.files24 && sa.files24.length ? sa.files24 : sb.files24) || [], lock,
-      missing: [...new Set([...(sb.missing || []), ...(sa.missing || [])])].sort(),
-      from: dates[0], to: dates[dates.length - 1], days: dates.length, rows: f.d.length,
-    };
-    const replaced = B.dates.filter(d => addDates.has(d) || (addLock && d <= lock)).length;
-    return {
-      format: add.format, version: add.version, created: add.created, lastDate: source.to, source, ...extras(base, add),
-      row: { dates, dims, f, n: f.d.length, zero: BASE.filter(m => !mets.includes(m)) },
-      merged: { added: addDates.size - B.dates.filter(d => addDates.has(d)).length, replaced, kept: keepB.filter(Boolean).length, ignored: keepA.filter(x => !x).length },
-    };
+    return { dates, dims, f, n: f.d.length, zero: BASE.filter(m => !mets.includes(m)) };
   }
 
   // ── 표기 ───────────────────────────────────────────────────────────
@@ -395,7 +416,7 @@
     BASE, METRIC_LIST, METRIC, SUMMARY, DETAIL, COST_BUCKETS, EVENTS, WD,
     normCost, bucketValues, div, pct, dnum, iso, dow, monthDays, weekInfo,
     prepare, nameMatcher, rowTest, daily, emptySeries, periods, curIdx, compareIdx, rangeIdx, cmpLabel, cmpName, sumIdx, value,
-    mergeBackup, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
+    mergeBackup, mergeAf, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
   };
   root.DaCalc = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

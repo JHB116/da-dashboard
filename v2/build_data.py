@@ -62,6 +62,11 @@ ROW_DIMS = {
     'bp': ['구분_브랜드/기획전'],
 }
 DIM_KEYS = list(ROW_DIMS)
+# AF코드(소재) — 가장 잘게 쪼개진 단위라 최근 AF_DAYS 일만 따로 담는다(드릴다운의 AF코드 단계 · 소재 화면용)
+AF_DIMS = {'af': ['구분_AF코드'], 'afn': ['구분_AF코드이름']}
+AF_KEYS = list(AF_DIMS)
+AF_ALL = DIM_KEYS + AF_KEYS
+AF_DAYS = 92
 # 원천 컬럼 → 백업 키 (지표). dashboard.py AGG_COLS 와 같은 목록
 ROW_METRICS = {
     '지표_노출수': 'imp',
@@ -97,9 +102,9 @@ ROW_METRICS = {
 METS = list(ROW_METRICS.values())
 OPTIONAL = {'vv', 'rd', 'pp', 'bk', 'sv', 'gd', 'pt', 'sp'}   # 일부 원천에만 있는 지표 — 없어도 경고하지 않는다
 # 원천에 컬럼이 없을 때 기존 대시보드와 같은 기본값 (구분)
-DIM_DEFAULT = {'at': 'DA', 'tg': '대상', 'src': '기타', 'ch': '기타', 'dev': '기타', 'bpu': '기타', 'cat': '기타',
+DIM_DEFAULT = {'af': '', 'afn': '', 'at': 'DA', 'tg': '대상', 'src': '기타', 'ch': '기타', 'dev': '기타', 'bpu': '기타', 'cat': '기타',
                'camp': '기타', 'md': '기타', 'sub': '', 'pr': '', 'pno': '', 'bp': ''}
-WANT_SRC = [ROW_DATE] + [c for cands in ROW_DIMS.values() for c in cands] + list(ROW_METRICS)
+WANT_SRC = [ROW_DATE] + [c for cands in [*ROW_DIMS.values(), *AF_DIMS.values()] for c in cands] + list(ROW_METRICS)
 CHUNK = 20_000
 ROW_EXT = ('.xlsb', '.csv', '.xlsx', '.xlsm')
 
@@ -247,7 +252,7 @@ def iter_raw(path: Path):
 def prep(raw: pd.DataFrame) -> tuple[pd.DataFrame, set]:
     """원천 덩어리 → (date, 구분 키들, 지표 키들), 원천에 있던 지표 컬럼 키"""
     df = pd.DataFrame({'date': parse_dates(raw[ROW_DATE])})
-    for k, cands in ROW_DIMS.items():
+    for k, cands in [*ROW_DIMS.items(), *AF_DIMS.items()]:
         col = next((c for c in cands if raw[c].notna().any()), cands[0])
         df[k] = clean_dim(raw[col], DIM_DEFAULT[k])
     seen = set()
@@ -261,39 +266,46 @@ def prep(raw: pd.DataFrame) -> tuple[pd.DataFrame, set]:
     return df[df['date'].notna()], seen
 
 
-def load_prepped(path: Path, use_cache: bool = True) -> tuple[pd.DataFrame, list[str]]:
-    """원천 → (일자 × 구분) 합산 DataFrame, 원천에 없던 지표 키. 덩어리마다 바로 합산해 메모리를 아낀다.
-    xlsb · csv · xlsx 는 data/cache/ 에 결과를 캐시"""
+def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
+    """원천 → (일자 × 구분) 합산 DataFrame, 원천에 없던 지표 키[, 최근 AF_DAYS 일의 (일자 × 구분 × AF코드) 합산].
+    덩어리마다 바로 합산해 메모리를 아낀다. xlsb · csv · xlsx 는 data/cache/ 에 결과를 캐시"""
     path = Path(path)
-    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v1.pkl'
+    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v2.pkl'
     cacheable = use_cache and path.suffix.lower() in ROW_EXT
     if cacheable and cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
         log(f'[원천] 캐시 사용: {path.name} (이미 읽은 파일)')
         c = pd.read_pickle(cache)
-        return c['df'], c['missing']
+        return (c['df'], c['missing'], c.get('af')) if with_af else (c['df'], c['missing'])
     log(f'[원천] {path.name} 읽는 중 (큰 파일은 몇 분)…')
-    seen_all, parts = set(), []
+    seen_all, parts, parts_af = set(), [], []
     for raw in iter_raw(path):
         p, seen = prep(raw)
         del raw
         seen_all |= seen
-        for k in DIM_KEYS:
+        for k in AF_ALL:
             p[k] = p[k].astype('category')
         parts.append(p.groupby(['date', *DIM_KEYS], sort=False, observed=True)[METS].sum().reset_index())
+        parts_af.append(p.groupby(['date', *AF_ALL], sort=False, observed=True)[METS].sum().reset_index())
         del p
     df = concat_cat(parts)
     if len(parts) > 1:
         df = df.groupby(['date', *DIM_KEYS], sort=False, observed=True)[METS].sum().reset_index()
+    af = concat_cat(parts_af)
+    del parts_af
+    if len(af):
+        af = af[af['date'] > af['date'].max() - pd.Timedelta(days=AF_DAYS)]
+        af = af.groupby(['date', *AF_ALL], sort=False, observed=True)[METS].sum().reset_index()
     # 순결제거래액 컬럼이 없으면 첫구매 + 윈백 (dashboard.py 와 같다)
     if 'nrev' not in seen_all and {'fpr', 'wbr'} & seen_all:
         df['nrev'] = df['fpr'] + df['wbr']
+        af['nrev'] = af['fpr'] + af['wbr']
         seen_all.add('nrev')
         log('  · 순결제거래액 컬럼이 없어 순결제거래액(첫구매) + (윈백)으로 채웠습니다')
     missing = [k for k in METS if k not in seen_all]
     if cacheable:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        pd.to_pickle({'df': df, 'missing': missing}, cache)
-    return df, missing
+        pd.to_pickle({'df': df, 'missing': missing, 'af': af}, cache)
+    return (df, missing, af) if with_af else (df, missing)
 
 
 def concat_cat(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -362,14 +374,14 @@ def latest_wins(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 
 # ── 인코딩 · 디코딩 ────────────────────────────────────────────────────
-def encode(g: pd.DataFrame, dates) -> dict:
+def encode(g: pd.DataFrame, dates, dims=None) -> dict:
     """열 단위 + 값 목록 인덱스로 압축: dims[k] = 값 목록(광고비 큰 순), f[k] = 인덱스 배열, f[지표] = 값 배열.
     전부 0인 지표는 빼고 zero 목록에 적는다"""
     dates = sorted(pd.Timestamp(d) for d in dates)
     dcodes = pd.Categorical(g['date'], categories=dates).codes
     out = {'dates': [d.strftime('%Y-%m-%d') for d in dates], 'dims': {}, 'f': {'d': dcodes.astype(np.int32)}, 'zero': []}
     weight = np.abs(g['cost'].to_numpy(dtype=float)) + 1e-9
-    for k in DIM_KEYS:
+    for k in dims or DIM_KEYS:
         c = g[k] if isinstance(g[k].dtype, pd.CategoricalDtype) else g[k].astype('category')
         codes = c.cat.codes.to_numpy()
         cats = [str(v) for v in c.cat.categories]
@@ -413,12 +425,12 @@ def to_json(payload: dict) -> str:
     return enc(payload)
 
 
-def decode(sec: dict) -> tuple[pd.DataFrame, list]:
+def decode(sec: dict, dims=None) -> tuple[pd.DataFrame, list]:
     """백업 섹션 → (집계 DataFrame, 날짜 목록)"""
     dates = [pd.Timestamp(d) for d in sec['dates']]
     n = len(sec['f']['d'])
     df = pd.DataFrame({'date': pd.Series(dates, dtype='datetime64[ns]').iloc[np.asarray(sec['f']['d'], dtype=int)].to_numpy()})
-    for k in DIM_KEYS:
+    for k in dims or DIM_KEYS:
         vals = sec['dims'].get(k)
         if vals is None:
             df[k] = DIM_DEFAULT[k]
@@ -440,11 +452,13 @@ def read_backup(src) -> dict:
 
 
 # ── 빌드 ───────────────────────────────────────────────────────────────
-def _read_group(paths: list, use_cache: bool, until: str | None = None):
-    """파일 묶음 → (같은 날짜는 뒤 파일 우선으로 합친 DataFrame, 파일명들, 없는 지표)"""
+def _read_group(paths: list, use_cache: bool, until: str | None = None, af_out: list | None = None):
+    """파일 묶음 → (같은 날짜는 뒤 파일 우선으로 합친 DataFrame, 파일명들, 없는 지표). af_out 을 주면 AF 집계도 모은다"""
     frames, files, missing = [], [], set()
     for p in paths:
-        df, ms = load_prepped(p, use_cache=use_cache)
+        df, ms, af = load_prepped(p, use_cache=use_cache, with_af=True)
+        if af_out is not None and af is not None and len(af):
+            af_out.append(af)
         if until is not None:
             n0 = df['date'].nunique()
             df = df[df['date'] <= pd.Timestamp(until)]
@@ -474,7 +488,8 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
     y24, y24_files, miss24 = _read_group(y24_paths, use_cache, until=LOCK_UNTIL)
     if y24 is not None and len(y24):
         lock = LOCK_UNTIL
-    new, files, miss = _read_group(row_paths, use_cache)
+    af_new = []
+    new, files, miss = _read_group(row_paths, use_cache, af_out=af_new)
     if new is not None and lock:
         n0 = new['date'].nunique()
         new = new[new['date'] > pd.Timestamp(lock)]
@@ -515,9 +530,36 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
         'from': sec['dates'][0], 'to': sec['dates'][-1], 'days': len(dates), 'rows': int(len(g)),
     }
     log(f'[백업] 집계 {len(g):,}행 · {len(dates)}일 ({src["from"]} ~ {src["to"]})' + (f' · 고정 ~{lock}' if lock else ''))
+    af_sec = build_af(af_new, (base or {}).get('af'), dates[-1])
+    if af_sec:
+        log(f'[백업] AF코드 {af_sec["n"]:,}행 · 최근 {len(af_sec["dates"])}일 ({af_sec["dates"][0]} ~ {af_sec["dates"][-1]})')
     return {'format': FORMAT, 'version': VERSION, 'created': dt.datetime.now().isoformat(timespec='seconds'),
-            'lastDate': src['to'], 'source': src, 'row': sec,
+            'lastDate': src['to'], 'source': src, 'row': sec, 'af': af_sec,
             'targets': (base or {}).get('targets'), 'memos': (base or {}).get('memos') or {}}
+
+
+def build_af(new_frames: list, base_af: dict | None, last_date) -> dict | None:
+    """AF코드 섹션 — 새 파일(같은 날짜는 뒤 파일 우선) + 기존 백업의 나머지 날짜, 전체 마지막 날 기준 최근 AF_DAYS 일만"""
+    parts = []
+    new = latest_wins(new_frames) if new_frames else None
+    new_dates = set(new['date'].unique()) if new is not None else set()
+    if base_af:
+        old, _ = decode(base_af, AF_ALL)
+        parts.append(old[~old['date'].isin(new_dates)])
+    if new is not None and len(new):
+        parts.append(new)
+    if not parts:
+        return None
+    for p in parts:
+        for k in AF_ALL:
+            p[k] = p[k].astype(str)
+    g = pd.concat(parts, ignore_index=True)
+    g = g[g['date'] > pd.Timestamp(last_date) - pd.Timedelta(days=AF_DAYS)]
+    if not len(g):
+        return None
+    g = g.groupby(['date', *AF_ALL], sort=False)[METS].sum().reset_index()
+    g = g[(g[METS].abs() > 1e-12).any(axis=1)]
+    return encode(g, sorted(g['date'].unique()), AF_ALL)
 
 
 def targets_payload(targets: dict) -> dict:
