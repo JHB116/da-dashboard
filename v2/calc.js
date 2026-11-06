@@ -332,9 +332,15 @@
     const replaced = B.dates.filter(d => addDates.has(d) || (addLock && d <= lock)).length;
     return {
       format: add.format, version: add.version, created: add.created, lastDate: source.to, source, ...extras(base, add),
-      row, af: mergeAf(base.af, add.af, source.to),
+      row, af: mergeAf(base.af, add.af, source.to), quality: mergeQuality(base.quality, add.quality, addDates),
       merged: { added: addDates.size - B.dates.filter(d => addDates.has(d)).length, replaced, kept: keepB.filter(Boolean).length, ignored: keepA.filter(x => !x).length },
     };
+  }
+  // 원천 점검(완전히 같은 행) — 새 백업이 다룬 날짜는 새 결과로
+  function mergeQuality(B, A, addDates) {
+    if (!A) return B || null;
+    const dups = [...((B && B.dups) || []).filter(r => !addDates.has(r[0])), ...(A.dups || [])].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+    return { dups, checked: [...new Set([...((B && B.checked) || []), ...(A.checked || [])])].sort() };
   }
   // AF코드 섹션 — 새 쪽 날짜가 이기고, 전체 마지막 날 기준 최근 AF_DAYS 일만 남긴다
   const AF_DAYS = 92;
@@ -416,7 +422,7 @@
     BASE, METRIC_LIST, METRIC, SUMMARY, DETAIL, COST_BUCKETS, EVENTS, WD,
     normCost, bucketValues, div, pct, dnum, iso, dow, monthDays, weekInfo,
     prepare, nameMatcher, rowTest, daily, emptySeries, periods, curIdx, compareIdx, rangeIdx, cmpLabel, cmpName, sumIdx, value,
-    mergeBackup, mergeAf, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
+    mergeBackup, mergeAf, mergeQuality, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
   };
   root.DaCalc = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

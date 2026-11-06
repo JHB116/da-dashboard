@@ -270,17 +270,22 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     """원천 → (일자 × 구분) 합산 DataFrame, 원천에 없던 지표 키[, 최근 AF_DAYS 일의 (일자 × 구분 × AF코드) 합산].
     덩어리마다 바로 합산해 메모리를 아낀다. xlsb · csv · xlsx 는 data/cache/ 에 결과를 캐시"""
     path = Path(path)
-    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v2.pkl'
+    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v3.pkl'
     cacheable = use_cache and path.suffix.lower() in ROW_EXT
     if cacheable and cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
         log(f'[원천] 캐시 사용: {path.name} (이미 읽은 파일)')
         c = pd.read_pickle(cache)
-        return (c['df'], c['missing'], c.get('af')) if with_af else (c['df'], c['missing'])
+        return (c['df'], c['missing'], c.get('af'), c.get('dup')) if with_af else (c['df'], c['missing'])
     log(f'[원천] {path.name} 읽는 중 (큰 파일은 몇 분)…')
-    seen_all, parts, parts_af = set(), [], []
+    seen_all, parts, parts_af, parts_h = set(), [], [], []
     for raw in iter_raw(path):
+        raw = raw.reset_index(drop=True)
         p, seen = prep(raw)
-        del raw
+        # 완전히 같은 행(모든 칸이 같음) 찾기용 — 행 해시와 일자 · 매체 · 상품 · 광고비 · 노출만 남긴다
+        h = pd.util.hash_pandas_object(raw, index=False)
+        parts_h.append(pd.DataFrame({'h': h.loc[p.index].to_numpy(), 'date': p['date'].to_numpy(), 'md': p['md'].to_numpy(),
+                                     'pr': p['pr'].to_numpy(), 'cost': p['cost'].to_numpy(), 'imp': p['imp'].to_numpy()}))
+        del raw, h
         seen_all |= seen
         for k in AF_ALL:
             p[k] = p[k].astype('category')
@@ -292,6 +297,10 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
         df = df.groupby(['date', *DIM_KEYS], sort=False, observed=True)[METS].sum().reset_index()
     af = concat_cat(parts_af)
     del parts_af
+    dup = find_dups(parts_h)
+    del parts_h
+    if len(dup):
+        log(f'  ! {path.name}: 완전히 같은 행 {int(dup["n"].sum()):,}개 (광고비 {dup["cost"].sum() / 1e6:,.1f}백만원) — 대시보드 리뷰 메모의 데이터 점검에 표시')
     if len(af):
         af = af[af['date'] > af['date'].max() - pd.Timedelta(days=AF_DAYS)]
         af = af.groupby(['date', *AF_ALL], sort=False, observed=True)[METS].sum().reset_index()
@@ -304,8 +313,21 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     missing = [k for k in METS if k not in seen_all]
     if cacheable:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        pd.to_pickle({'df': df, 'missing': missing, 'af': af}, cache)
-    return (df, missing, af) if with_af else (df, missing)
+        pd.to_pickle({'df': df, 'missing': missing, 'af': af, 'dup': dup}, cache)
+    return (df, missing, af, dup) if with_af else (df, missing)
+
+
+def find_dups(parts_h: list) -> pd.DataFrame:
+    """행 해시 → 두 번째 이후로 나온 같은 행(실적이 있는 것만)을 일자 × 매체 × 상품별로 (n = 중복 행 수, cost = 중복 광고비)"""
+    cols = ['date', 'md', 'pr', 'n', 'cost']
+    if not parts_h:
+        return pd.DataFrame(columns=cols)
+    a = pd.concat(parts_h, ignore_index=True)
+    d = a[a['h'].duplicated(keep='first') & ((a['cost'].abs() > 0) | (a['imp'] > 0))]
+    if not len(d):
+        return pd.DataFrame(columns=cols)
+    g = d.groupby(['date', 'md', 'pr'], observed=True).agg(n=('h', 'size'), cost=('cost', 'sum')).reset_index()
+    return g[cols]
 
 
 def concat_cat(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -452,13 +474,15 @@ def read_backup(src) -> dict:
 
 
 # ── 빌드 ───────────────────────────────────────────────────────────────
-def _read_group(paths: list, use_cache: bool, until: str | None = None, af_out: list | None = None):
+def _read_group(paths: list, use_cache: bool, until: str | None = None, af_out: list | None = None, dup_out: list | None = None):
     """파일 묶음 → (같은 날짜는 뒤 파일 우선으로 합친 DataFrame, 파일명들, 없는 지표). af_out 을 주면 AF 집계도 모은다"""
     frames, files, missing = [], [], set()
     for p in paths:
-        df, ms, af = load_prepped(p, use_cache=use_cache, with_af=True)
+        df, ms, af, dup = load_prepped(p, use_cache=use_cache, with_af=True)
         if af_out is not None and af is not None and len(af):
             af_out.append(af)
+        if dup_out is not None and dup is not None and len(dup):
+            dup_out.append(dup)
         if until is not None:
             n0 = df['date'].nunique()
             df = df[df['date'] <= pd.Timestamp(until)]
@@ -488,8 +512,8 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
     y24, y24_files, miss24 = _read_group(y24_paths, use_cache, until=LOCK_UNTIL)
     if y24 is not None and len(y24):
         lock = LOCK_UNTIL
-    af_new = []
-    new, files, miss = _read_group(row_paths, use_cache, af_out=af_new)
+    af_new, dup_new = [], []
+    new, files, miss = _read_group(row_paths, use_cache, af_out=af_new, dup_out=dup_new)
     if new is not None and lock:
         n0 = new['date'].nunique()
         new = new[new['date'] > pd.Timestamp(lock)]
@@ -535,7 +559,19 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
         log(f'[백업] AF코드 {af_sec["n"]:,}행 · 최근 {len(af_sec["dates"])}일 ({af_sec["dates"][0]} ~ {af_sec["dates"][-1]})')
     return {'format': FORMAT, 'version': VERSION, 'created': dt.datetime.now().isoformat(timespec='seconds'),
             'lastDate': src['to'], 'source': src, 'row': sec, 'af': af_sec,
+            'quality': quality_payload(dup_new, (base or {}).get('quality'), new),
             'targets': (base or {}).get('targets'), 'memos': (base or {}).get('memos') or {}}
+
+
+def quality_payload(dup_frames: list, base_q: dict | None, new: pd.DataFrame | None) -> dict:
+    """원천 점검 결과 — dups: [일자, 매체, 상품, 중복 행 수, 중복 광고비]. 새 파일이 다룬 날짜는 새 결과로 교체"""
+    new_dates = set(new['date'].dt.strftime('%Y-%m-%d')) if new is not None and len(new) else set()
+    rows = [r for r in ((base_q or {}).get('dups') or []) if r[0] not in new_dates]
+    if dup_frames:
+        d = pd.concat(dup_frames, ignore_index=True)
+        d = d[d['date'].dt.strftime('%Y-%m-%d').isin(new_dates)] if new_dates else d
+        rows += [[r.date.strftime('%Y-%m-%d'), str(r.md), str(r.pr), int(r.n), round(float(r.cost), 1)] for r in d.itertuples()]
+    return {'dups': sorted(rows), 'checked': sorted(set((base_q or {}).get('checked') or []) | new_dates)}
 
 
 def build_af(new_frames: list, base_af: dict | None, last_date) -> dict | None:

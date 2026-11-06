@@ -645,16 +645,175 @@ window.DA_GEMINI_STATUS = () => { if (P && !memoEdit) { clearTimeout(aiTimer); a
 const pctS = p => (p == null ? '–' : C.signed(p));
 const pp = (a, b) => (a == null || b == null ? null : (a - b) * 100);           // %p
 const ppS = d => (d == null ? '–' : `${d >= 0 ? '+' : '△'}${Math.abs(d).toFixed(1)}%p`);
-function mediaMoves(c, curIdx, cmpIdx) {
-  // 매체별 거래액 · 광고비 증감(실적 − 비교), 큰 순
-  const t = C.tree(R, { bucket: bucketArg(), where: S.filt, names: S.names }, ['md'], [curIdx, cmpIdx]);
-  return [...t.nodes.values()].map(n => ({ v: n.v, dr: n.s[0].nrev - n.s[1].nrev, dc: n.s[0].cost - n.s[1].cost, r0: C.div(n.s[0].nrev, n.s[0].cost), r1: C.div(n.s[1].nrev, n.s[1].cost), c0: n.s[0].cost }));
+// ── 리뷰 메모: 데이터 점검 · 순결제 ROAS 판단 · 원인 분해 ─────────────────────
+// DA 로데이터에 들어오면 안 되는 매체(DA 페이먼츠 · DA 외 매체) — 이름에 이 말이 들어가면 점검에 표시 (소문자 비교)
+const SUSPECT_MEDIA = ['페이코', 'payco', '페이먼츠', '토스페이', '링크프라이스', '링크사', '검색광고', '쇼핑검색', '브랜드검색'];
+const mil1 = x => `${x < 0 ? '△' : ''}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
+const sgn1 = x => `${x >= 0 ? '+' : '△'}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
+const ppv = x => `${x >= 0 ? '+' : '△'}${Math.abs(x * 100).toFixed(1)}%p`;
+const roasOf = t => (t && t.cost > 0 ? t.nrev / t.cost : null);
+const dshort = d => d.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/');
+function dateSpan(list) {             // ['2026-11-02', …] → '11/2~11/5' (끊기면 쉼표)
+  const ns = [...new Set(list)].sort().map(C.dnum), out = [];
+  for (let i = 0; i < ns.length; i++) { let j = i; while (j + 1 < ns.length && ns[j + 1] === ns[j] + 1) j++; out.push(i === j ? dshort(C.iso(ns[i])) : `${dshort(C.iso(ns[i]))}~${dshort(C.iso(ns[j]))}`); i = j; }
+  return out.join(', ');
+}
+// 1) 데이터 점검 — 이상해 보일 때만 줄이 생긴다
+function dataCheck(curIdx) {
+  const L = [], filt = { bucket: bucketArg(), where: S.filt, names: S.names };
+  if (!curIdx.length) return L;
+  const d0 = R.dates[curIdx[0]], d1 = R.dates[curIdx[curIdx.length - 1]];
+  // ① 원천에 완전히 같은 행 (백업 만들 때 찾음)
+  const mdOk = S.filt.md ? new Set(S.filt.md) : null;
+  const dups = ((P.quality || {}).dups || []).filter(r => r[0] >= d0 && r[0] <= d1 && (!mdOk || mdOk.has(r[1])));
+  const dupKey = new Set(dups.map(r => r[0] + '|' + r[1]));
+  if (dups.length) {
+    const by = new Map();
+    for (const [d, md, , n, cost] of dups) { const o = by.get(md) || { d: [], n: 0, cost: 0 }; o.d.push(d); o.n += n; o.cost += cost; by.set(md, o); }
+    const list = [...by.entries()].sort((a, b) => b[1].cost - a[1].cost);
+    L.push(`• 원천 중복 의심: ${list.map(([md, o]) => `${md} ${dateSpan(o.d)}(같은 행 ${o.n.toLocaleString()}개 · 광고비 ${mil1(o.cost)})`).join(', ')} — 같은 행이 두 번 이상 들어와 실적이 부풀려졌을 수 있음 → 원천 확인 후 백업 다시 만들기`);
+  }
+  // ② 들어오면 안 되는 매체 · 처음 보는 구분 값
+  const hist0 = C.dnum(d0) - 90, histIdx = C.rangeIdx(R, C.iso(hist0), C.iso(C.dnum(d0) - 1));
+  const enoughHist = R.dn[0] <= hist0;
+  for (const [k, n] of [['at', '광고유형'], ['ch', '채널'], ['md', '매체']]) {
+    if (!R.dims[k]) continue;
+    const t = C.tree(R, filt, [k], [curIdx, histIdx]);
+    const odd = [];
+    for (const nd of t.nodes.values()) {
+      const a = nd.s[0]; if (!(a.cost || a.imp || a.nrev)) continue;
+      const name = String(nd.v || ''), low = name.toLowerCase();
+      const sus = SUSPECT_MEDIA.some(w => low.includes(w));
+      const isNew = enoughHist && !nd.s[1].days;
+      if (sus || isNew) odd.push(`${name || '(빈 값)'}(${sus ? 'DA 외 의심' : '최근 90일에 없던 값'} · 광고비 ${mil1(a.cost)} · 거래액 ${mil1(a.nrev)} · ${a.days}일)`);
+    }
+    if (odd.length) L.push(`• ${n} 확인 필요: ${odd.slice(0, 5).join(', ')}${odd.length > 5 ? ` 외 ${odd.length - 5}개` : ''} — DA 로데이터에 들어오면 안 되는 매체라면 원천에서 빼고 백업 다시 만들기`);
+  }
+  // ③ 매체 하루 광고비가 직전 14일 중앙값의 2.5배 이상 (중복 · 이중 집계 의심) — 원천 중복으로 이미 잡힌 날은 뺀다
+  const g = C.daily(R, filt, i => R.f.md[i]), spikes = [];
+  for (const [mi, sr] of g) {
+    const md = R.dims.md[mi], days = [];
+    for (const i of curIdx) {
+      const n = R.dn[i], prev = [];
+      for (let k = 1; k <= 21 && prev.length < 14; k++) { const j = R.byNum.get(n - k); if (j != null && sr.has[j] && sr.cost[j] > 0) prev.push(sr.cost[j]); }
+      if (prev.length < 7) continue;
+      prev.sort((a, b) => a - b);
+      const med = prev[prev.length >> 1], v = sr.cost[i];
+      if (v >= 1e6 && v > med * 2.5 && !dupKey.has(R.dates[i] + '|' + md)) days.push([R.dates[i], v / med]);
+    }
+    if (days.length) spikes.push(`${md} ${dateSpan(days.map(d => d[0]))}(평소의 ${C.fmtNum(Math.max(...days.map(d => d[1])), 1)}배)`);
+  }
+  if (spikes.length) L.push(`• 하루 광고비 급증: ${spikes.slice(0, 4).join(', ')} — 원천 중복 · 이중 집계가 아닌지 확인(행사 집중 집행이면 정상)`);
+  return L;
+}
+// ROAS(순결제) = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제) — 각 요인이 ROAS 를 몇 % 움직였는지
+const FACTORS = [['cpc', 'CPC', true], ['uvc', 'UV/클릭', false], ['crt', 'CR(총결제)', false], ['npr', '순결제비중', false], ['aovn', '객단가(순결제)', false]];
+function factorText(a, b) {
+  const M = C.METRIC, out = [];
+  let worst = null, best = null;
+  for (const [k, n, inv] of FACTORS) {
+    const x = C.value(M[k], a, 'sum'), y = C.value(M[k], b, 'sum');
+    if (x == null || y == null || !(x > 0) || !(y > 0)) continue;
+    const eff = (inv ? y / x : x / y) - 1, ch = x / y - 1;
+    out.push(`${n} ${C.fmt(M[k], x)}${M[k].kind === 'won' ? '원' : ''}(${ch >= 0 ? '+' : '△'}${Math.abs(ch * 100).toFixed(1)}%${Math.abs(eff) >= 0.03 ? eff > 0 ? ' 효율↑' : ' 효율↓' : ''})`);
+    if (!worst || eff < worst[1]) worst = [n, eff];
+    if (!best || eff > best[1]) best = [n, eff];
+  }
+  const ctr = [C.value(M.ctr, a, 'sum'), C.value(M.ctr, b, 'sum')];
+  if (ctr[0] != null && ctr[1]) out.push(`(참고 CTR ${C.fmt(M.ctr, ctr[0])}, ${C.signed(C.pct(ctr[0], ctr[1]))})`);
+  return { text: out.join(' · '), worst, best };
+}
+// 구간별 ROAS 기여(%p) — 합하면 전체 ROAS 변화와 같다: (거래액ᵢ − 비교ROAS × 광고비ᵢ) ÷ 전체 광고비 의 차이
+function segMoves(dims, cur, cmp, where = null) {
+  const filt = { bucket: bucketArg(), where: { ...S.filt, ...(where || {}) }, names: S.names };
+  const t = C.tree(R, filt, dims, [cur, cmp]), A = t.total[0], B = t.total[1], Rb = roasOf(B) || 0, L = dims.length - 1;
+  const list = [];
+  for (const n of t.nodes.values()) {
+    if (n.level !== L) continue;
+    const a = n.s[0], b = n.s[1];
+    const contrib = (A.cost ? (a.nrev - Rb * a.cost) / A.cost : 0) - (B.cost ? (b.nrev - Rb * b.cost) / B.cost : 0);
+    const name = dims.map((d, i) => R.dims[d][+n.key.split('|')[i]]);
+    list.push({ n, a, b, name, contrib, dr: a.nrev - b.nrev, dc: a.cost - b.cost, isNew: !b.cost && !b.nrev });
+  }
+  return { list, A, B, t };
+}
+const mdpr = ([md, pr]) => (!pr || String(md).replace(/\s/g, '').includes(String(pr).replace(/\s/g, '')) ? md : `${md} ${pr}`);
+function moveText(x, label) { return `${label}(ROAS 기여 ${ppv(x.contrib)} · 거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(C.METRIC.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`; }
+function topMoves(ms, label, k = 2, minC = 0.002) {
+  const up = ms.list.filter(x => x.contrib > minC).sort((a, b) => b.contrib - a.contrib).slice(0, k);
+  const dn = ms.list.filter(x => x.contrib < -minC).sort((a, b) => a.contrib - b.contrib).slice(0, k);
+  return { up, dn, text: [up.length ? `플러스 ${up.map(x => moveText(x, label(x.name))).join(', ')}` : '', dn.length ? `마이너스 ${dn.map(x => moveText(x, label(x.name))).join(', ')}` : ''].filter(Boolean).join(' / ') };
+}
+// 믹스 효과 — 첫구매거래액 변화 = 규모(광고비) + 믹스(광고비 비중 이동) + 효율(구간별 첫구매거래액/광고비)
+function mixEffect(dim, cur, cmp) {
+  const filt = { bucket: bucketArg(), where: S.filt, names: S.names };
+  const t = C.tree(R, filt, [dim], [cur, cmp]);
+  const seg = [...t.nodes.values()].filter(n => n.s[0].cost > 0 || n.s[1].cost > 0);
+  const C1 = seg.reduce((s, n) => s + Math.max(n.s[0].cost, 0), 0), C0 = seg.reduce((s, n) => s + Math.max(n.s[1].cost, 0), 0);
+  const F1 = seg.reduce((s, n) => s + n.s[0].fpr, 0), F0 = seg.reduce((s, n) => s + n.s[1].fpr, 0);
+  if (!(C1 > 0 && C0 > 0 && F0 > 0)) return null;
+  const E0 = F0 / C0;
+  let mix = 0, rate = 0, top = null;
+  for (const n of seg) {
+    const s1 = Math.max(n.s[0].cost, 0) / C1, s0 = Math.max(n.s[1].cost, 0) / C0;
+    const e0 = n.s[1].cost > 0 ? n.s[1].fpr / n.s[1].cost : E0, e1 = n.s[0].cost > 0 ? n.s[0].fpr / n.s[0].cost : e0;
+    const m = C1 * (s1 - s0) * (e0 - E0);
+    mix += m; rate += C1 * s1 * (e1 - e0);
+    if (!top || Math.abs(m) > Math.abs(top.m)) top = { m, v: n.v, ds: s1 - s0, rel: e0 / E0 };
+  }
+  const vol = (C1 - C0) * E0, d = F1 - F0;
+  return { dim, vol, mix, rate, d, F0, F1, top };
+}
+function reviewDeep(curIdx, cmpIdx, cmpName) {
+  const L = [], M = C.METRIC;
+  if (!curIdx.length || !cmpIdx.length) return L;
+  const all = segMoves(['md', 'pr'], curIdx, cmpIdx), A = all.A, B = all.B;
+  const r0 = roasOf(A), r1 = roasOf(B);
+  if (r0 == null || r1 == null) return L;
+  const dR = r0 - r1, rel = r0 / r1 - 1;
+  const verdict = Math.abs(rel) < 0.02 ? '보합' : rel > 0 ? '좋음' : '나쁨';
+  L.push(`[판단 · 순결제 ROAS 기준 — ${verdict}] ROAS(순결제) ${C.fmt(M.roas, r0)} vs ${cmpName} ${C.fmt(M.roas, r1)} (${ppv(dR)}, ${C.signed(rel * 100)})`);
+  // 1) 지표별
+  const f = factorText(A, B);
+  if (f.text) L.push(`• 1) 지표별: ${f.text}${verdict !== '보합' ? ` → ${verdict === '나쁨' ? `가장 크게 끌어내린 요인 ${f.worst ? f.worst[0] : '–'}` : `가장 크게 끌어올린 요인 ${f.best ? f.best[0] : '–'}`}` : ''}`);
+  // 2) 매체 × 상품
+  const mp = topMoves(all, mdpr);
+  if (mp.text) L.push(`• 2) 매체 × 상품별: ${mp.text}`);
+  const issue = (verdict === '좋음' ? mp.up : mp.dn)[0] || mp.dn[0] || mp.up[0];
+  if (issue) {
+    const fx = factorText(issue.a, issue.b), [md, pr] = issue.name;
+    // 캠페인은 매년 바뀌어 ROAS 기여 대신 거래액 증감 순으로
+    const sub = segMoves(['camp'], curIdx, cmpIdx, { md: [md], pr: [pr] }).list;
+    const one = x => `${x.name[0]}(거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(M.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`;
+    const cu = sub.filter(x => x.dr > 0).sort((a, b) => b.dr - a.dr).slice(0, 2), cd = sub.filter(x => x.dr < 0).sort((a, b) => a.dr - b.dr).slice(0, 2);
+    const ct = [cu.length ? `증가 ${cu.map(one).join(', ')}` : '', cd.length ? `감소 ${cd.map(one).join(', ')}` : ''].filter(Boolean).join(' / ');
+    L.push(`  └ ${mdpr(issue.name)} 상세: ${fx.text || '비교 지표 없음'}${ct ? ` · 캠페인 ${ct}` : ''}`);
+  }
+  // 3) BPU · 4) 기획전
+  if (R.dims.bpu && R.dims.bpu.length > 1) { const b = topMoves(segMoves(['bpu'], curIdx, cmpIdx), n => n[0]); if (b.text) L.push(`• 3) BPU별: ${b.text}`); }
+  if (R.dims.bp && R.dims.bp.length > 1) { const b = topMoves(segMoves(['bp'], curIdx, cmpIdx), n => n[0] || '(기획전 없음)'); if (b.text) L.push(`• 4) 기획전별: ${b.text}`); }
+  // 5) 믹스 효과 — 첫구매거래액. 특정 구간이 아니라 비중 이동 때문에 바뀐 몫이 클 때만
+  const fpNa = naYear(M.fpr, +R.dates[cmpIdx[0]].slice(0, 4));
+  if (!fpNa) {
+    const names = { md: '매체', bpu: 'BPU', bp: '기획전' };
+    for (const dim of ['md', 'bpu', 'bp']) {
+      if (!R.dims[dim] || R.dims[dim].length < 2) continue;
+      const e = mixEffect(dim, curIdx, cmpIdx);
+      if (!e || !e.top) continue;
+      if (Math.abs(e.mix) < Math.max(0.3 * Math.abs(e.d), 0.02 * e.F0)) continue;
+      const tp = e.top;
+      L.push(`• 5) 믹스 효과(${names[dim]}): 첫구매거래액 ${sgn1(e.d)} 중 ${names[dim]} 비중 이동 몫 ${sgn1(e.mix)} (규모 ${sgn1(e.vol)} · 효율 ${sgn1(e.rate)}) — 첫구매 효율이 평균의 ${C.fmtNum(tp.rel, 1)}배인 ${tp.v || '(빈 값)'}의 광고비 비중 ${ppv(tp.ds)}`);
+    }
+  }
+  return L;
 }
 function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
   const M = C.METRIC, at = c.at, L = [];
   const v = k => vy(M[k], sAt, at.y), w = k => vy(M[k], sCmp, at.y - 1);
   const mil = x => (x == null ? '–' : `${C.fmtNum(x / 1e6, 1)}백만원`);
   L.push(`■ ${at.label}${at.partial ? ' (진행 중)' : ''} · ${bucketName()} · 집행 ${sAt.days}일 · 비교: ${cmpName}`);
+  const chk = dataCheck(curIdx);
+  if (chk.length) L.push('[데이터 점검 — 이상 있어 보임]', ...chk, '');
   if (!sCmp.days) L.push(`• 비교 기간 데이터가 없어 증감은 표시하지 않습니다.`);
   L.push(`• 광고비 ${mil(sAt.cost)} (${cmpName} 대비 ${pctS(C.pct(sAt.cost, sCmp.cost))}) · 거래액(순결제) ${mil(sAt.nrev)} (${pctS(C.pct(sAt.nrev, sCmp.nrev))})`);
   const r0 = v('roas'), r1 = w('roas');
@@ -668,16 +827,9 @@ function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
     const ach = (a, b) => (a != null && b ? `${C.fmtNum(a / b * 100, 1)}%` : '–');
     L.push(`• 목표 대비: 광고비 집행 ${ach(sAt.cost, tgt.spend)} · 거래액 달성 ${ach(sAt.nrev, tgt.rev)} · ROAS ${C.fmt(M.roas, r0)} (목표 ${C.fmt(M.roas, tgt.roas)}, ${ppS(pp(r0, tgt.roas))})`);
   }
-  if (sCmp.days && curIdx.length) {
-    const mv = mediaMoves(c, curIdx, cmpIdx).filter(x => Math.abs(x.dr) > 1e5 || Math.abs(x.dc) > 1e5);
-    const up = mv.filter(x => x.dr > 0).sort((a, b) => b.dr - a.dr).slice(0, 2), dn = mv.filter(x => x.dr < 0).sort((a, b) => a.dr - b.dr).slice(0, 2);
-    const one = x => `${x.v}(${x.dr >= 0 ? '+' : '△'}${C.fmtNum(Math.abs(x.dr) / 1e6, 1)}백만, ROAS ${C.fmt(M.roas, x.r0)})`;
-    if (up.length || dn.length) L.push(`• 매체별 거래액 증감(${cmpName} 대비): ${up.length ? '증가 ' + up.map(one).join(', ') : ''}${up.length && dn.length ? ' / ' : ''}${dn.length ? '감소 ' + dn.map(one).join(', ') : ''}`);
-    const bigCost = mv.filter(x => x.dc > 0).sort((a, b) => b.dc - a.dc)[0];
-    if (bigCost && bigCost.r0 != null && r0 != null && bigCost.r0 < r0) L.push(`• 광고비가 가장 많이 늘어난 ${bigCost.v}(+${C.fmtNum(bigCost.dc / 1e6, 1)}백만)의 ROAS가 전체보다 낮음 → 효율 하락 요인으로 보임(가설)`);
-  }
   const acq = ['join', 'jcpa', 'fp', 'fcpa'].map(k => [M[k], v(k), w(k)]).filter(([, a]) => a != null);
   if (acq.length) L.push(`• 가입 · 첫구매: ${acq.map(([m, a, b]) => `${m.n} ${C.fmt(m, a, S.mode)}${C.unit(m, S.mode).startsWith('%') ? '' : C.unit(m, S.mode)} (${pctS(C.pct(a, b))})`).join(' · ')}`);
+  if (sCmp.days && curIdx.length) { const deep = reviewDeep(curIdx, cmpIdx, cmpName); if (deep.length) L.push('', ...deep); }
   return L.join('\n');
 }
 function draftTrend(c, ys) {

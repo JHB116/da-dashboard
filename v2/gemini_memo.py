@@ -23,9 +23,11 @@ PROMPT = """너는 LF몰 DA(디스플레이 광고) 성과를 매일 리뷰하�
 아래 [근거]는 대시보드가 공식 산식으로 계산한 숫자다. 이것만 써서 '요약 시트 리뷰 메모' 1차 초안을 한국어로 써라.
 
 규칙
-- 근거에 없는 숫자를 만들거나 계산하지 마라. 숫자는 근거에 적힌 표기(백만원 · % · %p · △)를 그대로 옮겨라.
-- 5~8개의 글머리표('• ')로, 한 줄에 한 가지만. 첫 줄은 '■ 기간 · 비용출처' 제목.
-- 순서: 핵심 실적(광고비 · 거래액 · ROAS, 전년 · 전전년 비교) → 목표 대비(있을 때) → 효율 변화의 이유 → 매체별 증감 → 가입 · 첫구매(있을 때) → 추이에서 눈에 띄는 점.
+- 근거에 없는 숫자를 만들거나 계산하지 마라. 숫자는 근거에 적힌 표기(백만 · % · %p · △)를 그대로 옮겨라.
+- 근거에 [데이터 점검]이 있을 때만 맨 앞에 '⚠ 데이터 점검:'으로 시작하는 줄을 써라(무엇이 · 언제 · 얼마, 할 일). 없으면 데이터 이야기는 쓰지 마라.
+- 그다음 '■ 기간 · 비용출처' 제목, 이어서 순결제 ROAS 기준 판단(좋음 / 나쁨 / 보합)과 그 숫자.
+- 이어서 글머리표('• ')로 이 순서대로, 항목마다 1~2줄: 1) 지표별(CPC · UV/클릭 · CR · 순결제비중 · 객단가 중 어디가 ROAS 를 움직였는지) → 2) 매체 × 상품별(어디서 플러스 · 마이너스, 이슈 유형 상세) → 3) BPU별 → 4) 기획전별 → 5) 믹스 효과(근거에 있을 때만). 근거에 없는 항목은 건너뛰어라.
+- 그 뒤 목표 대비 · 가입 · 첫구매 · 추이에서 눈에 띄는 점을 짧게(있을 때만).
 - 원인은 단정하지 말고 '~로 보임', '(가설)'처럼 써라. 앱 이용자 누적 같은 근거 없는 원인은 쓰지 마라.
 - 마지막 줄에 확인해 볼 것 1가지를 '→ 확인: '으로 시작해 써라.
 - 머리말 · 맺음말 · 마크다운 굵게(**)는 쓰지 마라.
@@ -105,7 +107,7 @@ def _generate(facts: str, api_key: str, model: str, transport: Transport | None)
     url = f'{BASE}/models/{model}:generateContent'
     headers = {'Content-Type': 'application/json', 'x-goog-api-key': api_key}
     payload = {'contents': [{'role': 'user', 'parts': [{'text': PROMPT + facts}]}],
-               'generationConfig': {'temperature': 0.3, 'maxOutputTokens': 1200}}
+               'generationConfig': {'temperature': 0.3, 'maxOutputTokens': 2000}}
     data = (transport or _transport)('POST', url, headers, payload, 30)
     try:
         parts = data['candidates'][0]['content']['parts']
