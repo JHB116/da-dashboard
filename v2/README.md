@@ -22,6 +22,7 @@
 5. 열린 `backup` 폴더의 최신 `.json.gz` 를 대시보드 화면에 끌어다 놓는다(또는 **백업 파일 열기**) → 이 브라우저에 날짜 단위로 합쳐진다(같은 날짜는 교체, 24년 고정 구간은 24년 파일로만 바뀜, 목표 · 메모는 유지).
 
 - `★make_*.bat` 3개는 v2 폴더 밖으로 옮겨도 된다 — 옆에 있는 폴더(예: 내려받아 푼 `da-dashboard-main`) 안의 `v2` 를 찾아 실행한다. 이때 백업은 그 `v2\backup` 에 생긴다. 옆에 압축을 푼 폴더가 여러 개면 하나만 남길 것.
+- **업데이트**: `★update_dashboard.bat` 도 같은 곳(`da-dashboard-main` 옆)에 두고 더블클릭 → GitHub 에서 최신 main ZIP 을 받아 `da-dashboard-main` 을 바꾼다(`v2\backup` · `raw` · `data` · Secrets 파일은 유지, 새 `★make_*.bat` 은 옆으로 복사). 실제 작업은 `v2\update_dashboard.ps1`.
 - 대시보드 위쪽에 `24년 저장됨(~24.12.31)`이 보이면 24년은 다시 넣지 않아도 된다.
 - 직접 실행: `python build_data.py --y24 24년.csv --row 2526.xlsb --targets 목표.xlsx`
 - PC 에서 대시보드를 띄워 보려면 `run_dashboard.bat`(`http://localhost:8502`).
