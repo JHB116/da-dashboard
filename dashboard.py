@@ -1934,25 +1934,282 @@ def _memo_save(key: str, text: str):
         pass  # 저장 불가 환경이면 세션 내에서만 유지
 
 
-def render_memo(key: str, title: str = "📝 분석 메모"):
+# ── Gemini 1차 초안 (v2/gemini_memo.py 를 같이 쓴다. 키는 Streamlit Secrets 의 GEMINI_API_KEY 에만)
+#    화면이 계산한 요약 숫자(근거)만 보낸다 — 원본 로데이터는 보내지 않는다.
+def _load_gemini_module():
+    import importlib.util as _ilu
+    path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "v2", "gemini_memo.py")
+    try:
+        spec = _ilu.spec_from_file_location("gemini_memo", path)
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+_GM = _load_gemini_module()
+
+_GEMINI_PROMPT = """너는 LF몰 DA(디스플레이 광고) 성과를 매일 리뷰하는 퍼포먼스 마케터다.
+아래 [근거]는 대시보드가 공식 산식으로 계산한 숫자다. 이것만 써서 '{sheet}' 분석 메모 1차 초안을 한국어로 써라.
+
+규칙
+- 근거에 없는 숫자를 만들거나 계산하지 마라. 숫자는 근거에 적힌 표기(백만원 · % · %p · △)를 그대로 옮겨라.
+- 5~8개의 글머리표('• ')로, 한 줄에 한 가지만. 첫 줄은 '□ 기간 · 비용출처' 제목.
+- 순서: {order}
+- 원인은 단정하지 말고 '~로 보임', '(가설)'처럼 써라. 앱 이용자 누적 같은 근거 없는 원인은 쓰지 마라.
+- 마지막 줄에 확인해 볼 것 1가지를 '→ 확인: '으로 시작해 써라.
+- 머리말 · 맺음말 · 마크다운 굵게(**)는 쓰지 마라.
+
+[근거]
+"""
+_GEMINI_ORDER = {
+    "summary": "핵심 실적(광고비 · 거래액 · ROAS, 전년 · 전전년 비교) → 효율 변화의 이유(CR · 객단가 · CPC 등) "
+               "→ 비용출처별 증감 → 가입 · 첫구매(있을 때) → 기간별 추이에서 눈에 띄는 점.",
+    "cg": "핵심 실적(광고비 · 거래액 · ROAS, 비교 기간 대비) → 효율 변화의 이유(CR · 객단가 · CPC 등) "
+          "→ 매체 · 비용출처별 증감 → 가입 · 첫구매(있을 때) → 일별 추이에서 눈에 띄는 날.",
+}
+
+
+def _gemini_config():
+    if _GM is None:
+        return None, None
+    try:
+        return _GM.load_config(st.secrets)
+    except Exception:
+        return None, None
+
+
+# 근거(facts)에 넣는 지표: (표기, 컬럼, 종류) — 표기 · 단위는 요약표와 같게(백만원 · ROAS %)
+_FACT_METRICS = [
+    ("광고비", "지표_광고비", "mil"),
+    ("거래액(순결제)", "지표_순결제거래액", "mil"), ("ROAS(순결제)", "순결제ROAS", "roas"),
+    ("거래액(총결제)", "지표_총결제거래액", "mil"), ("ROAS(총결제)", "총결제ROAS", "roas"),
+    ("UV", "지표_UV(전체)", "num"), ("CR(총결제)", "CR(총)", "pct"), ("객단가(총결제)", "객단가(총)", "won"),
+    ("CTR", "CTR", "pct"), ("CPC", "CPC", "won"),
+    ("가입수", "지표_가입회원", "num"), ("가입CPA", "가입CPA", "won"),
+    ("첫구매수", "지표_순결제고객수(첫구매)", "num"), ("첫구매CPA", "첫구매CPA", "won"),
+    ("신규거래액", "지표_당년신규순결제거래액", "mil"),
+]
+_FACT_SHORT = [("광고비", "지표_광고비", "mil"), ("거래액(순)", "지표_순결제거래액", "mil"),
+               ("ROAS(순)", "순결제ROAS", "roas")]
+
+
+def _fv(v, kind):
+    """근거용 값 표기"""
+    if v is None or pd.isna(v):
+        return "–"
+    if kind == "mil":
+        return f"{v / 1e6:,.1f}백만원"
+    if kind == "roas":
+        return f"{v * 100:,.0f}%"
+    if kind == "pct":
+        return f"{v * 100:.2f}%"
+    if kind == "won":
+        return f"{v:,.0f}원"
+    return f"{v:,.0f}"
+
+
+def _fchg(c, p, kind):
+    """근거용 증감: 비율 지표는 %p, 나머지는 증감률(+ / △). 비교 불가면 None"""
+    if c is None or p is None or pd.isna(c) or pd.isna(p):
+        return None
+    if kind in ("roas", "pct"):
+        d = (c - p) * 100
+        dec = 0 if kind == "roas" else 2
+        return f"+{d:.{dec}f}%p" if d >= 0 else f"△{abs(d):.{dec}f}%p"
+    if not p:
+        return None
+    return signed_pct(c / p - 1)
+
+
+def _fact_line(s, comps, spec=_FACT_METRICS, sep=" · "):
+    """한 묶음(합계 · 그룹 · 기간)의 지표들을 한 줄씩 — comps=[(이름, 비교 Series|None)]"""
+    out = []
+    for label, col, kind in spec:
+        v = s.get(col) if s is not None else None
+        if v is None or pd.isna(v) or (kind in ("mil", "num") and v == 0):
+            continue
+        parts = [f"{label} {_fv(v, kind)}"]
+        for name, ps in comps:
+            pv = ps.get(col) if ps is not None else None
+            ch = _fchg(v, pv, kind)
+            if ch:
+                parts.append(f"{name} {_fv(pv, kind)}({ch})")
+        out.append(sep.join(parts))
+    return out
+
+
+def _fact_group_lines(cur, prev, col, prev_name, top=8):
+    """그룹(비용출처 · 매체)별 광고비 상위 N개 — 광고비 · 거래액(순) · ROAS(순)와 비교 대비 증감"""
+    if col not in cur.columns or cur[col].nunique() < 2:
+        return []
+    a = agg(cur, [col]).sort_values("지표_광고비", ascending=False)
+    a = a[a["지표_광고비"] > 0].head(top)
+    pm = {}
+    if prev is not None and not prev.empty and col in prev.columns:
+        pm = {r[col]: r for _, r in agg(prev, [col]).iterrows()}
+    lines = []
+    for _, r in a.iterrows():
+        segs = []
+        for label, c, kind in _FACT_SHORT:
+            ch = _fchg(r.get(c), pm[r[col]].get(c) if r[col] in pm else None, kind)
+            segs.append(f"{label} {_fv(r.get(c), kind)}" + (f"({prev_name}비 {ch})" if ch else ""))
+        lines.append(f"• {r[col]}: " + ", ".join(segs))
+    return lines
+
+
+def _fact_filter_text(raw, prefix):
+    """page_filters 로 고른 조건을 한 줄로 (전체 선택 · 미선택은 생략)"""
+    parts = []
+    for label, col in _PAGE_FILTER_SPECS:
+        v = st.session_state.get(f"{prefix}_{col}")
+        if not v or col not in raw.columns:
+            continue
+        if isinstance(v, str):
+            if v.strip():
+                parts.append(f"{label} 검색 '{v.strip()}'")
+            continue
+        if set(map(str, v)) != set(map(str, raw[col].dropna().unique())):
+            vs = list(map(str, v))
+            parts.append(f"{label} " + ", ".join(vs[:6]) + (f" 외 {len(vs) - 6}개" if len(vs) > 6 else ""))
+    return " / ".join(parts)
+
+
+def _shift_dates(prev, dates, days):
+    """prev 중 (dates - days) 날짜 행을 days 만큼 앞으로 옮겨 현재 날짜에 맞춘다(동요일 비교) — 기간 컬럼 재계산"""
+    if prev is None or prev.empty:
+        return prev
+    d = prev[prev["기간_일자"].isin(dates - pd.Timedelta(days=days))].copy()
+    d["기간_일자"] = d["기간_일자"] + pd.Timedelta(days=days)
+    t = d["기간_일자"]
+    d["연도"], d["월"] = t.dt.year, t.dt.month
+    d["분기"] = (d["월"] - 1) // 3 + 1
+    d["주차번호"] = t.dt.isocalendar().week.astype(int)
+    return d
+
+
+def memo_facts_summary(df, prev_df, gran, src, start, end, filter_text=""):
+    """전체 요약 메모 근거: 기간 합계(전년 · 전전년 동요일) · 비용출처별 · 기간 단위별 추이"""
+    cur = _filter_cost(df, src)
+    if cur.empty:
+        return ""
+    prevs = _filter_cost(prev_df, src) if prev_df is not None else None
+    dates = pd.Series(cur["기간_일자"].drop_duplicates().values)
+    comps = [("전년", DAYS_Y1)] + ([("전전년", DAYS_Y2)] if Y2_ON else [])
+    shifted = {name: _shift_dates(prevs, dates, d) for name, d in comps}
+    head = (f"[기간] {pd.Timestamp(start):%Y-%m-%d} ~ {pd.Timestamp(end):%Y-%m-%d} ({len(dates)}일) · "
+            f"비용출처 {src} · 기간 단위 {gran} · 비교는 동요일 기준(전년 -364일"
+            + (", 전전년 -728일" if Y2_ON else "") + ")")
+    lines = [head] + ([f"[필터] {filter_text}"] if filter_text else [])
+    lines.append("[기간 합계]")
+    lines += ["• " + x for x in _fact_line(
+        _cg_total(cur), [(n, _cg_total(s) if s is not None else None) for n, s in shifted.items()])]
+    grp = _fact_group_lines(cur, shifted.get("전년"), "구분_비용출처", "전년")
+    if grp:
+        lines.append("[비용출처별 · 광고비 상위, 괄호는 전년 대비]")
+        lines += grp
+    cols = PERIOD_COLS[gran]
+    a = agg(cur, cols).sort_values(cols)
+    cap = {"분기": 8, "월": 12, "주": 12, "일": 31}[gran]
+    if len(a) > 1:
+        p1 = shifted.get("전년")
+        pm = {}
+        if p1 is not None and not p1.empty:
+            pm = {tuple(r[c] for c in cols): r for _, r in agg(p1, cols).iterrows()}
+        lines.append(f"[{gran}별 추이 · 최근 {min(cap, len(a))}개, 괄호는 전년 대비]")
+        for _, r in a.tail(cap).iterrows():
+            pr = pm.get(tuple(r[c] for c in cols))
+            segs = []
+            for label, c, kind in _FACT_SHORT:
+                ch = _fchg(r.get(c), pr.get(c) if pr is not None else None, kind)
+                segs.append(f"{label} {_fv(r.get(c), kind)}" + (f"({ch})" if ch else ""))
+            lines.append(f"• {_period_label(gran, r)}: " + ", ".join(segs))
+    return "\n".join(lines)
+
+
+def memo_facts_cg(in_cur, in_cmp, cur_rng, cmp_rng, src, day_rows, filter_text=""):
+    """커스텀 그래프 메모 근거: 실적 vs 비교 기간 합계 · 매체/비용출처별 · 일별(짝지은 날짜)"""
+    lines = [f"[기간] 실적 {_cg_period_text(cur_rng)} vs 비교 {_cg_period_text(cmp_rng)} · 비용출처 {src}"]
+    if filter_text:
+        lines.append(f"[필터] {filter_text}")
+    lines.append("[기간 합계, 괄호는 비교 기간 대비]")
+    lines += ["• " + x for x in _fact_line(_cg_total(in_cur) if not in_cur.empty else None,
+                                          [("비교", _cg_total(in_cmp) if not in_cmp.empty else None)])]
+    for col, name in (("구분_매체명", "매체"), ("구분_비용출처", "비용출처")):
+        grp = _fact_group_lines(in_cur, in_cmp, col, "비교")
+        if grp:
+            lines.append(f"[{name}별 · 광고비 상위, 괄호는 비교 기간 대비]")
+            lines += grp
+    if len(day_rows) > 1:
+        lines.append(f"[일별 · 실적일 vs 비교일{' · 최근 31일' if len(day_rows) > 31 else ''}]")
+        for lab, cs, ps in day_rows[-31:]:
+            segs = []
+            for label, c, kind in _FACT_SHORT:
+                v = cs.get(c) if cs is not None else None
+                ch = _fchg(v, ps.get(c) if ps is not None else None, kind)
+                segs.append(f"{label} {_fv(v, kind)}" + (f"({ch})" if ch else ""))
+            lines.append(f"• {lab}: " + ", ".join(segs))
+    return "\n".join(lines)
+
+
+def render_memo(key: str, title: str = "📝 분석 메모", facts_fn=None, sheet: str = "", order_key: str = "summary"):
     """접었다 펼 수 있는 분석 메모. 보기 모드에선 텍스트만 노출(보고용),
-    '편집'을 켜면 입력창이 열리고 저장 시 파일+세션에 보관한다."""
+    '편집'을 켜면 입력창이 열리고 저장 시 파일+세션에 보관한다.
+    facts_fn(근거 문자열을 만드는 함수)을 주면 'Gemini 초안' 버튼이 생긴다 — 누르면 Gemini 가 쓴 초안이
+    편집창에 들어가고, 확인 · 수정 후 '저장'해야 남는다."""
     sk = f"memo_text_{key}"
+    ak = f"memo_area_{key}"
+    ek = f"memo_edit_{key}"
     if sk not in st.session_state:
         st.session_state[sk] = _memo_load().get(key, _MEMO_DEFAULTS.get(key, ""))
+    # 직전 실행에서 받은 Gemini 초안 → 위젯을 만들기 전에 편집창에 넣는다
+    ai_text = st.session_state.pop(f"memo_ai_{key}", None)
+    if ai_text is not None:
+        st.session_state[ek] = True
+        st.session_state[ak] = ai_text
     text = st.session_state[sk]
-    with st.expander(title, expanded=bool(text.strip())):
+    api_key, model = _gemini_config() if facts_fn is not None else (None, None)
+    with st.expander(title, expanded=bool(text.strip()) or ai_text is not None):
         # 세션 재대입(_persist_widget_state)과 충돌하지 않도록 value 인자 없이 키로만 초기값 지정
-        ak = f"memo_area_{key}"
-        editing = st.toggle("✏️ 편집", key=f"memo_edit_{key}")
+        if facts_fn is not None:
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                editing = st.toggle("✏️ 편집", key=ek)
+            with c2:
+                ask = st.button("🤖 Gemini 초안", key=f"memo_gem_{key}", disabled=not api_key,
+                                help=("화면이 계산한 요약 숫자(기간 합계 · 전년비 · 비용출처/매체별 · 추이)만 Gemini 에 보내 "
+                                      "1차 초안을 받습니다. 원본 로데이터는 보내지 않습니다. 받은 초안은 편집창에 들어가며 "
+                                      "'저장'을 눌러야 남습니다." if api_key else
+                                      "Streamlit Cloud → Settings → Secrets 에 GEMINI_API_KEY 를 넣으면 쓸 수 있습니다."))
+            if ask and api_key:
+                facts = facts_fn() or ""
+                if not facts.strip():
+                    st.warning("Gemini 에 보낼 숫자가 없습니다(선택한 기간 · 비용출처에 데이터 없음).")
+                else:
+                    with st.spinner("Gemini 가 초안을 쓰는 중…"):
+                        try:
+                            out, used = _GM.write_memo(
+                                facts, api_key, model=st.session_state.get("gemini_model", model),
+                                prompt=_GEMINI_PROMPT.format(sheet=sheet or title.lstrip("📝 ").strip(),
+                                                             order=_GEMINI_ORDER.get(order_key, _GEMINI_ORDER["summary"])))
+                            st.session_state["gemini_model"] = used
+                            st.session_state[f"memo_ai_{key}"] = out
+                            st.rerun()
+                        except _GM.GeminiError as e:
+                            st.warning(f"Gemini 초안을 받지 못했습니다: {e}")
+        else:
+            editing = st.toggle("✏️ 편집", key=ek)
         if editing:
             if ak not in st.session_state:
                 st.session_state[ak] = text
             new = st.text_area("메모 내용", height=320, key=ak, label_visibility="collapsed")
+            if ai_text is not None:
+                st.caption("🤖 Gemini 초안입니다. 숫자를 확인 · 수정한 뒤 '💾 저장'을 눌러야 남습니다(저장 전엔 기존 메모 그대로).")
             if st.button("💾 저장", key=f"memo_save_{key}"):
                 st.session_state[sk] = new
                 _memo_save(key, new)
-                del st.session_state[f"memo_edit_{key}"]
+                del st.session_state[ek]
                 st.rerun()
         else:
             st.session_state.pop(ak, None)  # 다음 편집 때 저장된 내용으로 다시 시작
@@ -1962,7 +2219,8 @@ def render_memo(key: str, title: str = "📝 분석 메모"):
             shown = re.sub(r"([\\`*_~$])", r"\\\1", text)
             st.markdown(shown.replace("\n", "  \n"))
         elif not editing:
-            st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요.")
+            st.caption("메모가 비어 있습니다. '✏️ 편집'을 켜서 분석 내용을 입력하세요."
+                       + (" 또는 '🤖 Gemini 초안'으로 1차 초안을 받아 보세요." if api_key else ""))
 
 
 # ───────────────────────────────────────────────
@@ -2166,6 +2424,7 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
     kpi_df = date_range_filter(df, key_prefix="sum")
 
     # ── 날짜 카드 하단 필터 (페이지 전체에 적용)
+    raw_df = df
     df = summary_filters(df)
     # 위젯은 위에서 한 번만 렌더되므로, 선택값을 kpi_df에도 동일 적용
     for _, col in [("비용출처", "구분_비용출처"), ("채널명", "구분_채널"), ("매체명", "구분_매체명"),
@@ -2225,7 +2484,9 @@ def page_summary(df: pd.DataFrame, targets: dict, report_targets: dict = None, f
         st.caption(f"ℹ️ 선택한 날짜 범위가 {gran} 하나뿐이라 그래프는 "
                    f"{graph_df['기간_일자'].min().date()} ~ {end.date()} 추이로 보여줍니다. (표는 선택 범위 그대로)")
     _render_period_graph(graph_df, gran, f"sum_{gran}", prev_df=graph_prev, src=src, memo_key="summary", bar=bar,
-                         comp=comp)
+                         comp=comp,
+                         memo_facts=lambda: memo_facts_summary(df, prev_df, gran, src, start, end,
+                                                               _fact_filter_text(raw_df, "sumf")))
 
     st.divider()
     _render_period_detail(df, gran, key_prefix=f"sum_{gran}", prev_df=prev_df, src=src)
@@ -2423,7 +2684,7 @@ def _render_period_summary(df, gran, report_targets, targets, prev_df=None, src=
 
 
 def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_key=None, bar=False,
-                         comp=False):
+                         comp=False, memo_facts=None):
     """기간별 지표 추이 그리드(전 지표 노출). 주/월은 일평균, 일은 일자값.
     당기간은 전년 MTD 비교. prev_df(기간 미필터 소스)가 있으면 화면에 표시된 기간의
     전년 동요일(-364일) 데이터를 그래프 소스에 합쳐 월별처럼 전년 오버레이가 되게 한다.
@@ -2438,7 +2699,7 @@ def _render_period_graph(df, gran, key_prefix, prev_df=None, src="TOTAL", memo_k
         mode_note = "" if gran == "일" else " · 합계"
     else:
         mode_note = "" if gran == "일" else " · 일평균"
-    render_memo(memo_key or f"period_{key_prefix}")
+    render_memo(memo_key or f"period_{key_prefix}", facts_fn=memo_facts, sheet="전체 요약", order_key="summary")
     st.markdown(f"#### 📈 지표별 추이 ({gran}{mode_note}) · 비용출처: {src}")
     st.caption("ℹ️ 전년 비교선은 **동요일 기준**(전년 동일 요일, -364일)으로 정렬합니다.")
     df_tab = _filter_cost(df, src)
@@ -4356,7 +4617,9 @@ def page_custom_graph(df: pd.DataFrame, targets: dict = None, report_targets: di
 
     # ── 지표별 추이 그래프 (일자별, 실적 vs 비교)
     st.divider()
-    render_memo("cg")
+    render_memo("cg", facts_fn=lambda: memo_facts_cg(
+        in_cur, in_cmp, cur_rng, cmp_rng, src, [(r[0], r[1], r[2]) for r in rows[:-1]],
+        _fact_filter_text(df, "cgf")), sheet="커스텀 그래프", order_key="cg")
     st.markdown(f"#### 📈 지표별 추이 (일별) · 비용출처: {src}")
     st.caption("x축은 실적 기간 날짜입니다. 비교 기간은 같은 순번의 날짜(1일차↔1일차)로 겹쳐 그리며, "
                "마우스를 올리면 두 기간의 실제 날짜와 값이 함께 보입니다.")
@@ -4731,8 +4994,9 @@ def _is_button_key(k: str) -> bool:
     - 날짜 프리셋 버튼: '{prefix}_btn_{label}'  → '_btn_' 포함
     - 원본 CSV 다운로드 버튼: 'rawdl_*'
     - 커스텀 CSV 다운로드 버튼: 'cu_csv'
-    - 메모 저장 버튼: 'memo_save_*'"""
-    return ("_btn_" in k) or k.startswith("rawdl_") or k == "cu_csv" or k.startswith("memo_save_")
+    - 메모 저장 · Gemini 초안 버튼: 'memo_save_*' · 'memo_gem_*'"""
+    return (("_btn_" in k) or k.startswith("rawdl_") or k == "cu_csv" or k.startswith("memo_save_")
+            or k.startswith("memo_gem_"))
 
 
 def _persist_widget_state():

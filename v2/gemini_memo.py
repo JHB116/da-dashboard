@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """리뷰 메모 1차 작성 — Gemini (Streamlit 서버에서만 호출, 키는 st.secrets 에만)
 
+- v2(app.py)와 기존 대시보드(저장소 루트 dashboard.py)가 함께 쓴다.
+
 - 브라우저(dashboard.html)가 화면 공식 산식으로 계산한 요약 숫자(facts)와 규칙 기반 초안만 보낸다. 원본 로데이터는 보내지 않는다.
 - 키: Streamlit Cloud → Settings → Secrets 에 GEMINI_API_KEY = "..." (선택: GEMINI_MODEL = "모델 이름")
 - 모델: GEMINI_MODEL 이 없으면 'gemini-flash-lite-latest'(늘 최신 Flash-Lite 를 가리키는 이름).
@@ -101,10 +103,10 @@ def pick_model(api_key: str, transport: Transport | None = None) -> str:
     raise GeminiError('이 Gemini 키로 쓸 수 있는 텍스트 모델이 없습니다(AI Studio 에서 키 · 프로젝트 확인).', 404)
 
 
-def _generate(facts: str, api_key: str, model: str, transport: Transport | None) -> str:
+def _generate(facts: str, api_key: str, model: str, transport: Transport | None, prompt: str = PROMPT) -> str:
     url = f'{BASE}/models/{model}:generateContent'
     headers = {'Content-Type': 'application/json', 'x-goog-api-key': api_key}
-    payload = {'contents': [{'role': 'user', 'parts': [{'text': PROMPT + facts}]}],
+    payload = {'contents': [{'role': 'user', 'parts': [{'text': prompt + facts}]}],
                'generationConfig': {'temperature': 0.3, 'maxOutputTokens': 1200}}
     data = (transport or _transport)('POST', url, headers, payload, 30)
     try:
@@ -118,17 +120,18 @@ def _generate(facts: str, api_key: str, model: str, transport: Transport | None)
 
 
 def write_memo(facts: str, api_key: str, model: str = DEFAULT_MODEL,
-               transport: Transport | None = None) -> tuple[str, str]:
-    """→ (메모 글, 실제로 쓴 모델). 모델이 없으면(404) 쓸 수 있는 모델을 골라 한 번 더 부른다"""
+               transport: Transport | None = None, prompt: str = PROMPT) -> tuple[str, str]:
+    """→ (메모 글, 실제로 쓴 모델). 모델이 없으면(404) 쓸 수 있는 모델을 골라 한 번 더 부른다
+    prompt: 근거 앞에 붙는 지시문(기본은 v2 요약 시트용). 기존 대시보드(dashboard.py)는 시트별 지시문을 넘긴다."""
     if not api_key:
         raise GeminiError('Gemini 키가 설정되지 않았습니다.')
     facts = str(facts or '')[:MAX_FACTS]
     try:
-        return _generate(facts, api_key, model, transport), model
+        return _generate(facts, api_key, model, transport, prompt), model
     except GeminiError as e:
         if e.code != 404:
             raise
     alt = pick_model(api_key, transport)
     if alt == model:
         raise GeminiError(f'Gemini 모델({model})을 쓸 수 없습니다.', 404)
-    return _generate(facts, api_key, alt, transport), alt
+    return _generate(facts, api_key, alt, transport, prompt), alt

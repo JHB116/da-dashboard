@@ -61,3 +61,14 @@ def test_errors():
 def test_config():
     assert gm.load_config({}) == (None, gm.DEFAULT_MODEL)
     assert gm.load_config({'GEMINI_API_KEY': ' k ', 'GEMINI_MODEL': 'x'}) == ('k', 'x')
+
+
+def test_custom_prompt():
+    """기존 대시보드(dashboard.py)는 시트별 지시문을 prompt 로 넘긴다"""
+    seen = {}
+
+    def fake(method, url, headers, payload, timeout):
+        seen['text'] = payload['contents'][0]['parts'][0]['text']
+        return OK
+    gm.write_memo('근거숫자', 'K', model='m1', transport=fake, prompt='지시문\n')
+    assert seen['text'] == '지시문\n근거숫자'
