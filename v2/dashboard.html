@@ -480,6 +480,9 @@ function yearChart(el, o) {
     let d = '', pen = false;
     l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv == null) { pen = false; return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(sv).toFixed(1); pen = true; });
     g += `<path class="ln" d="${d}" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`;
+    // 앞뒤가 비어 선이 안 그려지는 점(점 하나뿐인 기간 등)은 점으로 표시
+    const sv = l.values.map(v => C.scaled(m, v));
+    sv.forEach((v, i) => { if (v != null && sv[i - 1] == null && sv[i + 1] == null) g += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="${st.color}"/>`; });
     if (l.k === 0) {
       if (o.showText) l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv != null) g += `<text class="vl" x="${x(i)}" y="${y(sv) - 7}" text-anchor="middle">${C.fmt(m, v, S.mode)}</text>`; });
       let li = l.values.length - 1; while (li >= 0 && C.scaled(m, l.values[li]) == null) li--;
@@ -516,12 +519,14 @@ function yearSeries(s, ps, sh, at) {
   const rng = ix => ix.length ? `${C.iso(R.dn[ix[0]]).slice(2).replace(/-/g, '.')}~${C.iso(R.dn[ix[ix.length - 1]]).slice(5).replace('-', '.')}` : '';
   const sum = ix => { const t = C.sumIdx(s, ix); return t.days ? t : null; };
   if (at.custom) {
+    // 기간이 2개 이하(예: 월별인데 5일만 지정)면 선이 안 보이니 일별 점으로 그린다
+    const daily = sh.length < 3, xs = daily ? C.curIdx(at, s).map(i => [i]) : sh.map(p => C.curIdx(p, s));
     const lines = [0, 1].map(k => {
       const sums = [], tips = [];
-      for (const p of sh) { const cur = C.curIdx(p, s), ix = k === 0 ? cur : cuShift(cur); sums.push(sum(ix)); tips.push(rng(ix)); }
+      for (const cur of xs) { const ix = k === 0 ? cur : cuShift(cur); sums.push(sum(ix)); tips.push(rng(ix)); }
       return { k, name: k === 0 ? '실적 기간' : '비교 기간', sums, tips };
     });
-    return { labels: sh.map(p => p.short), head: sh.map(p => p.label), lines, custom: true };
+    return { labels: daily ? xs.map(ix => C.iso(R.dn[ix[0]]).slice(5).replace('-', '.')) : sh.map(p => p.short), head: daily ? xs.map(ix => C.iso(R.dn[ix[0]])) : sh.map(p => p.label), lines, custom: true, daily };
   }
   const Y = at.y, cmps = ['yoy', 'yoy2'];
   if (S.grain === 'month') {
@@ -850,7 +855,7 @@ function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
   return L.join('\n');
 }
 function draftTrend(c, ys) {
-  const M = C.METRIC, L = [], unitN = { month: '개월', week: '주', day: '일' }[S.grain];
+  const M = C.METRIC, L = [], unitN = ys.daily ? '일' : { month: '개월', week: '주', day: '일' }[S.grain];
   const line = (k, kk) => ys.lines.find(l => l.k === kk);
   const vals = (k, kk) => { const l = line(k, kk); return l ? l.sums.map(t => (t ? val(M[k], t) : null)) : []; };
   L.push(`[추이 · ${GRAIN_N[S.grain]}]`);
@@ -978,8 +983,8 @@ function renderSummary(main) {
   const ys = yearSeries(s, ps, sh, at);
   const draft = draftCards(c, sAt, c.custom ? sCu : sY1, c.custom ? '비교 기간' : '전년', c.custom ? c.cmpIdx : y1Idx, atCur, tgt) + '\n' + draftTrend(c, ys);
   h += `<section>${memoHTML('summary', '리뷰 메모', at, draft)}</section>`;
-  const span = c.custom ? `실적 기간 ${S.cu.r0} ~ ${S.cu.r1} vs 비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (같은 만큼 당긴 날짜)` : S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
-  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'}</span></div>
+  const span = c.custom ? `${ys.daily ? '기간이 짧아 일별로 표시 · ' : ''}실적 기간 ${S.cu.r0} ~ ${S.cu.r1} vs 비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (같은 만큼 당긴 날짜)` : S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
+  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${ys.daily ? '일별' : GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'}</span></div>
     ${GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
   h += periodTableHTML(c);
   h += notes();
