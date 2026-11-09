@@ -511,9 +511,18 @@ function yearChart(el, o) {
 // 연도 겹쳐보기 데이터 — 기준 기간의 연도(Y) · 전년(Y-1) · 전전년(Y-2)
 //  월별: x = 1~12월, 각 연도의 그 달 실적. 진행 중인 달은 전년 · 전전년도 같은 요일 기간(MTD, 364 · 728일 전)
 //  주별 · 일별: x = 표시 범위의 기간, 전년 · 전전년 = 364 · 728일 전 같은 요일 기간
+//  직접 지정 기간: x = 실적 기간 안의 기간, 비교 = 같은 만큼 당긴 비교 기간 날짜
 function yearSeries(s, ps, sh, at) {
   const rng = ix => ix.length ? `${C.iso(R.dn[ix[0]]).slice(2).replace(/-/g, '.')}~${C.iso(R.dn[ix[ix.length - 1]]).slice(5).replace('-', '.')}` : '';
   const sum = ix => { const t = C.sumIdx(s, ix); return t.days ? t : null; };
+  if (at.custom) {
+    const lines = [0, 1].map(k => {
+      const sums = [], tips = [];
+      for (const p of sh) { const cur = C.curIdx(p, s), ix = k === 0 ? cur : cuShift(cur); sums.push(sum(ix)); tips.push(rng(ix)); }
+      return { k, name: k === 0 ? '실적 기간' : '비교 기간', sums, tips };
+    });
+    return { labels: sh.map(p => p.short), head: sh.map(p => p.label), lines, custom: true };
+  }
   const Y = at.y, cmps = ['yoy', 'yoy2'];
   if (S.grain === 'month') {
     const byKey = new Map(ps.map(p => [p.key, p]));
@@ -569,6 +578,14 @@ const bucketArg = () => (S.bucket && S.bucket !== '상세' ? S.bucket : null);
 const bucketName = () => (S.bucket === '상세' ? '비용출처(상세)' + (S.filt.src ? ` ${S.filt.src.length}개` : ' 전체') : S.bucket);
 // 전년 · 전전년 비교 날짜 — 그 날짜가 데이터에 모두 있을 때만 (없으면 빈 배열 → '–')
 function fullCmp(p, grain, cmp, cur) { const ix = C.compareIdx(R, p, grain, cmp, cur); return ix.length >= cur.length ? ix : []; }
+// 직접 지정 비교 기간 — 실적 날짜를 (실적 시작일 - 비교 시작일)만큼 당긴 날짜 중 비교 기간 안의 것
+function cuShift(cur) {
+  if (!S.cu) return [];
+  const off = C.dnum(S.cu.r0) - C.dnum(S.cu.c0), a = C.dnum(S.cu.c0), b = C.dnum(S.cu.c1), out = [];
+  for (const i of cur) { const n = R.dn[i] - off; if (n < a || n > b) continue; const j = R.byNum.get(n); if (j != null) out.push(j); }
+  return out;
+}
+const cuYear = () => (S.cu ? +S.cu.c0.slice(0, 4) : 0);
 // 원천에 지표 컬럼이 없던 24년(24년 파일)은 0 대신 '–'
 function naYear(m, yr) { const src = P.source || {}; return !!src.lock && yr <= +src.lock.slice(0, 4) && m.base.some(b => (src.missing || []).includes(b)); }
 const vy = (m, sums, yr) => (sums && sums.days && !naYear(m, yr) ? val(m, sums) : null);
@@ -851,11 +868,11 @@ function draftTrend(c, ys) {
     let gap = '';
     if (gaps.length) {
       const best = gaps.reduce((x, y) => (y[1] > x[1] ? y : x)), worst = gaps.reduce((x, y) => (y[1] < x[1] ? y : x));
-      gap = ` · 전년 대비 가장 좋았던 때 ${ys.labels[best[0]]}(${pctS(best[1])}), 가장 낮았던 때 ${ys.labels[worst[0]]}(${pctS(worst[1])})`;
+      gap = ` · ${ys.custom ? '비교 기간' : '전년'} 대비 가장 좋았던 때 ${ys.labels[best[0]]}(${pctS(best[1])}), 가장 낮았던 때 ${ys.labels[worst[0]]}(${pctS(worst[1])})`;
     }
     L.push(`• ${m.n}: 최근 ${last3.length}${unitN} ${seq} (${dir})${partialSum ? ` · 진행 중인 ${c.at.short || ''}은 덜 쌓인 누계라 제외` : ''}${gap}`);
   }
-  if (S.grain === 'month') {
+  if (S.grain === 'month' && !c.custom) {
     const ytd = [0, 1].map(kk => (line('cost', kk) || { sums: [] }).sums.slice(0, c.at.m).filter(Boolean));
     const sum = (arr, f) => arr.reduce((a, t) => a + t[f], 0);
     if (ytd[0].length && ytd[1].length) {
@@ -878,21 +895,21 @@ function summaryTableHTML(c) {
   const keys = sumTableKeys(), ms = keys.map(k => C.METRIC[k]), hasY2 = hasYoy2();
   const useT = tgtOn() && S.grain !== 'day';
   const tms = ms.filter(m => TGT_KEY[m.k]);
-  const groups = [['실적', null, ms], ['전년비', 'yoy', ms], ...(hasY2 ? [['전전년비', 'yoy2', ms]] : []), ...(useT ? [['목표', 'tgt', tms], ['목표비', 'tgtr', tms]] : [])];
+  const groups = [['실적', null, ms], ...(c.custom ? [['비교비', 'cu', ms]] : []), ['전년비', 'yoy', ms], ...(hasY2 ? [['전전년비', 'yoy2', ms]] : []), ...(useT ? [['목표', 'tgt', tms], ['목표비', 'tgtr', tms]] : [])];
   const pctCell = (p, m, bl) => { const good = m.lowerBetter ? p < 0 : p > 0; return `<td${bl} data-csv="${p == null ? '' : p.toFixed(1)}"><span class="${p == null || Math.abs(p) < 0.05 ? '' : good ? 'pos' : 'neg'}">${C.signed(p)}</span></td>`; };
   const row = (label, sub, cur, cmpIx, yr, tgt, cls = '') => {
-    const sc = C.sumIdx(s, cur), sy = { yoy: C.sumIdx(s, cmpIx.yoy), yoy2: C.sumIdx(s, cmpIx.yoy2) };
+    const sc = C.sumIdx(s, cur), sy = { yoy: C.sumIdx(s, cmpIx.yoy), yoy2: C.sumIdx(s, cmpIx.yoy2), cu: C.sumIdx(s, cmpIx.cu || []) };
     const cells = groups.map(([g, k, gm], gi) => gm.map((m, mi) => {
       const v = vy(m, sc, yr), bl = mi === 0 && gi > 0 ? ' class="bl"' : '';
       if (!k) return numCell(m, v);
       if (k === 'tgt') { const tv = tgtVal(m, tgt, sc.days); return numCell(m, tv, '', mi === 0 ? 'bl' : ''); }
       if (k === 'tgtr') { const tv = tgtVal(m, tgt, sc.days); return pctCell(tv ? C.pct(v, tv) : null, m, bl); }
-      return pctCell(C.pct(v, vy(m, sy[k], yr - (k === 'yoy' ? 1 : 2))), m, bl);
+      return pctCell(C.pct(v, vy(m, sy[k], k === 'cu' ? cuYear() : yr - (k === 'yoy' ? 1 : 2))), m, bl);
     }).join('')).join('');
     return `<tr class="${cls}"><td data-csv="${esc(label)}">${esc(label)}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</td>${cells}</tr>`;
   };
-  const totCmp = (rs, x) => { const n = rs.map(p => C.curIdx(p, s).length).reduce((a, b) => a + b, 0); return { yoy: x.yoy.length >= n ? [...new Set(x.yoy)] : [], yoy2: x.yoy2.length >= n ? [...new Set(x.yoy2)] : [] }; };
-  const cmpOf = (p, cur) => ({ yoy: fullCmp(p, S.grain, 'yoy', cur), yoy2: fullCmp(p, S.grain, 'yoy2', cur) });
+  const totCmp = (rs, x) => { const n = rs.map(p => C.curIdx(p, s).length).reduce((a, b) => a + b, 0); return { yoy: x.yoy.length >= n ? [...new Set(x.yoy)] : [], yoy2: x.yoy2.length >= n ? [...new Set(x.yoy2)] : [], cu: c.custom ? c.cmpIdx : [] }; };
+  const cmpOf = (p, cur) => ({ yoy: fullCmp(p, S.grain, 'yoy', cur), yoy2: fullCmp(p, S.grain, 'yoy2', cur), cu: c.custom ? cuShift(cur) : [] });
   const tOf = p => (!useT ? null : c.custom ? C.rangeTarget(P.targets, S.bucket, C.iso(Math.max(p.start, at.start)), C.iso(Math.min(p.end, at.end)), lastDate()) : C.periodTarget(P.targets, S.bucket, S.grain, p, lastDate()));
   let body = '', rows;
   const block = (rs, label, sub, yr) => {
@@ -910,7 +927,7 @@ function summaryTableHTML(c) {
   const prevTg = S.grain === 'month' && !c.custom ? `<label class="field"><input type="checkbox" id="chkPrevY"${S.prevY ? ' checked' : ''}> 지난 연도(${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}년) 보기</label>` : '';
   const scope = c.custom ? `직접 지정 기간 안의 ${rows.length}개 ${S.grain === 'month' ? '월' : S.grain === 'week' ? '주' : '일'}` : S.grain === 'month' ? (S.prevY ? `${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}·${String(at.y).slice(2)}년 전체 월` : `${String(at.y).slice(2)}년 전체 월`) : `${rows.length}개 ${S.grain === 'week' ? '주' : '일'} (위 '범위'에서 최근 N개 · 전체 선택)`;
   const tNote = useT ? ` · 목표 = ${esc(P.targets.file || '목표 파일')} ${c.custom ? '(직접 지정 기간은 주차 목표를 날짜별로 나눠 합산)' : '(진행 중인 달은 주차 목표 MTD, 진행 중인 주는 경과일/7)'}` : (P.targets && S.grain !== 'day' ? ' · 목표는 TOTAL 묶음 · 필터 없음에서 표시(목표가 DA 전체 기준)' : !P.targets ? ' · 목표 파일을 올리면 목표 · 목표비 표시' : '');
-  return `<section><div class="sec-h"><h2>실적 요약표 · ${GRAIN_N[S.grain]}</h2><span class="desc">${scope} · ${S.mode === 'avg' ? '일평균' : '누계'} · 전년비 · 전전년비 = 같은 요일 기간 · 비용출처 ${esc(bucketName())}${tNote}</span>
+  return `<section><div class="sec-h"><h2>실적 요약표 · ${GRAIN_N[S.grain]}</h2><span class="desc">${scope} · ${S.mode === 'avg' ? '일평균' : '누계'}${c.custom ? ` · 비교비 = 비교 기간 ${esc(S.cu.c0)} ~ ${esc(S.cu.c1)}(행마다 같은 만큼 당긴 날짜, 합계는 비교 기간 전체)` : ''} · 전년비 · 전전년비 = 같은 요일 기간 · 비용출처 ${esc(bucketName())}${tNote}</span>
     <div class="tools">${prevTg}<button class="btn" data-csv-for="tblSum" data-name="DA_실적요약_${S.grain}_${esc(at.key)}">CSV</button></div></div>
     <div class="card tbl-wrap"><table class="grid g2" id="tblSum"><thead>${head}</thead><tbody>${body}</tbody></table></div></section>`;
 }
@@ -918,14 +935,16 @@ function summaryTableHTML(c) {
 function periodTableHTML(c) {
   const { s, sh, at } = c;
   const keys = S.cols === 'all' ? C.DETAIL : CORE, ms = keys.map(k => C.METRIC[k]);
-  const cmp = S.cmp === 'pop' || S.cmp === 'yoy2' ? S.cmp : 'yoy', cmpL = C.cmpLabel(cmp, S.grain);
-  const sums = p => { const cur = C.curIdx(p, s); return { cur: C.sumIdx(s, cur), cmp: C.sumIdx(s, cmp === 'pop' ? C.compareIdx(R, p, S.grain, cmp, cur) : fullCmp(p, S.grain, cmp, cur)), y: p.y }; };
+  const cmp = S.cmp === 'pop' || S.cmp === 'yoy2' || (S.cmp === 'cu' && c.custom) ? S.cmp : 'yoy', cmpL = cmp === 'cu' ? '비교 기간비' : C.cmpLabel(cmp, S.grain);
+  const cmpOf = (p, cur) => (cmp === 'cu' ? cuShift(cur) : cmp === 'pop' ? C.compareIdx(R, p, S.grain, cmp, cur) : fullCmp(p, S.grain, cmp, cur));
+  const cmpYr = y => (cmp === 'cu' ? cuYear() : y - (cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0));
+  const sums = p => { const cur = C.curIdx(p, s); return { cur: C.sumIdx(s, cur), cmp: C.sumIdx(s, cmpOf(p, cur)), y: p.y }; };
   const rows = sh.map(p => ({ p, ...sums(p) }));
   const curAll = [], cmpAll = [];
-  for (const p of sh) { const cc = C.curIdx(p, s); curAll.push(...cc); cmpAll.push(...(cmp === 'pop' ? C.compareIdx(R, p, S.grain, cmp, cc) : fullCmp(p, S.grain, cmp, cc))); }
-  const tot = { cur: C.sumIdx(s, curAll), cmp: C.sumIdx(s, cmpAll.length >= curAll.length ? [...new Set(cmpAll)] : []), y: at.y };
-  const cell = (m, r) => { const v = vy(m, r.cur, r.y), cv = vy(m, r.cmp, r.y - (cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0)); return numCell(m, v, S.showCmp ? `<span class="sub">${deltaHTML(m, v, cv)}</span>` : ''); };
-  const cmps = [['yoy', '전년비'], ...(hasYoy2() ? [['yoy2', '전전년비']] : []), ['pop', C.cmpLabel('pop', S.grain)]];
+  for (const p of sh) { const cc = C.curIdx(p, s); curAll.push(...cc); cmpAll.push(...cmpOf(p, cc)); }
+  const tot = { cur: C.sumIdx(s, curAll), cmp: C.sumIdx(s, cmp === 'cu' ? c.cmpIdx : cmpAll.length >= curAll.length ? [...new Set(cmpAll)] : []), y: at.y };
+  const cell = (m, r) => { const v = vy(m, r.cur, r.y), cv = vy(m, r.cmp, cmpYr(r.y)); return numCell(m, v, S.showCmp ? `<span class="sub">${deltaHTML(m, v, cv)}</span>` : ''); };
+  const cmps = [...(c.custom ? [['cu', '비교 기간비']] : []), ['yoy', '전년비'], ...(hasYoy2() ? [['yoy2', '전전년비']] : []), ['pop', C.cmpLabel('pop', S.grain)]];
   return `<section><div class="sec-h"><h2>기간별 상세 실적 · ${GRAIN_N[S.grain]}</h2><span class="desc">${esc(sh[0].label)} ~ ${esc(sh[sh.length - 1].label)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 칸 아래 = ${cmpL} · 비용출처 ${esc(bucketName())}</span>
     <div class="tools"><div class="seg" role="group" aria-label="칸 아래 비교">${cmps.map(([k, l]) => `<button data-set="cmp" data-v="${k}" aria-pressed="${cmp === k}">${l}</button>`).join('')}</div>
     <div class="seg" role="group" aria-label="지표 묶음"><button data-cols="core" aria-pressed="${S.cols === 'core'}">핵심 지표</button><button data-cols="all" aria-pressed="${S.cols === 'all'}">전체 지표</button></div>
@@ -959,8 +978,8 @@ function renderSummary(main) {
   const ys = yearSeries(s, ps, sh, at);
   const draft = draftCards(c, sAt, c.custom ? sCu : sY1, c.custom ? '비교 기간' : '전년', c.custom ? c.cmpIdx : y1Idx, atCur, tgt) + '\n' + draftTrend(c, ys);
   h += `<section>${memoHTML('summary', '리뷰 메모', at, draft)}</section>`;
-  const span = S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
-  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span} · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)</span></div>
+  const span = c.custom ? `실적 기간 ${S.cu.r0} ~ ${S.cu.r1} vs 비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (같은 만큼 당긴 날짜)` : S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
+  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'}</span></div>
     ${GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
   h += periodTableHTML(c);
   h += notes();
@@ -1319,8 +1338,8 @@ document.addEventListener('change', e => {
   if (t.id === 'selAt') {
     if (t.value === '__custom') {      // 지금 기준 기간으로 시작, 비교는 전년 동요일
       const at = shown(plist()).slice(-1)[0], r0 = C.iso(at.start), r1 = C.iso(Math.min(at.end, at.lastN)), sh = d => C.iso(C.dnum(d) - 364);
-      S.cu = S.cu || { r0, r1, c0: sh(r0), c1: sh(r1), auto: true };
-    } else { S.cu = null; S.at = t.value; }
+      S.cu = S.cu || { r0, r1, c0: sh(r0), c1: sh(r1), auto: true }; S.cmp = 'cu';
+    } else { S.cu = null; S.at = t.value; if (S.cmp === 'cu') S.cmp = 'yoy'; }
     render(true);
   }
   else if (['cuR0', 'cuR1', 'cuC0', 'cuC1'].includes(t.id)) {
