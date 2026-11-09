@@ -299,6 +299,26 @@
     }
     return null;
   }
+  // 직접 지정 기간(from ~ to, 데이터 마지막 날까지) 목표 — 날짜별로 나눠 더한다
+  //  주차 목표가 있는 날 = 그 주 목표 ÷ 그 주 일수(다음 주차 시작 전까지, 최대 7일), 없는 날 = 월 목표 ÷ 그 달 일수
+  function rangeTarget(T, bucket, from, to, lastDate) {
+    if (!T || !['TOTAL', 'TOTAL(서비스비용미반영)'].includes(bucket)) return null;
+    const a = dnum(from), b = Math.min(dnum(to), dnum(lastDate));
+    if (b < a) return null;
+    const wr = Object.values(T.weekly_rows || {}).flat().map(r => [dnum(r[0]), r[1] || 0, r[2] || 0]).sort((x, y) => x[0] - y[0]);
+    const span = wr.map((r, i) => Math.min(i + 1 < wr.length ? wr[i + 1][0] - r[0] : 7, 7));
+    const mon = (T.monthly || {})[bucket] || {};
+    let sp = 0, rv = 0, wi = 0;
+    for (let n = a; n <= b; n++) {
+      while (wi + 1 < wr.length && wr[wi + 1][0] <= n) wi++;
+      if (wr.length && wr[wi][0] <= n && n < wr[wi][0] + span[wi]) { sp += wr[wi][1] / span[wi]; rv += wr[wi][2] / span[wi]; continue; }
+      const d = iso(n), m = mon[d.slice(0, 7)];
+      if (!m) continue;
+      const dim = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).getUTCDate();
+      sp += (m.spend || 0) / dim; rv += (m.rev || 0) / dim;
+    }
+    return tgtOf(sp, rv);
+  }
   function sumTargets(list) { let sp = 0, rv = 0, n = 0; for (const t of list) if (t) { sp += t.spend; rv += t.rev; n++; } return n ? tgtOf(sp, rv) : null; }
 
   // ── 백업 합치기 ────────────────────────────────────────────────────
@@ -422,7 +442,7 @@
     BASE, METRIC_LIST, METRIC, SUMMARY, DETAIL, COST_BUCKETS, EVENTS, WD,
     normCost, bucketValues, div, pct, dnum, iso, dow, monthDays, weekInfo,
     prepare, nameMatcher, rowTest, daily, emptySeries, periods, curIdx, compareIdx, rangeIdx, cmpLabel, cmpName, sumIdx, value,
-    mergeBackup, mergeAf, mergeQuality, tree, children, keyWhere, periodTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
+    mergeBackup, mergeAf, mergeQuality, tree, children, keyWhere, periodTarget, rangeTarget, sumTargets, fmtNum, fmt, unit, scaled, signed, additive,
   };
   root.DaCalc = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -876,7 +876,7 @@ function sumTableKeys() { return ['신규고객확대', '인지도제고'].inclu
 function summaryTableHTML(c) {
   const { s, ps, sh, at } = c;
   const keys = sumTableKeys(), ms = keys.map(k => C.METRIC[k]), hasY2 = hasYoy2();
-  const useT = tgtOn() && !c.custom && S.grain !== 'day';
+  const useT = tgtOn() && S.grain !== 'day';
   const tms = ms.filter(m => TGT_KEY[m.k]);
   const groups = [['실적', null, ms], ['전년비', 'yoy', ms], ...(hasY2 ? [['전전년비', 'yoy2', ms]] : []), ...(useT ? [['목표', 'tgt', tms], ['목표비', 'tgtr', tms]] : [])];
   const pctCell = (p, m, bl) => { const good = m.lowerBetter ? p < 0 : p > 0; return `<td${bl} data-csv="${p == null ? '' : p.toFixed(1)}"><span class="${p == null || Math.abs(p) < 0.05 ? '' : good ? 'pos' : 'neg'}">${C.signed(p)}</span></td>`; };
@@ -893,7 +893,7 @@ function summaryTableHTML(c) {
   };
   const totCmp = (rs, x) => { const n = rs.map(p => C.curIdx(p, s).length).reduce((a, b) => a + b, 0); return { yoy: x.yoy.length >= n ? [...new Set(x.yoy)] : [], yoy2: x.yoy2.length >= n ? [...new Set(x.yoy2)] : [] }; };
   const cmpOf = (p, cur) => ({ yoy: fullCmp(p, S.grain, 'yoy', cur), yoy2: fullCmp(p, S.grain, 'yoy2', cur) });
-  const tOf = p => (useT ? C.periodTarget(P.targets, S.bucket, S.grain, p, lastDate()) : null);
+  const tOf = p => (!useT ? null : c.custom ? C.rangeTarget(P.targets, S.bucket, C.iso(Math.max(p.start, at.start)), C.iso(Math.min(p.end, at.end)), lastDate()) : C.periodTarget(P.targets, S.bucket, S.grain, p, lastDate()));
   let body = '', rows;
   const block = (rs, label, sub, yr) => {
     const cur = [], x = { yoy: [], yoy2: [] }, ts = [];
@@ -909,7 +909,7 @@ function summaryTableHTML(c) {
     <tr class="h2">${groups.map(([g, , gm], gi) => gm.map((m, mi) => `<th${mi === 0 && gi > 0 ? ' class="bl"' : ''}><b>${m.n}</b>${gi === 0 || g === '목표' ? C.unit(m, S.mode) : ''}</th>`).join('')).join('')}</tr>`;
   const prevTg = S.grain === 'month' && !c.custom ? `<label class="field"><input type="checkbox" id="chkPrevY"${S.prevY ? ' checked' : ''}> 지난 연도(${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}년) 보기</label>` : '';
   const scope = c.custom ? `직접 지정 기간 안의 ${rows.length}개 ${S.grain === 'month' ? '월' : S.grain === 'week' ? '주' : '일'}` : S.grain === 'month' ? (S.prevY ? `${String(at.y - 2).slice(2)}·${String(at.y - 1).slice(2)}·${String(at.y).slice(2)}년 전체 월` : `${String(at.y).slice(2)}년 전체 월`) : `${rows.length}개 ${S.grain === 'week' ? '주' : '일'} (위 '범위'에서 최근 N개 · 전체 선택)`;
-  const tNote = useT ? ` · 목표 = ${esc(P.targets.file || '목표 파일')} (진행 중인 달은 주차 목표 MTD, 진행 중인 주는 경과일/7)` : (P.targets && !c.custom && S.grain !== 'day' ? ' · 목표는 TOTAL 묶음 · 필터 없음에서 표시(목표가 DA 전체 기준)' : !P.targets ? ' · 목표 파일을 올리면 목표 · 목표비 표시' : '');
+  const tNote = useT ? ` · 목표 = ${esc(P.targets.file || '목표 파일')} ${c.custom ? '(직접 지정 기간은 주차 목표를 날짜별로 나눠 합산)' : '(진행 중인 달은 주차 목표 MTD, 진행 중인 주는 경과일/7)'}` : (P.targets && S.grain !== 'day' ? ' · 목표는 TOTAL 묶음 · 필터 없음에서 표시(목표가 DA 전체 기준)' : !P.targets ? ' · 목표 파일을 올리면 목표 · 목표비 표시' : '');
   return `<section><div class="sec-h"><h2>실적 요약표 · ${GRAIN_N[S.grain]}</h2><span class="desc">${scope} · ${S.mode === 'avg' ? '일평균' : '누계'} · 전년비 · 전전년비 = 같은 요일 기간 · 비용출처 ${esc(bucketName())}${tNote}</span>
     <div class="tools">${prevTg}<button class="btn" data-csv-for="tblSum" data-name="DA_실적요약_${S.grain}_${esc(at.key)}">CSV</button></div></div>
     <div class="card tbl-wrap"><table class="grid g2" id="tblSum"><thead>${head}</thead><tbody>${body}</tbody></table></div></section>`;
@@ -941,7 +941,7 @@ function renderSummary(main) {
   const atCur = C.curIdx(at, s), sAt = C.sumIdx(s, atCur);
   const y1Idx = fullCmp(at, c.custom ? 'day' : S.grain, 'yoy', atCur), sY1 = C.sumIdx(s, y1Idx), sY2 = C.sumIdx(s, fullCmp(at, c.custom ? 'day' : S.grain, 'yoy2', atCur));
   const sCu = c.custom ? C.sumIdx(s, c.cmpIdx) : null;
-  const tgt = tgtOn() && !c.custom ? C.periodTarget(P.targets, S.bucket, S.grain, at, lastDate()) : null;
+  const tgt = !tgtOn() ? null : c.custom ? C.rangeTarget(P.targets, S.bucket, S.cu.r0, S.cu.r1, lastDate()) : C.periodTarget(P.targets, S.bucket, S.grain, at, lastDate());
   const cmpRow = (m, v, sm, name, yr) => { const cv = vy(m, sm, yr); return `<div class="t-r"><span>${name} <b>${C.fmt(m, cv, S.mode)}</b></span><span>${deltaHTML(m, v, cv, name + '비')}</span></div>`; };
   const tile = k => {
     const m = C.METRIC[k], v = vy(m, sAt, at.y), tv = tgtVal(m, tgt, sAt.days);

@@ -103,3 +103,11 @@ test('AF코드 섹션 합치기: 새 쪽 날짜 우선 · 최근 92일만', () =
   assert.equal(m.f.cost[m.f.d.indexOf(m.dates.indexOf('2026-09-05'))], 2);
   assert.equal(C.mergeAf(null, null, '2026-09-10'), null);
 });
+test('목표: 직접 지정 기간 = 주차 목표 일할 + 주차 없는 날은 월 목표 일할', () => {
+  const T = { weekly_rows: { '2026-10': [['2026-10-01', 400, 800], ['2026-10-05', 700, 1400]] }, monthly: { TOTAL: { '2026-09': { spend: 3000, rev: 6000 } } } };
+  // 9/29~9/30 = 월 목표 100/일, 10/1~10/4 = 4일 400, 10/5~10/6 = 2/7 × 700
+  assert.deepEqual(C.rangeTarget(T, 'TOTAL', '2026-09-29', '2026-10-06', '2026-12-31'), { spend: 800, rev: 1600, roas: 2 });
+  // 데이터 마지막 날 이후는 빼고 계산
+  assert.deepEqual(C.rangeTarget(T, 'TOTAL', '2026-10-01', '2026-10-31', '2026-10-02'), { spend: 200, rev: 400, roas: 2 });
+  assert.equal(C.rangeTarget(T, '신규고객확대', '2026-10-01', '2026-10-06', '2026-12-31'), null);
+});
