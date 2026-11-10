@@ -682,8 +682,6 @@ const pctS = p => (p == null ? '–' : C.signed(p));
 const SUSPECT_MEDIA = ['페이코', 'payco', '페이먼츠', '토스페이', '링크프라이스', '링크사', '검색광고', '쇼핑검색', '브랜드검색'];
 const mil1 = x => `${x < 0 ? '△' : ''}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
 const sgn1 = x => `${x >= 0 ? '+' : '△'}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
-const pc1 = x => C.signed(x * 100);                // 비율(0.054) → '+5.4%' · '△5.4%'
-const shr = x => `${C.fmtNum(x * 100, 1)}%`;        // 비중 0.301 → '30.1%'
 const roasOf = t => (t && t.cost > 0 ? t.nrev / t.cost : null);
 const dshort = d => d.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/');
 function dateSpan(list) {             // ['2026-11-02', …] → '11/2~11/5' (끊기면 쉼표)
@@ -739,34 +737,34 @@ function dataCheck(curIdx) {
   if (spikes.length) L.push(`• 하루 광고비 급증: ${spikes.slice(0, 4).join(', ')} — 원천 중복 · 이중 집계가 아닌지 확인(행사 집중 집행이면 정상)`);
   return L;
 }
-// ROAS(순결제) = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제) — 각 요인이 ROAS 를 몇 % 움직였는지
+// 리뷰 메모 숫자 표기 — 기여는 소수점 없이, 방향은 기호 대신 말로(상승 · 하락)
+const pI = x => `${Math.round(Math.abs(x) * 100)}%`;                                   // 0.384 → '38%'
+const updn = x => `${pI(x)} ${x >= 0 ? '상승' : '하락'}`;                              // 0.22 → '22% 상승'
+const shr = x => `${C.fmtNum(x * 100, 1)}%`;                                           // 비중 0.301 → '30.1%'
+const roasS = t => (t && t.cost > 0 ? C.fmt(C.METRIC.roas, t.nrev / t.cost) : '–');
+// ROAS(순결제) = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)
 const FACTORS = [['cpc', 'CPC', true], ['uvc', 'UV/클릭', false], ['crt', 'CR(총결제)', false], ['npr', '순결제비중', false], ['aovn', '객단가(순결제)', false]];
-function factorText(a, b) {
-  const M = C.METRIC, out = [];
-  let worst = null, best = null;
-  for (const [k, n, inv] of FACTORS) {
-    const x = C.value(M[k], a, 'sum'), y = C.value(M[k], b, 'sum');
-    if (x == null || y == null || !(x > 0) || !(y > 0)) continue;
-    const eff = (inv ? y / x : x / y) - 1, ch = x / y - 1;
-    out.push(`${n} ${C.fmt(M[k], x)}${M[k].kind === 'won' ? '원' : ''}(${ch >= 0 ? '+' : '△'}${Math.abs(ch * 100).toFixed(1)}%${Math.abs(eff) >= 0.03 ? eff > 0 ? ' 효율↑' : ' 효율↓' : ''})`);
-    if (!worst || eff < worst[1]) worst = [n, eff];
-    if (!best || eff > best[1]) best = [n, eff];
-  }
-  const ctr = [C.value(M.ctr, a, 'sum'), C.value(M.ctr, b, 'sum')];
-  if (ctr[0] != null && ctr[1]) out.push(`(참고 CTR ${C.fmt(M.ctr, ctr[0])}, ${C.signed(C.pct(ctr[0], ctr[1]))})`);
-  return { text: out.join(' · '), worst, best };
-}
-// 1) 지표별 기여 — ROAS = 곱이라 각 요인의 로그 변화 비율로 ROAS 변화율을 나눈다 → 다 더하면 ROAS 변화율
+// 요인별 ROAS 기여 — 곱셈 식이라 각 요인의 로그 변화 비율로 ROAS 변화율(rel)을 나눈다 → 다 더하면 rel
 function factorContrib(a, b, rel) {
   const M = C.METRIC, rows = [];
   for (const [k, n, inv] of FACTORS) {
     const x = C.value(M[k], a, 'sum'), y = C.value(M[k], b, 'sum');
     if (x == null || y == null || !(x > 0) || !(y > 0)) return null;           // 하나라도 없으면 합이 안 맞으니 쓰지 않는다
-    rows.push({ n, m: M[k], x, ch: x / y - 1, lg: Math.log(inv ? y / x : x / y) });
+    rows.push({ n, m: M[k], x, y, inv, lg: Math.log(inv ? y / x : x / y) });
   }
   const lt = rows.reduce((s, r) => s + r.lg, 0), k = Math.abs(lt) < 1e-9 ? 1 : rel / lt;
   for (const r of rows) r.c = r.lg * k;
   return rows;
+}
+// '올린 요인: CR(총결제) 38%(0.20% → 0.30%) … / 내린 요인: CPC 79%(28원 → 61원, 올라서 ROAS 하락)' — 판단 방향 쪽을 먼저, 기여 큰 순
+function factorLine(a, b, rel, dnFirst) {
+  const fc = factorContrib(a, b, rel);
+  if (!fc) return '';
+  const one = r => `${r.n} ${pI(r.c)}(${C.fmt(r.m, r.y)}${r.m.kind === 'won' ? '원' : ''} → ${C.fmt(r.m, r.x)}${r.m.kind === 'won' ? '원' : ''}${r.inv ? `, ${r.x > r.y ? '올라서' : '내려서'} ROAS ${r.c >= 0 ? '상승' : '하락'}` : ''})`;
+  const up = fc.filter(r => r.c >= 0).sort((p, q) => q.c - p.c), dn = fc.filter(r => r.c < 0).sort((p, q) => p.c - q.c);   // 다섯 요인 모두 (합이 맞게)
+  const g = [up.length ? `올린 요인 ${up.map(one).join(', ')}` : '', dn.length ? `내린 요인 ${dn.map(one).join(', ')}` : ''];
+  if (dnFirst) g.reverse();
+  return g.filter(Boolean).join(' / ');
 }
 // 구간별 ROAS 기여 — 비교 ROAS(Rb) 대비 몇 % 움직였는지. 한 기준(매체 × 상품 · BPU · 기획전) 안에서 다 더하면 전체 ROAS 변화율
 //  기여ᵢ = [비중₁ × (ROAS₁ᵢ − Rb) − 비중₀ × (ROAS₀ᵢ − Rb)] ÷ Rb
@@ -791,15 +789,17 @@ function segMoves(dims, cur, cmp, where = null) {
   return { list, A, B, t, Rb };
 }
 const mdpr = ([md, pr]) => (!pr || String(md).replace(/\s/g, '').includes(String(pr).replace(/\s/g, '')) ? md : `${md} ${pr}`);
-function moveText(x, label) { return `${label}(기여 ${pc1(x.contrib)} · 거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(C.METRIC.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`; }
-// 올린 곳 · 내린 곳 상위 k 개 + 나머지 합 — 셋을 더하면 전체 ROAS 변화율
-function topMoves(ms, label, k = 2, minC = 0.002) {
-  const up = ms.list.filter(x => x.contrib > minC).sort((a, b) => b.contrib - a.contrib).slice(0, k);
-  const dn = ms.list.filter(x => x.contrib < -minC).sort((a, b) => a.contrib - b.contrib).slice(0, k);
+// 기여 + ROAS 비교 → 이번 · 광고비 · 거래액 증감액(비교 기간 대비 늘어난 · 줄어든 금액)
+function moveText(x, label) { return `${label} ${pI(x.contrib)}(ROAS ${x.isNew ? '신규' : roasS(x.b)} → ${roasS(x.a)} · 광고비 ${sgn1(x.dc)} · 거래액 ${sgn1(x.dr)})`; }
+// 올린 곳 · 내린 곳 상위 k 개 + 나머지 합 — 셋을 더하면 전체 ROAS 변화율. 판단 방향 쪽을 먼저
+function topMoves(ms, label, dnFirst, k = 2, minC = 0.005) {
+  const up = ms.list.filter(x => x.contrib >= minC).sort((a, b) => b.contrib - a.contrib).slice(0, k);
+  const dn = ms.list.filter(x => x.contrib <= -minC).sort((a, b) => a.contrib - b.contrib).slice(0, k);
   const shown = new Set([...up, ...dn]), rest = ms.list.filter(x => !shown.has(x)), restC = rest.reduce((s, x) => s + x.contrib, 0);
-  const parts = [up.length ? `올린 곳 ${up.map(x => moveText(x, label(x.name))).join(', ')}` : '', dn.length ? `내린 곳 ${dn.map(x => moveText(x, label(x.name))).join(', ')}` : '',
-    rest.length && (up.length || dn.length) ? `그 외 ${rest.length}곳 합 ${pc1(restC)}` : ''].filter(Boolean);
-  return { up, dn, text: parts.join(' / ') };
+  const g = [up.length ? `올린 곳 ${up.map(x => moveText(x, label(x.name))).join(', ')}` : '', dn.length ? `내린 곳 ${dn.map(x => moveText(x, label(x.name))).join(', ')}` : ''];
+  if (dnFirst) g.reverse();
+  if (rest.length && (up.length || dn.length)) g.push(`그 외 ${rest.length}곳 합 ${updn(restC)}`);
+  return { up, dn, text: g.filter(Boolean).join(' / ') };
 }
 function reviewDeep(curIdx, cmpIdx, cmpName) {
   const L = [], M = C.METRIC;
@@ -807,41 +807,41 @@ function reviewDeep(curIdx, cmpIdx, cmpName) {
   const all = segMoves(['md', 'pr'], curIdx, cmpIdx), A = all.A, B = all.B;
   const r0 = roasOf(A), r1 = roasOf(B);
   if (r0 == null || !r1) return L;
-  const rel = r0 / r1 - 1, relS = pc1(rel);
-  const verdict = Math.abs(rel) < 0.02 ? '보합' : rel > 0 ? '좋음' : '나쁨';
-  L.push(`[판단 · 순결제 ROAS 기준 — ${verdict}] ROAS(순결제) ${C.fmt(M.roas, r0)} vs ${cmpName} ${C.fmt(M.roas, r1)} (${relS})`);
-  L.push(`[읽는 법] '기여'는 ROAS 변화 ${relS}를 나눈 값(%). 같은 번호 안의 기여를 모두 더하면 ${relS}. 1)~4)는 같은 ${relS}를 서로 다른 기준으로 나눈 것이라 번호끼리는 더하지 않음`);
-  // 1) 지표별 — ROAS = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)
-  const fc = factorContrib(A, B, rel);
-  if (fc) {
-    const best = fc.reduce((x, y) => (y.c > x.c ? y : x)), worst = fc.reduce((x, y) => (y.c < x.c ? y : x));
+  const rel = r0 / r1 - 1, relS = updn(rel);
+  const verdict = Math.abs(rel) < 0.02 ? '보합' : rel > 0 ? '좋음' : '나쁨', dnFirst = verdict === '나쁨';
+  L.push(`[판단 · 순결제 ROAS 기준 — ${verdict}] ROAS(순결제) ${cmpName} ${C.fmt(M.roas, r1)} → 이번 ${C.fmt(M.roas, r0)} (${relS})`);
+  L.push(`[읽는 법] 아래 % 는 모두 'ROAS ${relS}' 중 그 요인 · 그 매체 몫(ROAS 기여). 같은 번호 안에서 올린 쪽 합 − 내린 쪽 합 = ${relS}(반올림 차이 1%쯤). 1)~4)는 같은 변화를 다른 기준으로 나눈 것이라 번호끼리는 더하지 않음. 광고비 · 거래액 옆 금액은 ${cmpName} 대비 늘어난(+) · 줄어든(△) 금액`);
+  // 1) 지표별
+  const fl = factorLine(A, B, rel, dnFirst);
+  if (fl) {
     const ctr = [C.value(M.ctr, A, 'sum'), C.value(M.ctr, B, 'sum')];
-    L.push(`• 1) 지표별(ROAS = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)): ${fc.map(r => `${r.n} ${C.fmt(r.m, r.x)}${r.m.kind === 'won' ? '원' : ''}(${pc1(r.ch)} → 기여 ${pc1(r.c)})`).join(' · ')} = 합계 ${relS}${verdict !== '보합' ? ` → 가장 크게 ${verdict === '나쁨' ? `끌어내린 요인 ${worst.n}` : `끌어올린 요인 ${best.n}`}` : ''}${ctr[0] != null && ctr[1] ? ` (참고 CTR ${C.fmt(M.ctr, ctr[0])}, ${C.signed(C.pct(ctr[0], ctr[1]))})` : ''} — CPC 는 오르면 ROAS 를 내림`);
+    L.push(`• 1) 지표별(ROAS = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)): ${fl}${ctr[0] != null && ctr[1] ? ` · 참고 CTR ${C.fmt(M.ctr, ctr[1])} → ${C.fmt(M.ctr, ctr[0])}` : ''}`);
   }
-  // 2) 매체 × 상품 — 비중 이동(믹스) 몫 + 효율 몫 = 전체 변화
-  const mp = topMoves(all, mdpr);
+  // 2) 매체 × 상품 + 믹스 효과(광고비 비중 이동 몫 + 자체 효율 변화 몫 = 전체 변화)
+  const mp = topMoves(all, mdpr, dnFirst);
   if (mp.text) {
     L.push(`• 2) 매체 × 상품별: ${mp.text}`);
     const mix = all.list.reduce((s, x) => s + x.mix, 0), eff = all.list.reduce((s, x) => s + x.eff, 0);
-    const share = v => (verdict !== '보합' ? `, 변화의 ${C.fmtNum(v / rel * 100, 0)}%` : '');
-    const tm = all.list.filter(x => Math.abs(x.mix) > 0.002).sort((a, b) => Math.abs(b.mix) - Math.abs(a.mix))[0];
-    const tmText = tm ? ` — 비중 이동이 가장 큰 곳 ${mdpr(tm.name)}(광고비 비중 ${shr(tm.s0)} → ${shr(tm.s1)}, ${cmpName} ROAS ${tm.b.cost > 0 ? C.fmt(M.roas, tm.b.nrev / tm.b.cost) : '–'}로 평균 ${C.fmt(M.roas, r1)}보다 ${tm.b.cost > 0 && tm.b.nrev / tm.b.cost >= r1 ? '높음' : '낮음'} → 기여 ${pc1(tm.mix)})` : '';
-    L.push(`  └ ${relS} = 광고비 비중 이동 몫 ${pc1(mix)}${share(mix)} + 매체 × 상품 자체 효율 변화 몫 ${pc1(eff)}${share(eff)}${tmText}`);
-    L.push(`    (비중 이동 = ROAS 가 평균보다 높거나 낮은 매체 × 상품으로 광고비가 옮겨가서 생긴 몫 · 효율 = 각 매체 × 상품의 ROAS 자체가 바뀐 몫)`);
+    const share = v => (verdict !== '보합' ? `, 변화의 ${v / rel < 0 ? '△' : ''}${Math.round(Math.abs(v / rel) * 100)}%` : '');
+    const tm = all.list.filter(x => Math.abs(x.mix) >= 0.005).sort((a, b) => Math.abs(b.mix) - Math.abs(a.mix))[0];
+    const tmText = tm ? ` — 비중 이동이 가장 큰 곳 ${mdpr(tm.name)}: 광고비 비중 ${shr(tm.s0)} → ${shr(tm.s1)}, ${cmpName} ROAS ${tm.isNew ? '없음(신규)' : `${roasS(tm.b)}(평균 ${C.fmt(M.roas, r1)}보다 ${tm.b.nrev / tm.b.cost >= r1 ? '높음' : '낮음'})`} → ROAS ${updn(tm.mix)}` : '';
+    L.push(`  └ 믹스 효과: ROAS ${relS} = 광고비 비중 이동 몫 ${updn(mix)}${share(mix)} + 매체 × 상품 자체 ROAS 변화 몫 ${updn(eff)}${share(eff)}${tmText}`);
+    L.push(`    (비중 이동 = ROAS 가 평균보다 높은 · 낮은 매체 × 상품으로 광고비가 옮겨가서 생긴 몫 · 자체 ROAS 변화 = 각 매체 × 상품의 ROAS 가 바뀐 몫 · 두 몫을 더하면 변화의 100%)`);
   }
-  const issue = (verdict === '좋음' ? mp.up : mp.dn)[0] || mp.dn[0] || mp.up[0];
+  const issue = (dnFirst ? mp.dn : mp.up)[0] || mp.dn[0] || mp.up[0];
   if (issue) {
-    const fx = factorText(issue.a, issue.b), [md, pr] = issue.name;
+    const [md, pr] = issue.name, ir = roasOf(issue.a), ib = roasOf(issue.b);
+    const fx = ir && ib ? factorLine(issue.a, issue.b, ir / ib - 1, issue.contrib < 0) : '';
     // 캠페인은 매년 바뀌어 ROAS 기여 대신 거래액 증감 순으로
     const sub = segMoves(['camp'], curIdx, cmpIdx, { md: [md], pr: [pr] }).list;
-    const one = x => `${x.name[0]}(거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(M.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`;
+    const one = x => `${x.name[0]}(ROAS ${x.isNew ? '신규' : roasS(x.b)} → ${roasS(x.a)} · 광고비 ${sgn1(x.dc)} · 거래액 ${sgn1(x.dr)})`;
     const cu = sub.filter(x => x.dr > 0).sort((a, b) => b.dr - a.dr).slice(0, 2), cd = sub.filter(x => x.dr < 0).sort((a, b) => a.dr - b.dr).slice(0, 2);
-    const ct = [cu.length ? `증가 ${cu.map(one).join(', ')}` : '', cd.length ? `감소 ${cd.map(one).join(', ')}` : ''].filter(Boolean).join(' / ');
-    L.push(`  └ ${mdpr(issue.name)} 상세: ${fx.text || '비교 지표 없음'}${ct ? ` · 캠페인 ${ct}` : ''}`);
+    const ct = [cu.length ? `거래액 늘어난 캠페인 ${cu.map(one).join(', ')}` : '', cd.length ? `줄어든 캠페인 ${cd.map(one).join(', ')}` : ''].filter(Boolean).join(' / ');
+    L.push(`  └ ${mdpr(issue.name)} 상세(이 매체 ROAS ${ib ? C.fmt(M.roas, ib) : '–'} → ${ir ? C.fmt(M.roas, ir) : '–'}${ir && ib ? `, ${updn(ir / ib - 1)}` : ''}): ${fx || '비교 지표 없음'}${ct ? ` · ${ct}` : ''}`);
   }
   // 3) BPU · 4) 기획전 — 각각 따로 더하면 전체 ROAS 변화율
-  if (R.dims.bpu && R.dims.bpu.length > 1) { const b = topMoves(segMoves(['bpu'], curIdx, cmpIdx), n => n[0]); if (b.text) L.push(`• 3) BPU별: ${b.text}`); }
-  if (R.dims.bp && R.dims.bp.length > 1) { const b = topMoves(segMoves(['bp'], curIdx, cmpIdx), n => n[0] || '(기획전 없음)'); if (b.text) L.push(`• 4) 기획전별: ${b.text}`); }
+  if (R.dims.bpu && R.dims.bpu.length > 1) { const b = topMoves(segMoves(['bpu'], curIdx, cmpIdx), n => n[0], dnFirst); if (b.text) L.push(`• 3) BPU별: ${b.text}`); }
+  if (R.dims.bp && R.dims.bp.length > 1) { const b = topMoves(segMoves(['bp'], curIdx, cmpIdx), n => n[0] || '(기획전 없음)', dnFirst); if (b.text) L.push(`• 4) 기획전별: ${b.text}`); }
   return L;
 }
 function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
