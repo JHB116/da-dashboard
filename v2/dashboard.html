@@ -66,6 +66,10 @@ select,input[type=search],input[type=text]{font-size:13px;background:var(--surfa
 select{cursor:pointer;max-width:260px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;max-height:96px;overflow:auto;min-width:0;flex:1 1 400px}
 .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:999px;padding:3px 11px 3px 9px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.chips.long{max-height:220px;flex-basis:100%;align-items:flex-start}
+.chips.long .chip{white-space:normal;text-align:left;border-radius:10px;max-width:100%;word-break:break-all}
+.bar2.long{flex-wrap:wrap}
+.chip.off{opacity:.45;text-decoration:line-through}
 .chip i{width:8px;height:8px;border-radius:50%;background:var(--ink-2);opacity:.25}
 .chip[aria-pressed="true"]{color:var(--ink);font-weight:600;border-color:var(--ink-2);background:var(--surface)}
 .chip[aria-pressed="true"] i{background:var(--accent);opacity:1}
@@ -235,6 +239,12 @@ details.memo summary .hint{font-weight:400;margin-left:6px}
 .grid.dr tbody tr:hover td{background:#eef3ff!important}
 .grid.dr tbody tr.sel td{background:var(--mint-l)!important}
 .grid.dr tbody td.selc{background-color:var(--sel)!important}
+.grid.dr tbody tr td.roas{background:#f1ebff!important;color:#5b21b6;font-weight:800}
+.grid.dr tbody tr.tot td.roas{background:#e2d6ff!important}
+.grid.dr tbody tr.sel td.roas,.grid.dr tbody tr:hover td.roas{background:#e7dcff!important}
+.grid.dr tbody td.roas.selc{background-color:var(--sel)!important}
+.grid.dr thead th.roas{background:#e2d6ff!important;color:#4c1d95}
+.grid.dr thead th.roas b{color:#4c1d95}
 .grid.dr th.pno,.grid.dr td.pno{text-align:left;color:#374151;padding-left:6px;font-variant-numeric:tabular-nums}
 .grid tr.sel td{background-color:#EFF6FF!important}
 .grid tr.etc td{color:#64748B}
@@ -335,8 +345,10 @@ const $id = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const BUCKETS = [['TOTAL', 'TOTAL'], ['TOTAL(서비스비용미반영)', 'TOTAL(서비스비용 제외)'], ['거래액확대', '거래액확대'], ['신규고객확대', '신규고객확대'], ['인지도제고', '인지도제고'], ['상세', '비용출처(상세)']];
 // 필터 — 값 고르기(칩) · 이름 검색
-const FILT_DIMS = [['ch', '채널'], ['md', '매체'], ['pr', '상품'], ['bpu', '부서(BPU)'], ['cat', '카테고리'], ['dev', '디바이스'], ['tg', '대상여부'], ['at', '광고유형']];
-const NAME_DIMS = [['camp', '캠페인'], ['sub', '하위캠페인'], ['bp', '브랜드/기획전'], ['pno', '기획전번호']];
+const FILT_DIMS = [['ch', '채널'], ['md', '매체'], ['pr', '상품'], ['bpu', '부서(BPU)'], ['cat', '카테고리'], ['dev', '디바이스'], ['tg', '대상여부'], ['at', '광고유형'], ['camp', '캠페인'], ['sub', '하위캠페인']];
+const LONG_DIMS = new Set(['camp', 'sub']);     // 이름이 길고 많은 구분 — 칩을 줄바꿈해 전체 이름을 보이고, 최근 집행 순으로
+const CHIP_MAX = 300;                            // 한 번에 그리는 칩 수 (넘으면 찾기로 좁힘)
+const NAME_DIMS = [['bp', '브랜드/기획전'], ['pno', '기획전번호']];
 const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [[14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
 // 요약 화면 타일 · 차트 묶음
 const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt', 'crct']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa']]];
@@ -344,7 +356,7 @@ const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fc
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 14 }, bucket: 'TOTAL',
   filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'cost', cols: 'core', top: 20 }, sv: 4 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'cost', cols: 'core', top: 20 }, sv: 5 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -355,6 +367,7 @@ function load() {
     if (s) {
       if ((s.sv || 0) < 3) { s.range = { ...(s.range || {}), week: 8, day: 14 }; if (s.bucket === '') s.bucket = 'TOTAL'; if (s.page === 'period') s.page = 'summary'; s.sv = 3; }
       if (s.sv < 4) { if (s.drill) { delete s.drill.open; delete s.drill.hideSmall; } s.sv = 4; }   // 드릴다운: 다 펼친 상태 · 비교는 끈 상태가 기본
+      if (s.sv < 5) { if (s.names) { delete s.names.camp; delete s.names.sub; } s.sv = 5; }          // 캠페인 · 하위캠페인은 이름 검색 → 칩(찾기)으로
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
@@ -664,14 +677,13 @@ window.DA_GEMINI_RECEIVE = r => {
 window.DA_GEMINI_STATUS = () => { if (P && !memoEdit) { clearTimeout(aiTimer); aiTimer = setTimeout(() => document.querySelectorAll('details.memo[data-memo]').forEach(d => memoAsk(d.dataset.memo)), 1200); } };
 // 초안 문구 도우미
 const pctS = p => (p == null ? '–' : C.signed(p));
-const pp = (a, b) => (a == null || b == null ? null : (a - b) * 100);           // %p
-const ppS = d => (d == null ? '–' : `${d >= 0 ? '+' : '△'}${Math.abs(d).toFixed(1)}%p`);
 // ── 리뷰 메모: 데이터 점검 · 순결제 ROAS 판단 · 원인 분해 ─────────────────────
 // DA 로데이터에 들어오면 안 되는 매체(DA 페이먼츠 · DA 외 매체) — 이름에 이 말이 들어가면 점검에 표시 (소문자 비교)
 const SUSPECT_MEDIA = ['페이코', 'payco', '페이먼츠', '토스페이', '링크프라이스', '링크사', '검색광고', '쇼핑검색', '브랜드검색'];
 const mil1 = x => `${x < 0 ? '△' : ''}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
 const sgn1 = x => `${x >= 0 ? '+' : '△'}${C.fmtNum(Math.abs(x) / 1e6, 1)}백만`;
-const ppv = x => `${x >= 0 ? '+' : '△'}${Math.abs(x * 100).toFixed(1)}%p`;
+const pc1 = x => C.signed(x * 100);                // 비율(0.054) → '+5.4%' · '△5.4%'
+const shr = x => `${C.fmtNum(x * 100, 1)}%`;        // 비중 0.301 → '30.1%'
 const roasOf = t => (t && t.cost > 0 ? t.nrev / t.cost : null);
 const dshort = d => d.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/');
 function dateSpan(list) {             // ['2026-11-02', …] → '11/2~11/5' (끊기면 쉼표)
@@ -744,7 +756,21 @@ function factorText(a, b) {
   if (ctr[0] != null && ctr[1]) out.push(`(참고 CTR ${C.fmt(M.ctr, ctr[0])}, ${C.signed(C.pct(ctr[0], ctr[1]))})`);
   return { text: out.join(' · '), worst, best };
 }
-// 구간별 ROAS 기여(%p) — 합하면 전체 ROAS 변화와 같다: (거래액ᵢ − 비교ROAS × 광고비ᵢ) ÷ 전체 광고비 의 차이
+// 1) 지표별 기여 — ROAS = 곱이라 각 요인의 로그 변화 비율로 ROAS 변화율을 나눈다 → 다 더하면 ROAS 변화율
+function factorContrib(a, b, rel) {
+  const M = C.METRIC, rows = [];
+  for (const [k, n, inv] of FACTORS) {
+    const x = C.value(M[k], a, 'sum'), y = C.value(M[k], b, 'sum');
+    if (x == null || y == null || !(x > 0) || !(y > 0)) return null;           // 하나라도 없으면 합이 안 맞으니 쓰지 않는다
+    rows.push({ n, m: M[k], x, ch: x / y - 1, lg: Math.log(inv ? y / x : x / y) });
+  }
+  const lt = rows.reduce((s, r) => s + r.lg, 0), k = Math.abs(lt) < 1e-9 ? 1 : rel / lt;
+  for (const r of rows) r.c = r.lg * k;
+  return rows;
+}
+// 구간별 ROAS 기여 — 비교 ROAS(Rb) 대비 몇 % 움직였는지. 한 기준(매체 × 상품 · BPU · 기획전) 안에서 다 더하면 전체 ROAS 변화율
+//  기여ᵢ = [비중₁ × (ROAS₁ᵢ − Rb) − 비중₀ × (ROAS₀ᵢ − Rb)] ÷ Rb
+//        = 비중 이동 몫 (비중₁ − 비중₀) × (ROAS₀ᵢ − Rb) ÷ Rb  +  효율 몫 비중₁ × (ROAS₁ᵢ − ROAS₀ᵢ) ÷ Rb
 function segMoves(dims, cur, cmp, where = null) {
   const filt = { bucket: bucketArg(), where: { ...S.filt, ...(where || {}) }, names: S.names };
   const t = C.tree(R, filt, dims, [cur, cmp]), A = t.total[0], B = t.total[1], Rb = roasOf(B) || 0, L = dims.length - 1;
@@ -752,54 +778,57 @@ function segMoves(dims, cur, cmp, where = null) {
   for (const n of t.nodes.values()) {
     if (n.level !== L) continue;
     const a = n.s[0], b = n.s[1];
-    const contrib = (A.cost ? (a.nrev - Rb * a.cost) / A.cost : 0) - (B.cost ? (b.nrev - Rb * b.cost) / B.cost : 0);
+    const s1 = A.cost ? a.cost / A.cost : 0, s0 = B.cost ? b.cost / B.cost : 0;
+    const raw = (A.cost ? (a.nrev - Rb * a.cost) / A.cost : 0) - (B.cost ? (b.nrev - Rb * b.cost) / B.cost : 0);
+    const contrib = Rb ? raw / Rb : 0;
+    let mix, eff;
+    if (a.cost > 0 && b.cost > 0) { mix = (s1 - s0) * (b.nrev / b.cost - Rb) / (Rb || 1); eff = contrib - mix; }
+    else if (a.cost > 0 || b.cost > 0) { mix = contrib; eff = 0; }    // 새로 집행 · 집행 중단 = 비중 이동
+    else { mix = 0; eff = contrib; }                                   // 광고비 없이 거래액만
     const name = dims.map((d, i) => R.dims[d][+n.key.split('|')[i]]);
-    list.push({ n, a, b, name, contrib, dr: a.nrev - b.nrev, dc: a.cost - b.cost, isNew: !b.cost && !b.nrev });
+    list.push({ n, a, b, name, s0, s1, contrib, mix, eff, dr: a.nrev - b.nrev, dc: a.cost - b.cost, isNew: !b.cost && !b.nrev });
   }
-  return { list, A, B, t };
+  return { list, A, B, t, Rb };
 }
 const mdpr = ([md, pr]) => (!pr || String(md).replace(/\s/g, '').includes(String(pr).replace(/\s/g, '')) ? md : `${md} ${pr}`);
-function moveText(x, label) { return `${label}(ROAS 기여 ${ppv(x.contrib)} · 거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(C.METRIC.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`; }
+function moveText(x, label) { return `${label}(기여 ${pc1(x.contrib)} · 거래액 ${sgn1(x.dr)} · 광고비 ${sgn1(x.dc)} · ROAS ${x.a.cost > 0 ? C.fmt(C.METRIC.roas, x.a.nrev / x.a.cost) : '–'}${x.isNew ? ' · 신규' : ''})`; }
+// 올린 곳 · 내린 곳 상위 k 개 + 나머지 합 — 셋을 더하면 전체 ROAS 변화율
 function topMoves(ms, label, k = 2, minC = 0.002) {
   const up = ms.list.filter(x => x.contrib > minC).sort((a, b) => b.contrib - a.contrib).slice(0, k);
   const dn = ms.list.filter(x => x.contrib < -minC).sort((a, b) => a.contrib - b.contrib).slice(0, k);
-  return { up, dn, text: [up.length ? `플러스 ${up.map(x => moveText(x, label(x.name))).join(', ')}` : '', dn.length ? `마이너스 ${dn.map(x => moveText(x, label(x.name))).join(', ')}` : ''].filter(Boolean).join(' / ') };
-}
-// 믹스 효과 — 첫구매거래액 변화 = 규모(광고비) + 믹스(광고비 비중 이동) + 효율(구간별 첫구매거래액/광고비)
-function mixEffect(dim, cur, cmp) {
-  const filt = { bucket: bucketArg(), where: S.filt, names: S.names };
-  const t = C.tree(R, filt, [dim], [cur, cmp]);
-  const seg = [...t.nodes.values()].filter(n => n.s[0].cost > 0 || n.s[1].cost > 0);
-  const C1 = seg.reduce((s, n) => s + Math.max(n.s[0].cost, 0), 0), C0 = seg.reduce((s, n) => s + Math.max(n.s[1].cost, 0), 0);
-  const F1 = seg.reduce((s, n) => s + n.s[0].fpr, 0), F0 = seg.reduce((s, n) => s + n.s[1].fpr, 0);
-  if (!(C1 > 0 && C0 > 0 && F0 > 0)) return null;
-  const E0 = F0 / C0;
-  let mix = 0, rate = 0, top = null;
-  for (const n of seg) {
-    const s1 = Math.max(n.s[0].cost, 0) / C1, s0 = Math.max(n.s[1].cost, 0) / C0;
-    const e0 = n.s[1].cost > 0 ? n.s[1].fpr / n.s[1].cost : E0, e1 = n.s[0].cost > 0 ? n.s[0].fpr / n.s[0].cost : e0;
-    const m = C1 * (s1 - s0) * (e0 - E0);
-    mix += m; rate += C1 * s1 * (e1 - e0);
-    if (!top || Math.abs(m) > Math.abs(top.m)) top = { m, v: n.v, ds: s1 - s0, rel: e0 / E0 };
-  }
-  const vol = (C1 - C0) * E0, d = F1 - F0;
-  return { dim, vol, mix, rate, d, F0, F1, top };
+  const shown = new Set([...up, ...dn]), rest = ms.list.filter(x => !shown.has(x)), restC = rest.reduce((s, x) => s + x.contrib, 0);
+  const parts = [up.length ? `올린 곳 ${up.map(x => moveText(x, label(x.name))).join(', ')}` : '', dn.length ? `내린 곳 ${dn.map(x => moveText(x, label(x.name))).join(', ')}` : '',
+    rest.length && (up.length || dn.length) ? `그 외 ${rest.length}곳 합 ${pc1(restC)}` : ''].filter(Boolean);
+  return { up, dn, text: parts.join(' / ') };
 }
 function reviewDeep(curIdx, cmpIdx, cmpName) {
   const L = [], M = C.METRIC;
   if (!curIdx.length || !cmpIdx.length) return L;
   const all = segMoves(['md', 'pr'], curIdx, cmpIdx), A = all.A, B = all.B;
   const r0 = roasOf(A), r1 = roasOf(B);
-  if (r0 == null || r1 == null) return L;
-  const dR = r0 - r1, rel = r0 / r1 - 1;
+  if (r0 == null || !r1) return L;
+  const rel = r0 / r1 - 1, relS = pc1(rel);
   const verdict = Math.abs(rel) < 0.02 ? '보합' : rel > 0 ? '좋음' : '나쁨';
-  L.push(`[판단 · 순결제 ROAS 기준 — ${verdict}] ROAS(순결제) ${C.fmt(M.roas, r0)} vs ${cmpName} ${C.fmt(M.roas, r1)} (${ppv(dR)}, ${C.signed(rel * 100)})`);
-  // 1) 지표별
-  const f = factorText(A, B);
-  if (f.text) L.push(`• 1) 지표별: ${f.text}${verdict !== '보합' ? ` → ${verdict === '나쁨' ? `가장 크게 끌어내린 요인 ${f.worst ? f.worst[0] : '–'}` : `가장 크게 끌어올린 요인 ${f.best ? f.best[0] : '–'}`}` : ''}`);
-  // 2) 매체 × 상품
+  L.push(`[판단 · 순결제 ROAS 기준 — ${verdict}] ROAS(순결제) ${C.fmt(M.roas, r0)} vs ${cmpName} ${C.fmt(M.roas, r1)} (${relS})`);
+  L.push(`[읽는 법] '기여'는 ROAS 변화 ${relS}를 나눈 값(%). 같은 번호 안의 기여를 모두 더하면 ${relS}. 1)~4)는 같은 ${relS}를 서로 다른 기준으로 나눈 것이라 번호끼리는 더하지 않음`);
+  // 1) 지표별 — ROAS = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)
+  const fc = factorContrib(A, B, rel);
+  if (fc) {
+    const best = fc.reduce((x, y) => (y.c > x.c ? y : x)), worst = fc.reduce((x, y) => (y.c < x.c ? y : x));
+    const ctr = [C.value(M.ctr, A, 'sum'), C.value(M.ctr, B, 'sum')];
+    L.push(`• 1) 지표별(ROAS = 1/CPC × UV/클릭 × CR(총결제) × 순결제비중 × 객단가(순결제)): ${fc.map(r => `${r.n} ${C.fmt(r.m, r.x)}${r.m.kind === 'won' ? '원' : ''}(${pc1(r.ch)} → 기여 ${pc1(r.c)})`).join(' · ')} = 합계 ${relS}${verdict !== '보합' ? ` → 가장 크게 ${verdict === '나쁨' ? `끌어내린 요인 ${worst.n}` : `끌어올린 요인 ${best.n}`}` : ''}${ctr[0] != null && ctr[1] ? ` (참고 CTR ${C.fmt(M.ctr, ctr[0])}, ${C.signed(C.pct(ctr[0], ctr[1]))})` : ''} — CPC 는 오르면 ROAS 를 내림`);
+  }
+  // 2) 매체 × 상품 — 비중 이동(믹스) 몫 + 효율 몫 = 전체 변화
   const mp = topMoves(all, mdpr);
-  if (mp.text) L.push(`• 2) 매체 × 상품별: ${mp.text}`);
+  if (mp.text) {
+    L.push(`• 2) 매체 × 상품별: ${mp.text}`);
+    const mix = all.list.reduce((s, x) => s + x.mix, 0), eff = all.list.reduce((s, x) => s + x.eff, 0);
+    const share = v => (verdict !== '보합' ? `, 변화의 ${C.fmtNum(v / rel * 100, 0)}%` : '');
+    const tm = all.list.filter(x => Math.abs(x.mix) > 0.002).sort((a, b) => Math.abs(b.mix) - Math.abs(a.mix))[0];
+    const tmText = tm ? ` — 비중 이동이 가장 큰 곳 ${mdpr(tm.name)}(광고비 비중 ${shr(tm.s0)} → ${shr(tm.s1)}, ${cmpName} ROAS ${tm.b.cost > 0 ? C.fmt(M.roas, tm.b.nrev / tm.b.cost) : '–'}로 평균 ${C.fmt(M.roas, r1)}보다 ${tm.b.cost > 0 && tm.b.nrev / tm.b.cost >= r1 ? '높음' : '낮음'} → 기여 ${pc1(tm.mix)})` : '';
+    L.push(`  └ ${relS} = 광고비 비중 이동 몫 ${pc1(mix)}${share(mix)} + 매체 × 상품 자체 효율 변화 몫 ${pc1(eff)}${share(eff)}${tmText}`);
+    L.push(`    (비중 이동 = ROAS 가 평균보다 높거나 낮은 매체 × 상품으로 광고비가 옮겨가서 생긴 몫 · 효율 = 각 매체 × 상품의 ROAS 자체가 바뀐 몫)`);
+  }
   const issue = (verdict === '좋음' ? mp.up : mp.dn)[0] || mp.dn[0] || mp.up[0];
   if (issue) {
     const fx = factorText(issue.a, issue.b), [md, pr] = issue.name;
@@ -810,22 +839,9 @@ function reviewDeep(curIdx, cmpIdx, cmpName) {
     const ct = [cu.length ? `증가 ${cu.map(one).join(', ')}` : '', cd.length ? `감소 ${cd.map(one).join(', ')}` : ''].filter(Boolean).join(' / ');
     L.push(`  └ ${mdpr(issue.name)} 상세: ${fx.text || '비교 지표 없음'}${ct ? ` · 캠페인 ${ct}` : ''}`);
   }
-  // 3) BPU · 4) 기획전
+  // 3) BPU · 4) 기획전 — 각각 따로 더하면 전체 ROAS 변화율
   if (R.dims.bpu && R.dims.bpu.length > 1) { const b = topMoves(segMoves(['bpu'], curIdx, cmpIdx), n => n[0]); if (b.text) L.push(`• 3) BPU별: ${b.text}`); }
   if (R.dims.bp && R.dims.bp.length > 1) { const b = topMoves(segMoves(['bp'], curIdx, cmpIdx), n => n[0] || '(기획전 없음)'); if (b.text) L.push(`• 4) 기획전별: ${b.text}`); }
-  // 5) 믹스 효과 — 첫구매거래액. 특정 구간이 아니라 비중 이동 때문에 바뀐 몫이 클 때만
-  const fpNa = naYear(M.fpr, +R.dates[cmpIdx[0]].slice(0, 4));
-  if (!fpNa) {
-    const names = { md: '매체', bpu: 'BPU', bp: '기획전' };
-    for (const dim of ['md', 'bpu', 'bp']) {
-      if (!R.dims[dim] || R.dims[dim].length < 2) continue;
-      const e = mixEffect(dim, curIdx, cmpIdx);
-      if (!e || !e.top) continue;
-      if (Math.abs(e.mix) < Math.max(0.3 * Math.abs(e.d), 0.02 * e.F0)) continue;
-      const tp = e.top;
-      L.push(`• 5) 믹스 효과(${names[dim]}): 첫구매거래액 ${sgn1(e.d)} 중 ${names[dim]} 비중 이동 몫 ${sgn1(e.mix)} (규모 ${sgn1(e.vol)} · 효율 ${sgn1(e.rate)}) — 첫구매 효율이 평균의 ${C.fmtNum(tp.rel, 1)}배인 ${tp.v || '(빈 값)'}의 광고비 비중 ${ppv(tp.ds)}`);
-    }
-  }
   return L;
 }
 function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
@@ -842,11 +858,11 @@ function draftCards(c, sAt, sCmp, cmpName, cmpIdx, curIdx, tgt) {
     const dc = C.pct(sAt.cost, sCmp.cost), dr = C.pct(sAt.nrev, sCmp.nrev);
     let why = '';
     if (dc != null && dr != null && r1 != null) why = r0 < r1 ? ` — 광고비 증감(${pctS(dc)})이 거래액 증감(${pctS(dr)})보다 커서 효율이 낮아짐` : r0 > r1 ? ` — 거래액 증감(${pctS(dr)})이 광고비 증감(${pctS(dc)})보다 커서 효율이 좋아짐` : '';
-    L.push(`• ROAS(순결제) ${C.fmt(M.roas, r0)} (${cmpName} ${C.fmt(M.roas, r1)}, ${ppS(pp(r0, r1))})${why}`);
+    L.push(`• ROAS(순결제) ${C.fmt(M.roas, r0)} (${cmpName} ${C.fmt(M.roas, r1)}, ${pctS(C.pct(r0, r1))})${why}`);
   }
   if (tgt) {
     const ach = (a, b) => (a != null && b ? `${C.fmtNum(a / b * 100, 1)}%` : '–');
-    L.push(`• 목표 대비: 광고비 집행 ${ach(sAt.cost, tgt.spend)} · 거래액 달성 ${ach(sAt.nrev, tgt.rev)} · ROAS ${C.fmt(M.roas, r0)} (목표 ${C.fmt(M.roas, tgt.roas)}, ${ppS(pp(r0, tgt.roas))})`);
+    L.push(`• 목표 대비: 광고비 집행 ${ach(sAt.cost, tgt.spend)} · 거래액 달성 ${ach(sAt.nrev, tgt.rev)} · ROAS ${C.fmt(M.roas, r0)} (목표 ${C.fmt(M.roas, tgt.roas)}, ${pctS(C.pct(r0, tgt.roas))})`);
   }
   const acq = ['join', 'jcpa', 'fp', 'fcpa'].map(k => [M[k], v(k), w(k)]).filter(([, a]) => a != null);
   if (acq.length) L.push(`• 가입 · 첫구매: ${acq.map(([m, a, b]) => `${m.n} ${C.fmt(m, a, S.mode)}${C.unit(m, S.mode).startsWith('%') ? '' : C.unit(m, S.mode)} (${pctS(C.pct(a, b))})`).join(' · ')}`);
@@ -1084,8 +1100,9 @@ function renderDrill(main) {
   const v = (m, sm, yr) => vy(m, sm, yr);
   const cellRow = (n, dim) => ms.map(m => {
     const a = v(m, n.s[0], at.y);
-    if (!cmpOk || (dim && NO_DELTA_DIMS.has(dim))) return numCell(m, a);
-    return numCell(m, a, `<span class="sub">${deltaHTML(m, a, v(m, n.s[1], at.y - cmpY))}</span>`);
+    const cls = m.k === 'roas' ? 'roas' : '';       // ROAS(순결제)는 굵게 · 다른 색으로 강조
+    if (!cmpOk || (dim && NO_DELTA_DIMS.has(dim))) return numCell(m, a, '', cls);
+    return numCell(m, a, `<span class="sub">${deltaHTML(m, a, v(m, n.s[1], at.y - cmpY))}</span>`, cls);
   }).join('');
   const tg = new Set(D.tg), sortM = C.METRIC[D.sort] || C.METRIC.cost;
   const sortV = n => { const x = v(sortM, n.s[0], at.y); return x == null ? -Infinity : (sortM.lowerBetter ? -x : x); };
@@ -1120,7 +1137,7 @@ function renderDrill(main) {
   };
   walk('', 0);
   if (cut) body += `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">행이 많아 ${DRILL_MAX_ROWS.toLocaleString()}행까지만 보여 줍니다 — 단계별 상위 N 을 줄이거나 일부를 접으세요</td></tr>`;
-  $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${showPromo ? '<th class="pno">기획전번호</th>' : ''}${ms.map(m => `<th><b>${m.n}</b>${C.unit(m, S.mode)}</th>`).join('')}</tr></thead>
+  $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${showPromo ? '<th class="pno">기획전번호</th>' : ''}${ms.map(m => `<th${m.k === 'roas' ? ' class="roas"' : ''}><b>${m.n}</b>${C.unit(m, S.mode)}</th>`).join('')}</tr></thead>
     <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">조건에 맞는 항목이 없습니다</td></tr>`}</tbody>`;
   // 선택 항목 추이 (연도 겹쳐보기) — 기간 단계는 조건에서 뺀다, AF코드는 최근 92일만
   const selKey = D.sel && t.nodes.has(D.sel) ? D.sel : '';
@@ -1161,28 +1178,74 @@ function notes() {
 function filterSummary(noBucket = false) {     // noBucket: 상단바 필터 버튼 옆 (비용출처는 따로 보임)
   const p = [];
   if (!noBucket && S.bucket && S.bucket !== 'TOTAL' && R) p.push(bucketName());
-  for (const [k, n] of FILT_DIMS) { const v = S.filt[k]; if (v && R && R.dims[k]) p.push(v.length <= 2 ? `${n} ${v.join('·')}` : `${n} ${v.length}개`); }
+  const cut = x => (String(x).length > 24 ? String(x).slice(0, 23) + '…' : x);
+  for (const [k, n] of FILT_DIMS) { const v = S.filt[k]; if (v && R && R.dims[k]) p.push(v.length <= 2 ? `${n} ${v.map(cut).join('·')}` : `${n} ${v.length}개`); }
   for (const [k, n] of NAME_DIMS) if (S.names[k]) p.push(`${n} '${S.names[k]}'`);
   return p.join(' · ');
 }
 function filterCount() { return FILT_DIMS.filter(([k]) => S.filt[k]).length + NAME_DIMS.filter(([k]) => S.names[k]).length; }
 let chipQ = {};
+// 엑셀 피벗 테이블 필터처럼 — 다른 필터(자기 자신은 빼고 · 이름 검색 · 비용출처 포함)를 모두 만족하는 행에 있는 값만 고를 수 있다
+//  → { 구분키: { ok: Uint8Array(값 수), last: Int32Array(값 수, 마지막 날짜 번호) } }
+function filtAvail() {
+  const key = 'avail|' + filtKey();
+  if (cache[key]) return cache[key];
+  const conds = [];                  // [구분키 | null(늘 지켜야 하는 조건), 값 배열, 마스크]
+  const add = (k, okVals) => { const set = new Set(okVals); conds.push([k, R.f[k], Uint8Array.from(R.dims[k].map(v => (set.has(v) ? 1 : 0)))]); };
+  for (const [k, v] of Object.entries(S.filt)) if (v && R.dims[k]) add(k, v);
+  const hard = conds.length;
+  for (const [k, q] of Object.entries(S.names)) { const fn = C.nameMatcher(q); if (fn && R.dims[k]) add(k, R.dims[k].filter(fn)); }
+  const b = bucketArg();
+  if (b && C.COST_BUCKETS[b] && R.dims.src) add('src', C.bucketValues(R.dims.src, b));
+  for (let j = hard; j < conds.length; j++) conds[j][0] = null;
+  const dims = FILT_DIMS.map(([k]) => k).filter(k => R.dims[k] && R.dims[k].length > 1);
+  if (S.bucket === '상세' && R.dims.src) dims.push('src');
+  const out = {};
+  for (const k of dims) out[k] = { ok: new Uint8Array(R.dims[k].length), last: new Int32Array(R.dims[k].length).fill(-1) };
+  const cols = dims.map(k => R.f[k]), oks = dims.map(k => out[k].ok), lasts = dims.map(k => out[k].last), dIx = R.f.d;
+  const nc = conds.length;
+  rows: for (let i = 0; i < R.n; i++) {
+    let miss = null;
+    for (let c = 0; c < nc; c++) {
+      const [k, col, mask] = conds[c];
+      if (mask[col[i]]) continue;
+      if (k == null || miss != null) continue rows;     // 늘 지켜야 하는 조건을 어겼거나 두 개 이상 어김
+      miss = k;
+    }
+    const d = dIx[i];
+    for (let j = 0; j < dims.length; j++) {
+      if (miss != null && dims[j] !== miss) continue;   // 하나만 어긴 행은 그 구분의 값만 '고를 수 있음'
+      const v = cols[j][i];
+      oks[j][v] = 1; if (d > lasts[j][v]) lasts[j][v] = d;
+    }
+  }
+  return (cache[key] = out);
+}
 function renderFilt() {
   const el = $id('filtRows');
   $id('filtWrap').hidden = !S.filtOpen;
   if (!S.filtOpen || !R) return;
+  const av = filtAvail();
   let h = '';
   for (const [k, n] of FILT_DIMS) {
     const vals = R.dims[k];
     if (!vals || vals.length < 2) continue;
-    const sel = S.filt[k] ? new Set(S.filt[k]) : null, q = (chipQ[k] || '').toLowerCase();
-    const list = q ? vals.filter(v => v.toLowerCase().includes(q)) : vals;
-    h += `<div class="bar2"><span class="flabel">${n}</span>${vals.length > 12 ? `<input type="search" data-chipq="${k}" placeholder="${n} 찾기" value="${esc(chipQ[k] || '')}" style="width:120px">` : ''}
-      <div class="chips" role="group" aria-label="${n} 선택">${list.map(v => `<button class="chip" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`).join('')}</div>
-      <button class="lnk" data-fall="${k}">모두</button>${sel ? `<span class="hint">${sel.size}개 선택</span>` : ''}</div>`;
+    const sel = S.filt[k] ? new Set(S.filt[k]) : null, q = (chipQ[k] || '').toLowerCase(), A = av[k], long = LONG_DIMS.has(k);
+    // 다른 필터에 맞는 값 + 이미 고른 값(조건에 없으면 흐리게 — 눌러서 뺄 수 있게)
+    let ix = vals.map((v, i) => i).filter(i => A.ok[i] || (sel && sel.has(vals[i])));
+    const hidden = vals.length - ix.length;
+    if (long) ix.sort((a, b) => A.last[b] - A.last[a] || (vals[a] < vals[b] ? -1 : 1));    // 최근에 집행된 것부터
+    if (q) ix = ix.filter(i => String(vals[i]).toLowerCase().includes(q));
+    const more = ix.length > CHIP_MAX ? ix.length - CHIP_MAX : 0;
+    if (more) ix = ix.slice(0, CHIP_MAX);
+    const nOk = vals.length - hidden;
+    h += `<div class="bar2${long ? ' long' : ''}"><span class="flabel">${n}</span>${long || vals.length > 12 ? `<input type="search" data-chipq="${k}" placeholder="${n} 찾기" value="${esc(chipQ[k] || '')}" style="width:${long ? 180 : 120}px">` : ''}
+      <div class="chips${long ? ' long' : ''}" role="group" aria-label="${n} 선택">${ix.map(i => { const v = vals[i]; return `<button class="chip${A.ok[i] ? '' : ' off'}" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" title="${esc(v || '(빈 값)')}${A.ok[i] ? '' : ' — 다른 필터 조건에는 없음'}">${esc(v || '(빈 값)')}</button>`; }).join('')}${more ? `<span class="hint">외 ${more.toLocaleString()}개 — 찾기로 좁혀 주세요</span>` : ''}${q && !ix.length ? '<span class="hint">찾는 이름이 없습니다</span>' : ''}</div>
+      <button class="lnk" data-fall="${k}">모두</button><span class="hint">${sel ? `${sel.size}개 선택 · ` : ''}${hidden ? `${nOk.toLocaleString()}/${vals.length.toLocaleString()}개` : `${vals.length.toLocaleString()}개`}</span></div>`;
   }
   h += `<div class="bar2">${NAME_DIMS.filter(([k]) => R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
-    <button class="lnk" id="filtReset">필터 모두 해제</button></div>`;
+    <button class="lnk" id="filtReset">필터 모두 해제</button></div>
+    <p class="hint" style="margin:2px 0 6px">엑셀 피벗 필터처럼 다른 필터에 맞는 값만 보입니다(예: 매체 카카오 → 카카오에 있는 상품 · BPU · 디바이스 · 캠페인만). 캠페인 · 하위캠페인은 최근 집행 순.</p>`;
   el.innerHTML = h;
 }
 
@@ -1266,7 +1329,7 @@ function syncBar() {
   if (S.cu) { $id('cuR0').value = S.cu.r0; $id('cuR1').value = S.cu.r1; $id('cuC0').value = S.cu.c0; $id('cuC1').value = S.cu.c1; for (const id of ['cuR0', 'cuR1', 'cuC0', 'cuC1']) { $id(id).min = R.dates[0]; $id(id).max = lastDate(); } }
   // 비용출처(상세) — 원천의 비용출처 전체를 칩으로
   const sr = $id('srcRow'); $id('srcBar').hidden = S.bucket !== '상세';
-  if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null; sr.innerHTML = R.dims.src.map(v => `<button class="chip" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
+  if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null, A = (filtAvail().src || {}).ok; sr.innerHTML = R.dims.src.map((v, i) => (A && !A[i] && !(sel && sel.has(v)) ? '' : `<button class="chip${A && !A[i] ? ' off' : ''}" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`)).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
   // 범위: 요약 월별 · 직접 지정은 안 씀, 드릴다운은 기간(일 · 주 · 월) 단계를 골랐을 때만
   $id('fRange').hidden = !!S.cu || (S.page === 'summary' && S.grain === 'month') || (S.page === 'drill' && !drillHasPeriod());
   // 비교 기준: 드릴다운에서 '비교 표시'를 켰을 때만 (요약 카드 · 표는 전년 · 전전년 고정)
