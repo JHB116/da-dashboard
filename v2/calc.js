@@ -230,9 +230,9 @@
     const nd = ds.dates.length, K = sets.length, test = rowTest(ds, filt);
     const slots = sets.map(set => { const a = new Uint8Array(nd); for (const i of set) a[i] = 1; return a; });
     const cols = dims.map(k => ds.f[k]), F = BASE.map(m => ds.f[m]);
-    const zero = () => { const o = {}; for (const m of BASE) o[m] = 0; o._d = new Set(); return o; };
+    const zero = () => { const o = {}; for (const m of BASE) o[m] = 0; o._d = new Set(); o.first = Infinity; o.last = -1; return o; };   // first · last = 집행된 첫 · 마지막 날짜 번호
     const nodes = new Map(), total = sets.map(zero), hit = new Int8Array(K), pc = promo && ds.f[promo] ? ds.f[promo] : null;
-    const add = (o, i, d) => { for (let j = 0; j < BASE.length; j++) o[BASE[j]] += F[j][i]; o._d.add(d); };
+    const add = (o, i, d) => { for (let j = 0; j < BASE.length; j++) o[BASE[j]] += F[j][i]; o._d.add(d); if (d < o.first) o.first = d; if (d > o.last) o.last = d; };
     for (let i = 0; i < ds.n; i++) {
       const d = ds.f.d[i];
       let any = false;

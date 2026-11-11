@@ -284,6 +284,7 @@ header.top .brand{padding-block:8px}
 header.top .menu button{padding:10px 0 8px}
 header.top .bar2{padding-block:3px}
 header.top .bar2:last-child,#barRow{padding-bottom:7px}
+.topq{gap:10px}.topq label{display:inline-flex;align-items:center;gap:4px}.topq input{width:130px}
 header.top .seg button{padding:4px 12px}
 #filtWrap{border-top:1px dashed var(--grid);max-height:56vh;overflow:auto}
 #filtWrap #filtRows{border-top:0;max-height:none}
@@ -326,6 +327,7 @@ header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#
         <button data-set="cmp" data-v="yoy2" id="btnYoy2" title="728일 전 같은 요일">전전년</button>
         <button data-set="cmp" data-v="pop" id="btnPop" title="월 = 전월 같은 날짜 · 주 = 7일 전 · 일 = 하루 전">전월</button>
       </div>
+      <span class="field topq" id="topQ"><label>캠페인 <input type="search" data-name="camp" placeholder="캠페인명" title="포함(쉼표로 여러 개) · 제외는 -"></label><label>하위캠페인 <input type="search" data-name="sub" placeholder="하위캠페인명" title="포함(쉼표로 여러 개) · 제외는 -"></label><label>기획전번호 <input type="search" data-name="pno" placeholder="기획전번호" title="포함(쉼표로 여러 개) · 제외는 -" style="width:100px"></label></span>
       <button class="filt-tg" id="btnFilt" type="button" aria-expanded="false" aria-controls="filtWrap"><span class="filt-ic" aria-hidden="true">▸</span>필터<b id="filtN" hidden></b><span class="filt-sum" id="filtSum"></span></button>
     </div>
     <div id="filtWrap" hidden>
@@ -348,7 +350,8 @@ const BUCKETS = [['TOTAL', 'TOTAL'], ['TOTAL(서비스비용미반영)', 'TOTAL(
 const FILT_DIMS = [['ch', '채널'], ['md', '매체'], ['pr', '상품'], ['bpu', '부서(BPU)'], ['cat', '카테고리'], ['dev', '디바이스'], ['tg', '대상여부'], ['at', '광고유형'], ['camp', '캠페인'], ['sub', '하위캠페인']];
 const LONG_DIMS = new Set(['camp', 'sub']);     // 이름이 길고 많은 구분 — 칩을 줄바꿈해 전체 이름을 보이고, 최근 집행 순으로
 const CHIP_MAX = 300;                            // 한 번에 그리는 칩 수 (넘으면 찾기로 좁힘)
-const NAME_DIMS = [['bp', '브랜드/기획전'], ['pno', '기획전번호']];
+const NAME_DIMS = [['camp', '캠페인명'], ['sub', '하위캠페인명'], ['pno', '기획전번호'], ['bp', '브랜드/기획전']];
+const TOP_NAMES = new Set(['camp', 'sub', 'pno']);   // 상단바에 늘 보이는 이름 검색 (나머지는 필터 안)
 const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [[14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
 // 요약 화면 타일 · 차트 묶음
 const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt', 'crct']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa']]];
@@ -356,7 +359,7 @@ const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fc
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 14 }, bucket: 'TOTAL',
   filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'cost', cols: 'core', top: 20 }, sv: 5 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '' }, sv: 6 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -368,6 +371,7 @@ function load() {
       if ((s.sv || 0) < 3) { s.range = { ...(s.range || {}), week: 8, day: 14 }; if (s.bucket === '') s.bucket = 'TOTAL'; if (s.page === 'period') s.page = 'summary'; s.sv = 3; }
       if (s.sv < 4) { if (s.drill) { delete s.drill.open; delete s.drill.hideSmall; } s.sv = 4; }   // 드릴다운: 다 펼친 상태 · 비교는 끈 상태가 기본
       if (s.sv < 5) { if (s.names) { delete s.names.camp; delete s.names.sub; } s.sv = 5; }          // 캠페인 · 하위캠페인은 이름 검색 → 칩(찾기)으로
+      if (s.sv < 6) { if (s.drill) s.drill.sort = 'roas'; s.sv = 6; }   // 드릴다운 기본 정렬 = ROAS(순결제)
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
@@ -1031,6 +1035,9 @@ const NO_DELTA_DIMS = new Set(['camp', 'sub', 'pno', 'af', 'afn']);   // 매년 
 const PERIOD_DIMS = new Set(['pd', 'pw', 'pm']);
 const AF_DIMS = new Set(['af', 'afn']);
 const DRILL_MAX_ROWS = 3000;
+// 정렬 — 지표 외에 기간(집행 시작일, 기간 단계는 날짜) · 이름
+const DRILL_SORTS = [['p_asc', '기간(오름차순)'], ['p_desc', '기간(내림차순)'], ['n_asc', '이름(오름차순)'], ['n_desc', '이름(내림차순)']];
+const nameCmp = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' }).compare;
 // 기간(일 · 주 · 월) 단계 — 날짜에서 만드는 가상 구분 (값 이름이 날짜순으로 정렬되게)
 function addPeriodDims(ds) {
   const y2 = d => d.slice(2).replace(/-/g, '.');
@@ -1069,7 +1076,10 @@ function renderDrill(main) {
   const cur = mapIdx(ds, curR), cmpIdx = mapIdx(ds, cmpR);
   const cmpOk = cmpWant && cmpIdx.length && cmpIdx.length >= cmpR.length;
   const cmpL = c.custom ? '비교 기간' : C.cmpLabel(cmp, S.grain), cmpY = c.custom ? 0 : cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0;
-  const filt = { bucket: bucketArg(), where: S.filt, names: S.names };
+  // 드릴다운 기획전번호 검색 — 그 기획전번호 행만 집계 (쉼표로 여러 개 · 제외는 -)
+  const pqFn = C.nameMatcher(D.pq), pnoV = v => String(v == null ? '' : v).replace(/\.0$/, '');
+  const where = pqFn && ds.dims.pno ? { ...S.filt, pno: ds.dims.pno.filter(v => pqFn(pnoV(v))) } : S.filt;
+  const filt = { bucket: bucketArg(), where, names: S.names };
   const promoAt = D.dims.findIndex(d => ['camp', 'sub', 'bp', 'af', 'afn'].includes(d));
   const showPromo = promoAt >= 0 && !D.dims.includes('pno') && ds.dims.pno;
   const t = C.tree(ds, filt, D.dims, cmpOk ? [cur, cmpIdx] : [cur], showPromo ? 'pno' : null);
@@ -1083,11 +1093,12 @@ function renderDrill(main) {
   if (useAf) notes.push(`AF코드는 최근 ${P.af.dates.length}일(${P.af.dates[0]} ~ ${P.af.dates[P.af.dates.length - 1]})만 담겨 있어${cur.length < curR.length ? ` 이 기간 중 ${cur.length}일만` : ''} 계산합니다`);
   if (D.cmp && hasPeriod) notes.push('기간 단계가 있으면 비교는 표시하지 않습니다');
   else if (D.cmp && !cmpOk) notes.push(`${cmpL} 데이터가 없어 비교를 표시하지 않습니다`);
-  main.innerHTML = `<section><div class="sec-h"><h2>드릴다운 · ${esc(title)}</h2><span class="desc">${esc(span)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 실적 ${t.total[0].days}일${cmpOk ? ` vs ${cmpL} ${t.total[1].days}일` : ''} · 비용출처 ${esc(bucketName())} · 이름을 누르면 아래에 추이</span></div>
+  setHTMLKeep(main, `<section><div class="sec-h"><h2>드릴다운 · ${esc(title)}</h2><span class="desc">${esc(span)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 실적 ${t.total[0].days}일${cmpOk ? ` vs ${cmpL} ${t.total[1].days}일` : ''} · 비용출처 ${esc(bucketName())} · 이름을 누르면 아래에 추이</span></div>
     <div class="card pad"><div class="bar2" style="padding:0">
       <span class="field">단계 ${Array.from({ length: slots }, (_, L) => dimSel(L)).join(' › ')}</span>
       <label class="field">검색 <input type="search" id="drQ" placeholder="매체 · 캠페인 이름" value="${esc(D.q || '')}"></label>
-      <label class="field">정렬 <select id="drSort">${ms.map(m => `<option value="${m.k}"${D.sort === m.k ? ' selected' : ''}>${m.n}</option>`).join('')}</select></label>
+      ${ds.dims.pno ? `<label class="field" title="그 기획전번호 행만 집계합니다 · 쉼표로 여러 개 · 제외는 -">기획전번호 <input type="search" id="drPq" placeholder="기획전번호" value="${esc(D.pq || '')}" style="width:110px"></label>` : ''}
+      <label class="field">정렬 <select id="drSort">${ms.map(m => `<option value="${m.k}"${D.sort === m.k ? ' selected' : ''}>${m.n}</option>`).join('')}<optgroup label="기간 · 이름">${DRILL_SORTS.map(([k, n]) => `<option value="${k}"${D.sort === k ? ' selected' : ''}>${n}</option>`).join('')}</optgroup></select></label>
       <label class="field">단계별 <select id="drTop">${[[10, '상위 10'], [20, '상위 20'], [50, '상위 50'], [0, '전체']].map(([v, l]) => `<option value="${v}"${+D.top === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field" title="노출이 없는(집행되지 않은) 항목을 숨깁니다 — 기존 대시보드와 같은 기준. 노출 없이 비용 · 매출만 있는 서비스비용 같은 항목도 숨겨지니 합계와 맞춰 볼 때는 끄세요"><input type="checkbox" id="drImp"${D.impOnly ? ' checked' : ''}> 노출수 0 초과만 보기</label>
       <label class="field" title="각 칸 아래에 비교 기간 대비 증감 — 비교 기준은 위쪽 조작 줄에서"><input type="checkbox" id="drCmp"${D.cmp ? ' checked' : ''}> 비교 표시</label>
@@ -1095,8 +1106,8 @@ function renderDrill(main) {
       <button class="lnk" id="drExp" type="button">${D.exp === 'all' && !D.tg.length ? '모두 접기' : '모두 펼치기'}</button>
       <button class="btn" data-csv-for="drTbl" data-name="DA_드릴다운_${esc(at.key)}">CSV</button>
     </div>${notes.length ? `<p class="hint" style="margin:6px 0 0">${notes.map(esc).join(' · ')}</p>` : ''}</div></section>
-    <section><div class="card tbl-wrap"><table class="grid dr" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">${cmpOk ? `칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 · AF코드 단계는 매년 바뀌어 증감을 달지 않습니다 · ` : ''}단계별 상위 N = 정렬 지표 기준 · 숫자 칸 드래그 = 합계</p></section>
-    <section id="drSelSec"></section>`;
+    <section><div class="card tbl-wrap"><table class="grid dr" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">${cmpOk ? `칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 · AF코드 단계는 매년 바뀌어 증감을 달지 않습니다 · ` : ''}단계별 상위 N = 정렬 순서 기준 · ▸ ▾ 로 접고 펴기 · 숫자 칸 드래그 = 합계</p></section>
+    <section id="drSelSec"></section>`);
   const v = (m, sm, yr) => vy(m, sm, yr);
   const cellRow = (n, dim) => ms.map(m => {
     const a = v(m, n.s[0], at.y);
@@ -1104,8 +1115,18 @@ function renderDrill(main) {
     if (!cmpOk || (dim && NO_DELTA_DIMS.has(dim))) return numCell(m, a, '', cls);
     return numCell(m, a, `<span class="sub">${deltaHTML(m, a, v(m, n.s[1], at.y - cmpY))}</span>`, cls);
   }).join('');
-  const tg = new Set(D.tg), sortM = C.METRIC[D.sort] || C.METRIC.cost;
+  const tg = new Set(D.tg), sortM = C.METRIC[D.sort] || C.METRIC.roas;
   const sortV = n => { const x = v(sortM, n.s[0], at.y); return x == null ? -Infinity : (sortM.lowerBetter ? -x : x); };
+  const byName = (a, b) => nameCmp(String(a.v ?? ''), String(b.v ?? ''));
+  // 기간 단계는 이름이 곧 날짜순, 다른 단계는 집행 시작일(같으면 마지막 집행일) 순
+  const byPeriod = isP => (a, b) => (isP ? byName(a, b) : (a.s[0].first - b.s[0].first) || (a.s[0].last - b.s[0].last) || byName(a, b));
+  const sortKids = (kids, isP) => {
+    const k = D.sort, desc = k.endsWith('_desc');
+    if (k[0] === 'p' && k[1] === '_') { const f = byPeriod(isP); kids.sort(desc ? (a, b) => f(b, a) : f); }
+    else if (k[0] === 'n' && k[1] === '_') kids.sort(desc ? (a, b) => byName(b, a) : byName);
+    else if (isP) kids.sort(byName);                                        // 지표 정렬이어도 기간 단계는 날짜순
+    else kids.sort((a, b) => sortV(b) - sortV(a));
+  };
   const matches = new Set(), direct = new Set();
   if (q) for (const n of t.nodes.values()) if (String(n.v).toLowerCase().includes(q)) { direct.add(n.key); let k = n.key; for (;;) { matches.add(k); const j = k.lastIndexOf('|'); if (j < 0) break; k = k.slice(0, j); } }
   const visible = key => { if (matches.has(key)) return true; let k = key; while (k.includes('|')) { k = k.slice(0, k.lastIndexOf('|')); if (direct.has(k)) return true; } return false; };
@@ -1116,14 +1137,14 @@ function renderDrill(main) {
     const dim = D.dims[level], isP = PERIOD_DIMS.has(dim);
     kids = kids.filter(n => n.s[0].days > 0 && (isP || !D.impOnly || n.s[0].imp > 0));
     if (q) kids = kids.filter(n => visible(n.key));
-    if (isP) kids.sort((a, b) => (a.v < b.v ? -1 : a.v > b.v ? 1 : 0));        // 기간은 날짜순, 모두 보인다
-    else kids.sort((a, b) => sortV(b) - sortV(a));
+    sortKids(kids, isP);
     const top = isP ? 0 : +D.top || 0, extra = top && kids.length > top ? kids.slice(top) : [];
     if (extra.length) kids = kids.slice(0, top);
     for (const n of kids) {
       if (rows >= DRILL_MAX_ROWS) { cut++; continue; }
       const canOpen = level < D.dims.length - 1;
-      const isOpen = canOpen && ((D.exp === 'all') !== tg.has(n.key) || (!!q && matches.has(n.key) && !direct.has(n.key)));
+      const base = D.exp === 'all' || (!!q && matches.has(n.key) && !direct.has(n.key));
+      const isOpen = canOpen && base !== tg.has(n.key);
       const pno = showPromo && level >= promoAt ? pnoName(n.pk) : '';
       rows++;
       body += `<tr data-key="${esc(n.key)}" class="d${Math.min(level, 7)}${D.sel === n.key ? ' sel' : ''}"><td style="padding-left:${10 + level * 18}px" data-csv="${esc('  '.repeat(level) + n.v)}">${canOpen ? `<button class="tw" data-tw="${esc(n.key)}" aria-expanded="${isOpen}" aria-label="${isOpen ? '접기' : '펼치기'}">${isOpen ? '▾' : '▸'}</button>` : '<span class="tw"></span>'}<button class="nm" data-dsel="${esc(n.key)}" title="${esc(n.v)}">${esc(n.v || '(빈 값)')}</button></td>${showPromo ? `<td class="pno">${esc(pno)}</td>` : ''}${cellRow(n, n.dim)}</tr>`;
@@ -1144,8 +1165,7 @@ function renderDrill(main) {
   const name = selKey ? selKey.split('|').map((ix, L) => ds.dims[D.dims[L]][+ix] || '(빈 값)').join(' › ') : '합계';
   const kw = selKey ? C.keyWhere(ds, D.dims, selKey) : {};
   for (const k of PERIOD_DIMS) delete kw[k];
-  const where = { ...S.filt, ...kw };
-  let s2 = C.daily(ds, { bucket: bucketArg(), where, names: S.names });
+  let s2 = C.daily(ds, { bucket: bucketArg(), where: { ...where, ...kw }, names: S.names });
   if (ds !== R) {                                    // AF 날짜 → 전체 날짜 축
     const o = C.emptySeries(R.dates.length);
     ds.dates.forEach((d, i) => { const j = R.byNum.get(ds.dn[i]); if (j == null) return; for (const m of C.BASE) o[m][j] = s2[m][i]; o.has[j] = s2.has[i]; });
@@ -1221,6 +1241,24 @@ function filtAvail() {
   }
   return (cache[key] = out);
 }
+// 다시 그릴 때 입력 중인 검색 칸(포커스)은 DOM 에서 빼지 않고 둘레만 바꾼다
+//  → 칸을 새로 만들면 한글 조합이 끊겨 'ㄹㅓㄱㅅㅕ'처럼 자모가 풀려 들어간다
+function setHTMLKeep(el, html) {
+  const a = document.activeElement;
+  const sel = a && a.tagName === 'INPUT' && el.contains(a) ? (a.id ? '#' + CSS.escape(a.id) : [...a.attributes].filter(x => x.name.startsWith('data-')).map(x => `[${x.name}="${CSS.escape(x.value)}"]`).join('')) : '';
+  const tpl = document.createElement('div'); tpl.innerHTML = html;
+  const ni = sel ? tpl.querySelector(sel) : null;
+  const oc = [], nc = [];
+  if (ni) { for (let n = a; n !== el; n = n.parentNode) oc.push(n); for (let n = ni; n !== tpl; n = n.parentNode) nc.push(n); }
+  if (!ni || oc.length !== nc.length) { el.innerHTML = html; return; }
+  for (let L = oc.length - 1; L >= 0; L--) {
+    const OP = L === oc.length - 1 ? el : oc[L + 1], NP = L === nc.length - 1 ? tpl : nc[L + 1], o = oc[L], n = nc[L];
+    [...OP.childNodes].forEach(x => { if (x !== o) x.remove(); });
+    while (NP.firstChild !== n) OP.insertBefore(NP.firstChild, o);
+    while (n.nextSibling) OP.appendChild(n.nextSibling);
+    if (o !== a) { for (const at of [...o.attributes]) if (!n.hasAttribute(at.name)) o.removeAttribute(at.name); for (const at of [...n.attributes]) o.setAttribute(at.name, at.value); }
+  }
+}
 function renderFilt() {
   const el = $id('filtRows');
   $id('filtWrap').hidden = !S.filtOpen;
@@ -1243,10 +1281,10 @@ function renderFilt() {
       <div class="chips${long ? ' long' : ''}" role="group" aria-label="${n} 선택">${ix.map(i => { const v = vals[i]; return `<button class="chip${A.ok[i] ? '' : ' off'}" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" title="${esc(v || '(빈 값)')}${A.ok[i] ? '' : ' — 다른 필터 조건에는 없음'}">${esc(v || '(빈 값)')}</button>`; }).join('')}${more ? `<span class="hint">외 ${more.toLocaleString()}개 — 찾기로 좁혀 주세요</span>` : ''}${q && !ix.length ? '<span class="hint">찾는 이름이 없습니다</span>' : ''}</div>
       <button class="lnk" data-fall="${k}">모두</button><span class="hint">${sel ? `${sel.size}개 선택 · ` : ''}${hidden ? `${nOk.toLocaleString()}/${vals.length.toLocaleString()}개` : `${vals.length.toLocaleString()}개`}</span></div>`;
   }
-  h += `<div class="bar2">${NAME_DIMS.filter(([k]) => R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
+  h += `<div class="bar2">${NAME_DIMS.filter(([k]) => !TOP_NAMES.has(k) && R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
     <button class="lnk" id="filtReset">필터 모두 해제</button></div>
     <p class="hint" style="margin:2px 0 6px">엑셀 피벗 필터처럼 다른 필터에 맞는 값만 보입니다(예: 매체 카카오 → 카카오에 있는 상품 · BPU · 디바이스 · 캠페인만). 캠페인 · 하위캠페인은 최근 집행 순.</p>`;
-  el.innerHTML = h;
+  setHTMLKeep(el, h);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1335,6 +1373,8 @@ function syncBar() {
   // 비교 기준: 드릴다운에서 '비교 표시'를 켰을 때만 (요약 카드 · 표는 전년 · 전전년 고정)
   $id('fCmp').hidden = $id('segCmp').hidden = S.page !== 'drill' || !S.drill.cmp || !!S.cu || drillHasPeriod();
   $id('selRange').innerHTML = RANGES[S.grain].map(([v, l]) => `<option value="${v}"${String(S.range[S.grain]) === String(v) ? ' selected' : ''}>${l}</option>`).join('');
+  // 상단바 이름 검색 — 입력 중인 칸은 건드리지 않는다 (한글 조합이 깨지지 않게)
+  document.querySelectorAll('#topQ [data-name]').forEach(n => { const k = n.dataset.name; n.closest('label').hidden = !(R.dims[k] && R.dims[k].length > 1); if (n !== document.activeElement) n.value = S.names[k] || ''; });
   const nf = filterCount();
   $id('filtSum').textContent = filterSummary(true) || '채널 · 매체 · 상품 · 캠페인 …';
   $id('filtN').hidden = !nf; $id('filtN').textContent = nf;
@@ -1433,16 +1473,17 @@ document.addEventListener('change', e => {
 let qTimer = null;
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.dataset.chipq) { chipQ[t.dataset.chipq] = t.value; const k = t.dataset.chipq, pos = t.selectionStart; renderFilt(); const n = document.querySelector(`[data-chipq="${k}"]`); if (n) { n.focus(); n.setSelectionRange(pos, pos); } return; }
+  if (t.dataset.chipq) { chipQ[t.dataset.chipq] = t.value; renderFilt(); return; }
+  if (t.id === 'drPq') { clearTimeout(qTimer); qTimer = setTimeout(() => { S.drill.pq = t.value.trim(); S.drill.sel = ''; render(true); }, 300); return; }
   if (t.id === 'drQ') {
     clearTimeout(qTimer);
-    qTimer = setTimeout(() => { S.drill.q = t.value; render(true); const n = $id('drQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 300);
+    qTimer = setTimeout(() => { S.drill.q = t.value; render(true); }, 300);
     return;
   }
   if (t.dataset.name) {
     clearTimeout(qTimer);
     const k = t.dataset.name;
-    qTimer = setTimeout(() => { if (t.value.trim()) S.names[k] = t.value.trim(); else delete S.names[k]; render(true); const n = document.querySelector(`[data-name="${k}"]`); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 400);
+    qTimer = setTimeout(() => { if (t.value.trim()) S.names[k] = t.value.trim(); else delete S.names[k]; render(true); }, 400);
   }
 });
 // 끌어다 놓기
