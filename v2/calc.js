@@ -411,25 +411,26 @@
     return v.toLocaleString('ko-KR', { minimumFractionDigits: dp, maximumFractionDigits: dp });
   }
   // 광고비·거래액 = 백만원 소수 1자리 · CPA·CPC 등 = 원 · ROAS = % 정수 · 비율 = % (지표별 자릿수) · 수 = 정수(일평균은 소수 1자리)
-  function fmt(m, v, mode) {
+  // won = true → 광고비·거래액도 원 단위 전체 숫자 (표의 '원 단위' 보기)
+  function fmt(m, v, mode, won) {
     if (v == null || !isFinite(v)) return '–';
-    if (m.kind === 'money') return fmtNum(v / 1e6, 1);
+    if (m.kind === 'money') return won ? fmtNum(v, 0) : fmtNum(v / 1e6, 1);
     if (m.kind === 'won') return fmtNum(v, 0);
     if (m.kind === 'roas') return fmtNum(v * 100, 0) + '%';
     if (m.kind === 'ratio') return fmtNum(v * 100, m.dp != null ? m.dp : 2) + '%';
     return fmtNum(v, mode === 'avg' && Math.abs(v) < 1000 ? 1 : 0);
   }
-  function unit(m, mode) {
+  function unit(m, mode, won) {
     const per = mode === 'avg' ? '/일' : '';
-    if (m.kind === 'money') return '백만원' + per;
+    if (m.kind === 'money') return (won ? '원' : '백만원') + per;
     if (m.kind === 'won') return '원';
     if (m.kind === 'roas' || m.kind === 'ratio') return '%';
     return (m.k === 'imp' || m.k === 'clk' || m.k === 'uv' ? '' : '명') + per;
   }
   // 차트 축 값
-  function scaled(m, v) {
+  function scaled(m, v, won) {
     if (v == null || !isFinite(v)) return null;
-    if (m.kind === 'money') return v / 1e6;
+    if (m.kind === 'money') return won ? v : v / 1e6;
     if (m.kind === 'roas' || m.kind === 'ratio') return v * 100;
     return v;
   }
