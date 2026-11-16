@@ -346,7 +346,7 @@
     const files = [...(sb.files || []), ...(sa.files || [])];
     const source = {
       files, files24: (sa.files24 && sa.files24.length ? sa.files24 : sb.files24) || [], lock,
-      missing: [...new Set([...(sb.missing || []), ...(sa.missing || [])])].sort(),
+      ...mergeMissing(sb, sa, addLock),
       from: dates[0], to: dates[dates.length - 1], days: dates.length, rows: row.n,
     };
     const replaced = B.dates.filter(d => addDates.has(d) || (addLock && d <= lock)).length;
@@ -355,6 +355,16 @@
       row, af: mergeAf(base.af, add.af, source.to), quality: mergeQuality(base.quality, add.quality, addDates),
       merged: { added: addDates.size - B.dates.filter(d => addDates.has(d)).length, replaced, kept: keepB.filter(Boolean).length, ignored: keepA.filter(x => !x).length },
     };
+  }
+  // 원천에 없던 지표 — 24년 고정 구간(missing24)과 매일 구간(missingRow)을 따로 둔다
+  //  24년 파일을 다시 넣으면 missing24 는 새 파일 것으로 교체(예전 24년 파일에 없던 지표가 새 파일에 생긴 경우)
+  //  예전 백업(missing 하나뿐): 고정 구간이 있으면 그 목록을 24년 것으로 본다
+  const miss24 = s => s.missing24 || (s.lock ? s.missing || [] : []);
+  const missRow = s => s.missingRow || (s.missing24 || s.lock ? [] : s.missing || []);
+  function mergeMissing(sb, sa, addLock) {
+    const m24 = [...new Set(addLock ? miss24(sa) : miss24(sb))].sort();
+    const mRow = [...new Set([...missRow(sb), ...missRow(sa)])].sort();
+    return { missing: [...new Set([...m24, ...mRow])].sort(), missing24: m24, missingRow: mRow };
   }
   // 원천 점검(완전히 같은 행) — 새 백업이 다룬 날짜는 새 결과로
   function mergeQuality(B, A, addDates) {

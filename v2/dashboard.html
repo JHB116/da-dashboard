@@ -611,7 +611,7 @@ function cuShift(cur) {
 }
 const cuYear = () => (S.cu ? +S.cu.c0.slice(0, 4) : 0);
 // 원천에 지표 컬럼이 없던 24년(24년 파일)은 0 대신 '–'
-function naYear(m, yr) { const src = P.source || {}; return !!src.lock && yr <= +src.lock.slice(0, 4) && m.base.some(b => (src.missing || []).includes(b)); }
+function naYear(m, yr) { const src = P.source || {}; return !!src.lock && yr <= +src.lock.slice(0, 4) && m.base.some(b => (src.missing24 || src.missing || []).includes(b)); }
 const vy = (m, sums, yr) => (sums && sums.days && !naYear(m, yr) ? val(m, sums) : null);
 const ymd = d => d.slice(2).replace(/-/g, '.');
 const lastDate = () => R.dates[R.dates.length - 1];

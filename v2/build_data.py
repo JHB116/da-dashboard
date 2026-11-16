@@ -520,6 +520,16 @@ def _read_group(paths: list, use_cache: bool, until: str | None = None, af_out: 
     return latest_wins(frames), files, missing
 
 
+def _missing(prev: dict, miss: set, miss24: set, new24: bool) -> dict:
+    """원천에 없던 지표 — 24년 고정 구간(missing24) · 매일 구간(missingRow)을 따로. 24년 파일을 새로 넣으면 missing24 는 그 파일 것으로 교체.
+    예전 백업(missing 하나뿐)은 고정 구간이 있으면 그 목록을 24년 것으로 본다 (calc.js mergeMissing 과 같다)"""
+    p24 = prev.get('missing24', prev.get('missing', []) if prev.get('lock') else [])
+    prow = prev.get('missingRow', [] if ('missing24' in prev or prev.get('lock')) else prev.get('missing', []))
+    m24 = set(miss24) if new24 else set(p24)
+    mrow = set(prow) | set(miss)
+    return {'missing': sorted(m24 | mrow), 'missing24': sorted(m24), 'missingRow': sorted(mrow)}
+
+
 def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool = True) -> dict:
     """원천 파일들(+기존 백업) → 백업 payload.
     - y24_paths: 24년 파일 — LOCK_UNTIL 까지만 쓰고 그 구간을 '고정'으로 표시
@@ -570,7 +580,7 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
         'files': (prev.get('files', []) if base_row else []) + files,
         'files24': y24_files or (prev.get('files24', []) if base_row else []),
         'lock': lock,
-        'missing': sorted((set(prev.get('missing', [])) if base_row else set()) | miss | miss24),
+        **_missing(prev if base_row else {}, miss, miss24, bool(y24_files)),
         'from': sec['dates'][0], 'to': sec['dates'][-1], 'days': len(dates), 'rows': int(len(g)),
     }
     log(f'[백업] 집계 {len(g):,}행 · {len(dates)}일 ({src["from"]} ~ {src["to"]})' + (f' · 고정 ~{lock}' if lock else ''))
