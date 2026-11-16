@@ -99,12 +99,31 @@ ROW_METRICS = {
     '지표_순결제거래액(PT)': 'pt',
     '지표_순결제거래액(SP)': 'sp',
 }
+# 같은 지표가 원천마다 다른 이름으로 오는 경우 (24년 로우 등) — ROW_METRICS 이름에 값이 없으면 이 후보를 앞에서부터 쓴다
+METRIC_ALIASES = {
+    '지표_당년신규순결제고객수': ['지표_순결제고객수(당년신규)', '순결제 고객수(당년신규)'],
+    '지표_당년신규순결제거래액': ['지표_순결제거래액(당년신규)', '순결제 거래액(당년신규)'],
+    '지표_순결제고객수(첫구매)': ['순결제 고객수(첫구매)'],
+    '지표_순결제거래액(첫구매)': ['순결제 거래액(첫구매)'],
+    '지표_순결제고객수(윈백)': ['순결제 고객수(윈백)'],
+    '지표_순결제거래액(윈백)': ['순결제 거래액(윈백)'],
+    '지표_총결제고객수(윈백)': ['총결제 고객수(윈백)'],
+    '지표_총결제거래액(윈백)': ['총결제 거래액(윈백)'],
+    '지표_순결제거래액(RD)': ['순결제 거래액(RD)'],
+    '지표_순결제거래액(PP)': ['순결제 거래액(PP)'],
+    '지표_순결제거래액(BK)': ['순결제 거래액(BK)'],
+    '지표_순결제거래액(SV)': ['순결제 거래액(SV)'],
+    '지표_순결제거래액(GD)': ['순결제 거래액(GD)'],
+    '지표_순결제거래액(PT)': ['순결제 거래액(PT)'],
+    '지표_순결제거래액(SP)': ['순결제 거래액(SP)'],
+}
+METRIC_SRC = {src: [src, *METRIC_ALIASES.get(src, [])] for src in ROW_METRICS}
 METS = list(ROW_METRICS.values())
 OPTIONAL = {'vv', 'rd', 'pp', 'bk', 'sv', 'gd', 'pt', 'sp'}   # 일부 원천에만 있는 지표 — 없어도 경고하지 않는다
 # 원천에 컬럼이 없을 때 기존 대시보드와 같은 기본값 (구분)
 DIM_DEFAULT = {'af': '', 'afn': '', 'at': 'DA', 'tg': '대상', 'src': '기타', 'ch': '기타', 'dev': '기타', 'bpu': '기타', 'cat': '기타',
                'camp': '기타', 'md': '기타', 'sub': '', 'pr': '', 'pno': '', 'bp': ''}
-WANT_SRC = [ROW_DATE] + [c for cands in [*ROW_DIMS.values(), *AF_DIMS.values()] for c in cands] + list(ROW_METRICS)
+WANT_SRC = [ROW_DATE] + [c for cands in [*ROW_DIMS.values(), *AF_DIMS.values()] for c in cands] + [c for cands in METRIC_SRC.values() for c in cands]
 CHUNK = 20_000
 ROW_EXT = ('.xlsb', '.csv', '.xlsx', '.xlsm')
 
@@ -257,9 +276,10 @@ def prep(raw: pd.DataFrame) -> tuple[pd.DataFrame, set]:
         df[k] = clean_dim(raw[col], DIM_DEFAULT[k])
     seen = set()
     for src, k in ROW_METRICS.items():
-        if raw[src].notna().any():
+        col = next((c for c in METRIC_SRC[src] if raw[c].notna().any()), None)
+        if col is not None:
             seen.add(k)
-        df[k] = to_num(raw[src])
+        df[k] = to_num(raw[col or src])
     bad = int(df['date'].isna().sum())
     if bad:
         log(f'  ! 날짜를 읽지 못한 행 {bad:,}개 제외')
@@ -270,7 +290,7 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     """원천 → (일자 × 구분) 합산 DataFrame, 원천에 없던 지표 키[, 최근 AF_DAYS 일의 (일자 × 구분 × AF코드) 합산].
     덩어리마다 바로 합산해 메모리를 아낀다. xlsb · csv · xlsx 는 data/cache/ 에 결과를 캐시"""
     path = Path(path)
-    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v3.pkl'
+    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v4.pkl'
     cacheable = use_cache and path.suffix.lower() in ROW_EXT
     if cacheable and cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
         log(f'[원천] 캐시 사용: {path.name} (이미 읽은 파일)')
