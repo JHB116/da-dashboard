@@ -215,9 +215,9 @@ def _check_header(header: list[str], name: str):
 def _norm(df: pd.DataFrame, name: str) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     _check_header(list(df.columns), name)
-    for c in WANT_SRC:
-        if c not in df.columns:
-            df[c] = None
+    add = [c for c in WANT_SRC if c not in df.columns]
+    if add:
+        df = pd.concat([df, pd.DataFrame(None, index=df.index, columns=add, dtype=object)], axis=1)
     return df[WANT_SRC]
 
 
@@ -245,16 +245,56 @@ def iter_xlsb(path: Path):
         yield pd.DataFrame(rows, columns=WANT_SRC)
 
 
+def sniff_kind(path: Path) -> str:
+    """확장자 대신 파일 내용으로 형식 판별 — 'xlsb' · 'xlsx' · 'ole'(암호 · 보안 · 옛 xls) · 'csv' · 'unknown'.
+    이름만 .xlsx 인 xlsb · csv, 보안(DRM)이 걸린 파일을 가려내려고 쓴다"""
+    import zipfile
+
+    with open(path, 'rb') as f:
+        head = f.read(8)
+    if head[:4] == b'PK\x03\x04':
+        try:
+            with zipfile.ZipFile(path) as z:
+                names = set(z.namelist())
+        except zipfile.BadZipFile:
+            return 'unknown'
+        if 'xl/workbook.bin' in names:
+            return 'xlsb'
+        if 'xl/workbook.xml' in names:
+            return 'xlsx'
+        return 'unknown'
+    if head == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+        return 'ole'
+    if head[:2] in (b'\xff\xfe', b'\xfe\xff') or head[:3] == b'\xef\xbb\xbf':
+        return 'csv'
+    with open(path, 'rb') as f:
+        block = f.read(1 << 16)
+    for enc in ('utf-8', 'cp949'):
+        if ROW_DATE in block.decode(enc, errors='ignore').split('\n', 1)[0]:
+            return 'csv'
+    return 'unknown'
+
+
 def iter_raw(path: Path):
-    """원천 파일 → WANT_SRC 컬럼 DataFrame 덩어리들"""
+    """원천 파일 → WANT_SRC 컬럼 DataFrame 덩어리들 (형식은 확장자가 아니라 파일 내용으로 판별)"""
     path = Path(path)
     ext = path.suffix.lower()
+    if ext in ROW_EXT:
+        kind = sniff_kind(path)
+        if kind in ('ole', 'unknown'):
+            raise ValueError(
+                f'{path.name}: 엑셀 · csv 형식으로 읽을 수 없는 파일입니다'
+                + (' (암호 · 보안(DRM)이 걸렸거나 옛 .xls 형식)' if kind == 'ole' else ' (보안(DRM)이 걸렸거나 OneDrive 에서 아직 내려받지 않은 파일일 수 있음)')
+                + ' — 엑셀에서 열어 [다른 이름으로 저장] → "Excel 바이너리 통합 문서(.xlsb)" 로 새로 저장한 파일을 쓰세요')
+        if kind != ext.lstrip('.') and not (kind == 'xlsx' and ext == '.xlsm'):
+            log(f'  · {path.name}: 확장자는 {ext} 이지만 실제 내용은 {kind} 형식이라 {kind} 로 읽습니다')
+        ext = {'xlsb': '.xlsb', 'xlsx': '.xlsx', 'csv': '.csv'}[kind] if not (kind == 'xlsx' and ext == '.xlsm') else ext
     if ext == '.xlsb':
         yield from iter_xlsb(path)
     elif ext == '.pkl':                                   # 테스트용
         yield _norm(pd.read_pickle(path), path.name)
     elif ext in ('.xlsx', '.xlsm'):
-        xl = pd.ExcelFile(path)
+        xl = pd.ExcelFile(path, engine='openpyxl')
         yield _norm(xl.parse(ROW_SHEET if ROW_SHEET in xl.sheet_names else xl.sheet_names[0]), path.name)
     else:
         enc, sep, header, errors = sniff_csv(path)
