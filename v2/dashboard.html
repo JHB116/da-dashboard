@@ -711,6 +711,23 @@ function dataCheck(curIdx) {
     const list = [...by.entries()].sort((a, b) => b[1].cost - a[1].cost);
     L.push(`• 원천 중복 의심: ${list.map(([md, o]) => `${md} ${dateSpan(o.d)}(같은 행 ${o.n.toLocaleString()}개 · 광고비 ${mil1(o.cost)})`).join(', ')} — 같은 행이 두 번 이상 들어와 실적이 부풀려졌을 수 있음 → 원천 확인 후 백업 다시 만들기`);
   }
+  // ①-2 열 밀림 — 백업 만들 때 값이 한 칸씩 오른쪽으로 밀린 행을 찾아 제자리로 옮겨 읽었다 (build_data.fix_shift)
+  const Q = P.quality || {}, inQ = r => r[0] >= d0 && r[0] <= d1 && (!mdOk || mdOk.has(r[1]));
+  const sh = (Q.shift || []).filter(inQ);
+  if (sh.length) {
+    const by = new Map();
+    for (const [d, md, , n, cost, col] of sh) { const o = by.get(col) || { d: [], n: 0, cost: 0, md: new Set() }; o.d.push(d); o.n += n; o.cost += cost; o.md.add(md); by.set(col, o); }
+    const list = [...by.entries()].sort((a, b) => b[1].n - a[1].n);
+    L.push(`• 원천 열 밀림 → 자동 보정함: ${list.map(([col, o]) => `${dateSpan(o.d)} ${o.n.toLocaleString()}행('${col}' 열부터 한 칸씩 오른쪽으로 밀림 · 매체 ${o.md.size}개 · 광고비 ${mil1(o.cost)})`).join(', ')} — 밀린 값을 제자리로 옮겨 읽어 대시보드 숫자는 바로잡혔음. 원천 파일도 고쳐 달라고 요청`);
+  }
+  // ①-3 지표 사이 관계(UV(전체) ≥ UV(회원) · 총결제 ≥ 순결제 · 순결제고객 ≥ 첫구매고객 …)가 여러 개 깨졌는데 고치지 못한 행 — 그런 행이 많은 날만
+  const rowsOn = new Map((Q.rows || []).map(r => [r[0], r[1]])), brk = new Map();
+  for (const [d, , , n, cost] of (Q.broken || []).filter(inQ)) { const o = brk.get(d) || { n: 0, cost: 0 }; o.n += n; o.cost += cost; brk.set(d, o); }
+  const brDays = [...brk.entries()].filter(([d, o]) => o.n >= 20 || o.n >= 0.05 * (rowsOn.get(d) || Infinity));
+  if (brDays.length) {
+    const n = brDays.reduce((a, [, o]) => a + o.n, 0), cost = brDays.reduce((a, [, o]) => a + o.cost, 0);
+    L.push(`• 지표 값이 서로 안 맞는 행(자동 보정 못 함): ${dateSpan(brDays.map(x => x[0]))} ${n.toLocaleString()}행(광고비 ${mil1(cost)}) — UV(회원) > UV(전체), 순결제 > 총결제처럼 지표 사이 관계가 깨짐 → 열 밀림 · 원천 오류일 수 있으니 원천 확인 후 백업 다시 만들기`);
+  }
   // ② 들어오면 안 되는 매체 · 처음 보는 구분 값
   const hist0 = C.dnum(d0) - 90, histIdx = C.rangeIdx(R, C.iso(hist0), C.iso(C.dnum(d0) - 1));
   const enoughHist = R.dn[0] <= hist0;
@@ -742,6 +759,28 @@ function dataCheck(curIdx) {
     if (days.length) spikes.push(`${md} ${dateSpan(days.map(d => d[0]))}(평소의 ${C.fmtNum(Math.max(...days.map(d => d[1])), 1)}배)`);
   }
   if (spikes.length) L.push(`• 하루 광고비 급증: ${spikes.slice(0, 4).join(', ')} — 원천 중복 · 이중 집계가 아닌지 확인(행사 집중 집행이면 정상)`);
+  // ④ 광고비는 평소 수준(직전 14일 중앙값의 0.5~2배)인데 하루 거래액(순결제)이 중앙값보다 크게 낮거나 높음 — 원천 열 밀림 · 누락 · 전환 추적 오류 의심
+  //    전체: 30% 이하 · 3배 이상(평소 거래액 1백만 이상) / 매체: 매체는 원래 들쭉날쭉해 20% 이하 · 5배 이상(평소 5백만 이상), 전체로 이미 잡힌 날은 뺀다
+  const med = a => { const b = [...a].sort((x, y) => x - y); return b[b.length >> 1]; };
+  const swings = (sr, minRev, lo, hi) => {
+    const out = [];
+    for (const i of curIdx) {
+      if (!sr.has[i]) continue;
+      const n = R.dn[i], pc = [], pr = [];
+      for (let k = 1; k <= 21 && pc.length < 14; k++) { const j = R.byNum.get(n - k); if (j != null && sr.has[j] && sr.cost[j] > 0) { pc.push(sr.cost[j]); pr.push(sr.nrev[j]); } }
+      if (pc.length < 7) continue;
+      const mc = med(pc), mr = med(pr), c = sr.cost[i], v = sr.nrev[i];
+      if (!(mr >= minRev) || !(c >= mc * 0.5 && c <= mc * 2)) continue;
+      if (v <= mr * lo || v >= mr * hi) out.push({ d: R.dates[i], v, mr, roas: c > 0 ? v / c : null, mroas: med(pc.map((x, k) => pr[k] / x)) });
+    }
+    return out;
+  };
+  const sw = [], fR = x => (x == null ? '–' : C.fmt(C.METRIC.roas, x));
+  const swTxt = (name, o) => `${name} ${dshort(o.d)} 거래액 ${mil1(o.v)}(평소 ${mil1(o.mr)}의 ${C.fmtNum(o.v / o.mr * 100, 0)}% · ROAS ${fR(o.roas)}, 평소 ${fR(o.mroas)})`;
+  const tot = swings(C.daily(R, filt), 1e6, 0.3, 3), totDays = new Set(tot.map(o => o.d));
+  for (const o of tot.slice(0, 3)) sw.push(swTxt('전체', o));
+  for (const [mi, sr] of g) for (const o of swings(sr, 5e6, 0.2, 5)) if (!totDays.has(o.d)) sw.push(swTxt(R.dims.md[mi], o));
+  if (sw.length) L.push(`• 거래액 · ROAS 급변(광고비는 평소 수준): ${sw.slice(0, 5).join(', ')}${sw.length > 5 ? ` 외 ${sw.length - 5}건` : ''} — 원천 열 밀림 · 누락 · 전환 추적 오류가 아닌지 원천 확인(행사 · 품절 등 실제 변화일 수도)`);
   return L;
 }
 // 리뷰 메모 숫자 표기 — 기여는 소수점 없이, 방향은 기호 대신 말로(상승 · 하락)

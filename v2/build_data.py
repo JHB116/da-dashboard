@@ -212,37 +212,15 @@ def _check_header(header: list[str], name: str):
         raise ValueError(f'{name}: 첫 행에 "지표_광고비" 컬럼이 없습니다 (DA 로데이터 형식인지 확인)')
 
 
-def _norm(df: pd.DataFrame, name: str) -> pd.DataFrame:
-    df.columns = [str(c).strip() for c in df.columns]
-    _check_header(list(df.columns), name)
-    add = [c for c in WANT_SRC if c not in df.columns]
-    if add:
-        df = pd.concat([df, pd.DataFrame(None, index=df.index, columns=add, dtype=object)], axis=1)
-    return df[WANT_SRC]
+def _header(vals) -> list[str]:
+    """헤더 행 → 이름 목록(끝의 빈 칸은 뺀다 — 그 뒤에 값이 있으면 '헤더보다 칸이 많은 행')"""
+    h = [str(v).strip() if v is not None and not (isinstance(v, float) and np.isnan(v)) else '' for v in vals]
+    while h and not h[-1]:
+        h.pop()
+    return h
 
 
-def iter_xlsb(path: Path):
-    """pyxlsb 로 시트를 직접 순회 — 필요한 컬럼만, CHUNK 행씩"""
-    from pyxlsb import open_workbook
-
-    rows, idx = [], None
-    with open_workbook(str(path)) as wb:
-        sheet = ROW_SHEET if ROW_SHEET in wb.sheets else wb.sheets[0]
-        with wb.get_sheet(sheet) as sh:
-            for n, r in enumerate(sh.rows()):
-                vals = [c.v for c in r]
-                if idx is None:
-                    header = [str(v).strip() if v is not None else '' for v in vals]
-                    _check_header(header, path.name)
-                    idx = [header.index(c) if c in header else None for c in WANT_SRC]
-                    continue
-                rows.append(tuple(vals[i] if i is not None and i < len(vals) else None for i in idx))
-                if len(rows) >= CHUNK:
-                    log(f'  … {n:,}행')
-                    yield pd.DataFrame(rows, columns=WANT_SRC)
-                    rows = []
-    if rows or idx is None:
-        yield pd.DataFrame(rows, columns=WANT_SRC)
+SPARE = 8                       # 헤더보다 많은 칸을 이만큼까지 읽는다(열 밀림 감지용)
 
 
 def sniff_kind(path: Path) -> str:
@@ -275,8 +253,9 @@ def sniff_kind(path: Path) -> str:
     return 'unknown'
 
 
-def iter_raw(path: Path):
-    """원천 파일 → WANT_SRC 컬럼 DataFrame 덩어리들 (형식은 확장자가 아니라 파일 내용으로 판별)"""
+def iter_table(path: Path):
+    """원천 파일 → (위치 번호 컬럼 0..W-1 의 DataFrame 덩어리, 헤더 이름 목록). 형식은 확장자가 아니라 파일 내용으로 판별.
+    헤더 이름이 아닌 위치로 읽어 두어야 값이 한 칸씩 밀린 행을 찾아 제자리로 옮길 수 있다"""
     path = Path(path)
     ext = path.suffix.lower()
     if ext in ROW_EXT:
@@ -290,22 +269,183 @@ def iter_raw(path: Path):
             log(f'  · {path.name}: 확장자는 {ext} 이지만 실제 내용은 {kind} 형식이라 {kind} 로 읽습니다')
         ext = {'xlsb': '.xlsb', 'xlsx': '.xlsx', 'csv': '.csv'}[kind] if not (kind == 'xlsx' and ext == '.xlsm') else ext
     if ext == '.xlsb':
-        yield from iter_xlsb(path)
-    elif ext == '.pkl':                                   # 테스트용
-        yield _norm(pd.read_pickle(path), path.name)
+        from pyxlsb import open_workbook
+
+        rows, header, W = [], None, 0
+        with open_workbook(str(path)) as wb:
+            sheet = ROW_SHEET if ROW_SHEET in wb.sheets else wb.sheets[0]
+            with wb.get_sheet(sheet) as sh:
+                for n, r in enumerate(sh.rows()):
+                    vals = [c.v for c in r]
+                    if header is None:
+                        header = _header(vals)
+                        _check_header(header, path.name)
+                        W = len(header) + SPARE
+                        continue
+                    rows.append(vals[:W])
+                    if len(rows) >= CHUNK:
+                        log(f'  … {n:,}행')
+                        yield pd.DataFrame(rows, columns=None).reindex(columns=range(W)), header
+                        rows = []
+        if header is None:
+            raise ValueError(f'{path.name}: 빈 시트입니다')
+        yield pd.DataFrame(rows, columns=None).reindex(columns=range(W)), header
+    elif ext == '.pkl':                                   # 테스트용 (이름 있는 DataFrame)
+        df = pd.read_pickle(path)
+        header = [str(c).strip() for c in df.columns]
+        _check_header(header, path.name)
+        yield pd.DataFrame(df.to_numpy(dtype=object)).reindex(columns=range(len(header) + SPARE)), header
     elif ext in ('.xlsx', '.xlsm'):
         xl = pd.ExcelFile(path, engine='openpyxl')
-        yield _norm(xl.parse(ROW_SHEET if ROW_SHEET in xl.sheet_names else xl.sheet_names[0]), path.name)
+        t = xl.parse(ROW_SHEET if ROW_SHEET in xl.sheet_names else xl.sheet_names[0], header=None, dtype=object)
+        header = _header(t.iloc[0].tolist()) if len(t) else []
+        _check_header(header, path.name)
+        t = t.iloc[1:].reset_index(drop=True)
+        t.columns = range(t.shape[1])
+        yield t.reindex(columns=range(max(len(header) + SPARE, t.shape[1]))), header
     else:
         enc, sep, header, errors = sniff_csv(path)
+        header = _header(header)
         _check_header(header, path.name)
-        use = [c for c in header if c in WANT_SRC]
-        reader = pd.read_csv(path, encoding=enc, sep=sep, usecols=use, dtype=str, keep_default_na=False,
-                             na_values=[''], chunksize=CHUNK, encoding_errors=errors)
+        W = len(header) + SPARE
+        reader = pd.read_csv(path, encoding=enc, sep=sep, header=None, skiprows=1, names=range(W), dtype=str,
+                             keep_default_na=False, na_values=[''], chunksize=CHUNK, encoding_errors=errors,
+                             on_bad_lines='warn', index_col=False)
         for k, chunk in enumerate(reader):
             if k:
                 log(f'  … {k * CHUNK:,}행')
-            yield _norm(chunk, path.name)
+            yield chunk, header
+
+
+# ── 열 밀림 점검 ───────────────────────────────────────────────────────
+# 값이 한 칸씩 오른쪽으로 밀린 행(예: 'UV(전체)' 열부터 밀림)은 헤더 이름대로 읽으면 거래액 · 고객수가 엉뚱한 값이 된다.
+# 지표 사이의 당연한 관계(큰 쪽 ≥ 작은 쪽 × 배수)가 몇 개나 깨졌는지 세어, 한 칸 되돌렸을 때 확실히 맞아지는 행만 옮긴다.
+REL = [('imp', 'clk', 1), ('uv', 'uvm', 1), ('tpay', 'npay', 1), ('trev', 'nrev', 1), ('npay', 'fp', 1), ('nrev', 'fpr', 1),
+       ('fpt', 'fp', 1), ('fprt', 'fpr', 1), ('wbt', 'wb', 1), ('wbrt', 'wbr', 1), ('npay', 'wb', 1), ('nrev', 'wbr', 1),
+       ('tpay', 'fpt', 1), ('trev', 'fprt', 1), ('trev', 'wbrt', 1), ('pvm', 'uvm', 1), ('uv', 'join', 1),
+       ('npay', 'nb', 1), ('nrev', 'nbr', 1), ('nbr', 'nb', 1000),
+       ('nrev', 'npay', 1000), ('trev', 'tpay', 1000), ('fpr', 'fp', 1000), ('wbr', 'wb', 1000)]   # 고객 1명당 거래액 1,000원 이상
+COUNTS = ['imp', 'clk', 'uv', 'uvm', 'pvm', 'join', 'npay', 'tpay', 'fp', 'fpt', 'wb', 'wbt', 'nb']   # 소수가 나올 수 없는 수
+
+
+def _numify(M: pd.DataFrame):
+    """위치 컬럼 → (숫자 행렬(빈 칸 · '-' = 0, 글자 = NaN), 빈 칸 여부)"""
+    num = np.zeros(M.shape)
+    blank = np.zeros(M.shape, dtype=bool)
+    for j in range(M.shape[1]):
+        c = M.iloc[:, j]
+        isna = c.isna().to_numpy().copy()
+        v = pd.to_numeric(c, errors='coerce').to_numpy(dtype=float, copy=True)
+        slow = np.isnan(v) & ~isna                       # 숫자로 바로 안 읽힌 칸(콤마 · '-' · 빈 글자 · 진짜 글자)만 다시 본다
+        if slow.any():
+            t = c[slow].astype(str).str.replace(',', '', regex=False).str.strip()
+            b = t.isin(['', 'nan', 'None']).to_numpy()
+            w = pd.to_numeric(t, errors='coerce').to_numpy(dtype=float, copy=True)
+            w[b | t.eq('-').to_numpy()] = 0.0
+            v[slow] = w
+            isna[np.where(slow)[0][b]] = True
+        v[isna] = 0.0
+        num[:, j] = v
+        blank[:, j] = isna
+    return num, blank
+
+
+def _violations(num: np.ndarray, pos: dict, s: int | None) -> np.ndarray:
+    """행마다 깨진 관계 수. s 를 주면 s 번 칸부터 한 칸 왼쪽으로 되돌렸다고 보고 센다"""
+    def col(k):
+        j = pos[k]
+        return num[:, j + 1 if s is not None and j >= s else j]
+    v = np.zeros(num.shape[0], dtype=int)
+    for big, small, f in REL:
+        if big in pos and small in pos:
+            a, b = col(big), col(small)
+            v += (b * f > a * 1.0001 + 0.5).astype(int)      # NaN 비교는 False — 글자 칸은 아래에서 센다
+    for k in pos:
+        a = col(k)
+        v += (np.isnan(a) | (a < -0.5 if k != 'cost' else False)).astype(int)                       # 지표 칸에 글자 · 음수(광고비 제외)
+        if k in COUNTS:
+            v += (np.abs(a - np.round(a)) > 1e-6).astype(int)
+    return v
+
+
+def fix_shift(M: pd.DataFrame, header: list[str]):
+    """값이 한 칸씩 오른쪽으로 밀린 행을 찾아 제자리로 → (고친 M, 행별 표시 Series: '' 정상 · '밀림:<시작 열>' 보정 · '어긋남' 못 고침)"""
+    n, W, hw = len(M), M.shape[1], len(header)
+    flag = pd.Series('', index=M.index, dtype=object)
+    pos = {}
+    for src, k in ROW_METRICS.items():
+        j = next((header.index(c) for c in METRIC_SRC[src] if c in header), None)
+        if j is not None:
+            pos[k] = j
+    if not n or len(pos) < 4:
+        return M, flag
+    first = min(pos.values())
+    num, blank = _numify(M.iloc[:, first:])
+    num = np.hstack([np.zeros((n, first)), num])
+    blank = np.hstack([np.zeros((n, first), dtype=bool), blank])
+    over = ~blank[:, hw:].all(axis=1) if W > hw else np.zeros(n, dtype=bool)
+    v0 = _violations(num, pos, None)
+    cand = np.where(over | (v0 >= 2))[0]
+    if not len(cand):
+        return M, flag
+    nc, bc, v0c, oc = num[cand], blank[cand], v0[cand], over[cand]
+    junk = bc | np.isnan(nc)                       # 빈 칸 · 글자 칸 = 끼어든 칸일 가능성이 큼
+    S = list(range(first, hw))
+    V = np.stack([_violations(nc, pos, s) for s in S], axis=1)                   # 행 × 시작 열 후보: 깨진 관계 수
+    K = V * 2 + (~junk[:, first:hw]).astype(int)        # 깨진 관계가 적을수록, 시작 칸이 빈 칸 · 글자일수록(끼어든 칸) 우선
+    rmin = K.min(axis=1)
+    need = rmin < v0c * 2                                # 한 칸 되돌리면 나아지는 행 (K = V×2 + …)
+    # 보통 한 덩어리의 밀린 행은 모두 같은 열부터 밀린다 → 밀린 행 전체의 점수 합이 가장 낮은 열을 공통 시작 열로.
+    # 그 열로 그 행의 최저 점수가 나오면 그 열을, 아니면(다른 열부터 밀린 행) 그 행의 최저 점수 열(앞쪽 우선)을 쓴다
+    common = int(K[need].sum(axis=0).argmin()) if need.any() else 0
+    pick = np.where(K[:, common] == rmin, common, K.argmin(axis=1))
+    vbest = V[np.arange(len(cand)), pick]
+    # 헤더보다 칸이 많으면(밀려난 값이 끝에 남음) 나아지기만 해도, 아니면 3개 이상 맞아지고 남은 어긋남이 1개 이하일 때만
+    ok = (vbest < v0c) & (oc | ((v0c - vbest >= 3) & (vbest <= 1)))
+    best_s = np.array(S)[pick]
+    rows_i, rows_s = list(cand[ok]), list(best_s[ok])
+    # 같은 날의 실적 행 대부분(80% 이상)이 같은 열부터 밀렸으면, 그날 나머지 행(값이 거의 0이라 관계로는 못 찾은 행)도
+    # 한 칸 되돌려도 깨지는 관계가 늘지 않는 한 같이 되돌린다 — 원천 한 날짜가 통째로 밀린 경우
+    if ok.any():
+        sc = S[common]
+        live = (np.abs(np.nan_to_num(num[:, first:hw])) > 0).any(axis=1)
+        day = M.iloc[:, header.index(ROW_DATE)].astype(str).to_numpy()
+        done = np.zeros(n, dtype=bool)
+        done[cand[ok]] = True
+        hit = np.zeros(n, dtype=bool)
+        hit[cand[ok][best_s[ok] == sc]] = True
+        for d in np.unique(day[hit]):
+            on = (day == d) & live
+            if hit[on].sum() < 0.8 * on.sum():
+                continue
+            rest = np.where(on & ~done)[0]
+            if len(rest):
+                vr = _violations(num[rest], pos, sc)
+                for i in rest[vr <= v0[rest]]:
+                    rows_i.append(i)
+                    rows_s.append(sc)
+    vals = M.to_numpy(dtype=object, copy=True)
+    for i, s in zip(rows_i, rows_s):
+        vals[i, s:W - 1] = vals[i, s + 1:W]
+        vals[i, W - 1] = None
+        flag.iloc[i] = '밀림:' + header[s].removeprefix('지표_')
+    bad = np.setdiff1d(cand[~ok], rows_i)
+    flag.iloc[bad] = '어긋남'
+    if rows_i:
+        M = pd.DataFrame(vals, index=M.index, columns=M.columns)
+    return M, flag
+
+
+def iter_raw(path: Path, flags: list | None = None):
+    """원천 파일 → WANT_SRC 컬럼 DataFrame 덩어리들. 열 밀림 행은 제자리로 옮겨서 준다(flags 에 행별 표시를 모은다)"""
+    for M, header in iter_table(path):
+        M = M.reset_index(drop=True)
+        M, flag = fix_shift(M, header)
+        out = pd.DataFrame({c: (M[header.index(c)] if c in header else pd.Series(None, index=M.index, dtype=object))
+                            for c in WANT_SRC})
+        if flags is not None:
+            flags.append(flag)
+        yield out
 
 
 def prep(raw: pd.DataFrame) -> tuple[pd.DataFrame, set]:
@@ -330,17 +470,22 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     """원천 → (일자 × 구분) 합산 DataFrame, 원천에 없던 지표 키[, 최근 AF_DAYS 일의 (일자 × 구분 × AF코드) 합산].
     덩어리마다 바로 합산해 메모리를 아낀다. xlsb · csv · xlsx 는 data/cache/ 에 결과를 캐시"""
     path = Path(path)
-    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v4.pkl'
+    cache = CACHE_DIR / f'{path.name}.{path.stat().st_size}.v5.pkl'
     cacheable = use_cache and path.suffix.lower() in ROW_EXT
     if cacheable and cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
         log(f'[원천] 캐시 사용: {path.name} (이미 읽은 파일)')
         c = pd.read_pickle(cache)
-        return (c['df'], c['missing'], c.get('af'), c.get('dup')) if with_af else (c['df'], c['missing'])
+        return (c['df'], c['missing'], c.get('af'), c.get('qc')) if with_af else (c['df'], c['missing'])
     log(f'[원천] {path.name} 읽는 중 (큰 파일은 몇 분)…')
-    seen_all, parts, parts_af, parts_h = set(), [], [], []
-    for raw in iter_raw(path):
+    seen_all, parts, parts_af, parts_h, parts_f = set(), [], [], [], []
+    flags = []
+    for raw in iter_raw(path, flags):
         raw = raw.reset_index(drop=True)
         p, seen = prep(raw)
+        fl = flags.pop().loc[p.index]
+        live = ((p[METS].abs() > 0).any(axis=1)).to_numpy()
+        parts_f.append(pd.DataFrame({'date': p['date'].to_numpy(), 'md': p['md'].to_numpy(), 'pr': p['pr'].to_numpy(),
+                                     'cost': p['cost'].to_numpy(), 'flag': fl.to_numpy(), 'live': live}))
         # 완전히 같은 행(모든 칸이 같음) 찾기용 — 행 해시와 일자 · 매체 · 상품 · 광고비 · 노출만 남긴다
         h = pd.util.hash_pandas_object(raw, index=False)
         parts_h.append(pd.DataFrame({'h': h.loc[p.index].to_numpy(), 'date': p['date'].to_numpy(), 'md': p['md'].to_numpy(),
@@ -361,6 +506,13 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     del parts_h
     if len(dup):
         log(f'  ! {path.name}: 완전히 같은 행 {int(dup["n"].sum()):,}개 (광고비 {dup["cost"].sum() / 1e6:,.1f}백만원) — 대시보드 리뷰 메모의 데이터 점검에 표시')
+    qc = {'dup': dup, **find_shifts(parts_f)}
+    del parts_f
+    for _, r in qc['shift'].groupby(['date', 'col'])[['n', 'cost']].sum().reset_index().iterrows():
+        log(f'  ! {path.name}: {r["date"]:%Y-%m-%d} {int(r["n"]):,}행 — "{r["col"]}" 열부터 값이 한 칸씩 오른쪽으로 밀려 있어 제자리로 옮겨 읽었습니다 (원천도 바로잡아 주세요)')
+    if len(qc['broken']):
+        b = qc['broken'].groupby('date')['n'].sum()
+        log(f'  ! {path.name}: 지표 관계가 어긋난 행(보정 못 함) {int(b.sum()):,}개 · {len(b)}일 — 대시보드 리뷰 메모의 데이터 점검에 표시(많은 날만)')
     if len(af):
         af = af[af['date'] > af['date'].max() - pd.Timedelta(days=AF_DAYS)]
         af = af.groupby(['date', *AF_ALL], sort=False, observed=True)[METS].sum().reset_index()
@@ -373,8 +525,8 @@ def load_prepped(path: Path, use_cache: bool = True, with_af: bool = False):
     missing = [k for k in METS if k not in seen_all]
     if cacheable:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        pd.to_pickle({'df': df, 'missing': missing, 'af': af, 'dup': dup}, cache)
-    return (df, missing, af, dup) if with_af else (df, missing)
+        pd.to_pickle({'df': df, 'missing': missing, 'af': af, 'qc': qc}, cache)
+    return (df, missing, af, qc) if with_af else (df, missing)
 
 
 def find_dups(parts_h: list) -> pd.DataFrame:
@@ -388,6 +540,25 @@ def find_dups(parts_h: list) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     g = d.groupby(['date', 'md', 'pr'], observed=True).agg(n=('h', 'size'), cost=('cost', 'sum')).reset_index()
     return g[cols]
+
+
+def find_shifts(parts_f: list) -> dict:
+    """행별 열 밀림 표시 → shift: 제자리로 옮긴 행(일자 × 매체 × 상품 × 시작 열), broken: 관계가 어긋났는데 못 고친 행(일자 × 매체 × 상품),
+    rows: 일자별 실적 있는 행 수(어긋난 행이 많은 날만 보이려고)"""
+    e = {'shift': pd.DataFrame(columns=['date', 'md', 'pr', 'col', 'n', 'cost']),
+         'broken': pd.DataFrame(columns=['date', 'md', 'pr', 'n', 'cost']), 'rows': pd.DataFrame(columns=['date', 'n'])}
+    if not parts_f:
+        return e
+    a = pd.concat(parts_f, ignore_index=True)
+    a = a[a['live']]
+    if not len(a):
+        return e
+    sh = a[a['flag'].str.startswith('밀림:')].assign(col=lambda x: x['flag'].str.slice(3))
+    br = a[a['flag'] == '어긋남']
+    agg = dict(n=('cost', 'size'), cost=('cost', 'sum'))
+    return {'shift': sh.groupby(['date', 'md', 'pr', 'col'], observed=True).agg(**agg).reset_index() if len(sh) else e['shift'],
+            'broken': br.groupby(['date', 'md', 'pr'], observed=True).agg(**agg).reset_index() if len(br) else e['broken'],
+            'rows': a.groupby('date').size().rename('n').reset_index()}
 
 
 def concat_cat(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -538,11 +709,11 @@ def _read_group(paths: list, use_cache: bool, until: str | None = None, af_out: 
     """파일 묶음 → (같은 날짜는 뒤 파일 우선으로 합친 DataFrame, 파일명들, 없는 지표). af_out 을 주면 AF 집계도 모은다"""
     frames, files, missing = [], [], set()
     for p in paths:
-        df, ms, af, dup = load_prepped(p, use_cache=use_cache, with_af=True)
+        df, ms, af, qc = load_prepped(p, use_cache=use_cache, with_af=True)
         if af_out is not None and af is not None and len(af):
             af_out.append(af)
-        if dup_out is not None and dup is not None and len(dup):
-            dup_out.append(dup)
+        if dup_out is not None and qc is not None:
+            dup_out.append(qc)
         if until is not None:
             n0 = df['date'].nunique()
             df = df[df['date'] <= pd.Timestamp(until)]
@@ -633,15 +804,30 @@ def build(row_paths=(), y24_paths=(), base: dict | None = None, use_cache: bool 
             'targets': (base or {}).get('targets'), 'memos': (base or {}).get('memos') or {}}
 
 
-def quality_payload(dup_frames: list, base_q: dict | None, new: pd.DataFrame | None) -> dict:
-    """원천 점검 결과 — dups: [일자, 매체, 상품, 중복 행 수, 중복 광고비]. 새 파일이 다룬 날짜는 새 결과로 교체"""
+def quality_payload(qcs: list, base_q: dict | None, new: pd.DataFrame | None) -> dict:
+    """원천 점검 결과 — 새 파일이 다룬 날짜는 새 결과로 교체
+    dups: [일자, 매체, 상품, 중복 행 수, 중복 광고비] · shift: [일자, 매체, 상품, 행 수, 광고비, 밀리기 시작한 열] (제자리로 옮겨 읽음)
+    broken: [일자, 매체, 상품, 행 수, 광고비] (지표 관계가 어긋났는데 못 고침) · rows: [일자, 실적 있는 행 수]"""
     new_dates = set(new['date'].dt.strftime('%Y-%m-%d')) if new is not None and len(new) else set()
-    rows = [r for r in ((base_q or {}).get('dups') or []) if r[0] not in new_dates]
-    if dup_frames:
-        d = pd.concat(dup_frames, ignore_index=True)
+    bq = base_q or {}
+    keep = lambda k: [r for r in (bq.get(k) or []) if r[0] not in new_dates]
+    out = {k: keep(k) for k in ('dups', 'shift', 'broken', 'rows')}
+
+    def take(k, cols, conv):
+        fr = [q[k] for q in qcs if q is not None and k in q and len(q[k])]
+        if not fr:
+            return
+        d = pd.concat(fr, ignore_index=True)
         d = d[d['date'].dt.strftime('%Y-%m-%d').isin(new_dates)] if new_dates else d
-        rows += [[r.date.strftime('%Y-%m-%d'), str(r.md), str(r.pr), int(r.n), round(float(r.cost), 1)] for r in d.itertuples()]
-    return {'dups': sorted(rows), 'checked': sorted(set((base_q or {}).get('checked') or []) | new_dates)}
+        if k == 'rows':
+            d = d.groupby('date')['n'].max().reset_index()
+        out[{'dup': 'dups'}.get(k, k)] += [conv(r) for r in d[cols].itertuples(index=False)]
+    ds = lambda x: x.strftime('%Y-%m-%d')
+    take('dup', ['date', 'md', 'pr', 'n', 'cost'], lambda r: [ds(r[0]), str(r[1]), str(r[2]), int(r[3]), round(float(r[4]), 1)])
+    take('shift', ['date', 'md', 'pr', 'n', 'cost', 'col'], lambda r: [ds(r[0]), str(r[1]), str(r[2]), int(r[3]), round(float(r[4]), 1), str(r[5])])
+    take('broken', ['date', 'md', 'pr', 'n', 'cost'], lambda r: [ds(r[0]), str(r[1]), str(r[2]), int(r[3]), round(float(r[4]), 1)])
+    take('rows', ['date', 'n'], lambda r: [ds(r[0]), int(r[1])])
+    return {**{k: sorted(v) for k, v in out.items()}, 'checked': sorted(set(bq.get('checked') or []) | new_dates)}
 
 
 def build_af(new_frames: list, base_af: dict | None, last_date) -> dict | None:

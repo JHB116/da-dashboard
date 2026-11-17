@@ -366,11 +366,13 @@
     const mRow = [...new Set([...missRow(sb), ...missRow(sa)])].sort();
     return { missing: [...new Set([...m24, ...mRow])].sort(), missing24: m24, missingRow: mRow };
   }
-  // 원천 점검(완전히 같은 행) — 새 백업이 다룬 날짜는 새 결과로
+  // 원천 점검(완전히 같은 행 dups · 열 밀림 보정 shift · 지표 관계 어긋남 broken · 일자별 행 수 rows) — 새 백업이 다룬 날짜는 새 결과로
   function mergeQuality(B, A, addDates) {
     if (!A) return B || null;
-    const dups = [...((B && B.dups) || []).filter(r => !addDates.has(r[0])), ...(A.dups || [])].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
-    return { dups, checked: [...new Set([...((B && B.checked) || []), ...(A.checked || [])])].sort() };
+    const byDate = (x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0);
+    const out = { checked: [...new Set([...((B && B.checked) || []), ...(A.checked || [])])].sort() };
+    for (const k of ['dups', 'shift', 'broken', 'rows']) out[k] = [...((B && B[k]) || []).filter(r => !addDates.has(r[0])), ...(A[k] || [])].sort(byDate);
+    return out;
   }
   // AF코드 섹션 — 새 쪽 날짜가 이기고, 전체 마지막 날 기준 최근 AF_DAYS 일만 남긴다
   const AF_DAYS = 92;

@@ -111,3 +111,16 @@ test('목표: 직접 지정 기간 = 주차 목표 일할 + 주차 없는 날은
   assert.deepEqual(C.rangeTarget(T, 'TOTAL', '2026-10-01', '2026-10-31', '2026-10-02'), { spend: 200, rev: 400, roas: 2 });
   assert.equal(C.rangeTarget(T, '신규고객확대', '2026-10-01', '2026-10-06', '2026-12-31'), null);
 });
+
+test('원천 점검 합치기: 열 밀림 · 어긋남 · 행 수도 새 백업이 다룬 날짜는 새 결과로', () => {
+  const B = { dups: [['2026-11-15', '카카오', 'A', 2, 10]], shift: [['2026-11-16', '카카오', 'A', 330, 5e6, 'UV(전체)']],
+              broken: [['2026-11-14', '네이버', 'B', 30, 1e6]], rows: [['2026-11-14', 300], ['2026-11-16', 330]], checked: ['2026-11-14', '2026-11-16'] };
+  const A = { dups: [], shift: [], broken: [], rows: [['2026-11-16', 331]], checked: ['2026-11-16'] };
+  const q = C.mergeQuality(B, A, new Set(['2026-11-16']));
+  assert.deepEqual(q.shift, []);
+  assert.deepEqual(q.broken, B.broken);
+  assert.deepEqual(q.dups, B.dups);
+  assert.deepEqual(q.rows, [['2026-11-14', 300], ['2026-11-16', 331]]);
+  // 예전 백업(dups 만 있음)과 합쳐도 깨지지 않는다
+  assert.deepEqual(C.mergeQuality({ dups: [], checked: [] }, B, new Set(['2026-11-14', '2026-11-15', '2026-11-16'])).shift, B.shift);
+});
