@@ -352,7 +352,7 @@ const LONG_DIMS = new Set(['camp', 'sub']);     // 이름이 길고 많은 구�
 const CHIP_MAX = 300;                            // 한 번에 그리는 칩 수 (넘으면 찾기로 좁힘)
 const NAME_DIMS = [['camp', '캠페인명'], ['sub', '하위캠페인명'], ['pno', '기획전번호'], ['bp', '브랜드/기획전']];
 const TOP_NAMES = new Set(['camp', 'sub', 'pno']);   // 필터 맨 위 '이름 검색' 줄 (나머지는 필터 아래쪽)
-const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [[7, '최근 7일'], [14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
+const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [['wk', '이번주(월~)'], [7, '최근 7일'], [14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
 // 요약 화면 타일 · 차트 묶음
 const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt', 'crct']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa']]];
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa'];
@@ -457,6 +457,11 @@ function plist() { const k = 'p:' + S.grain; return cache[k] || (cache[k] = C.pe
 function atIndex(ps) { const i = ps.findIndex(p => p.key === S.at); return i >= 0 ? i : ps.length - 1; }
 function shown(ps) {
   const ai = atIndex(ps), r = S.range[S.grain];
+  if (r === 'wk') {   // 이번주 — 기준일이 속한 주의 월요일부터 기준일까지 (월요일이면 하루치만)
+    if (!ps.length) return [];
+    const end = ps[ai].start, mon = end - ((C.dow(end) + 6) % 7);
+    return ps.slice(0, ai + 1).filter(p => p.start >= mon);
+  }
   const n = r === 'all' ? ai + 1 : Math.min(+r, ai + 1);
   return ps.slice(ai + 1 - n, ai + 1);
 }
@@ -1466,7 +1471,7 @@ document.addEventListener('change', e => {
   else if (t.id === 'drImp') { S.drill.impOnly = t.checked; render(true); }
   else if (t.id === 'drCmp') { S.drill.cmp = t.checked; render(true); }
   else if (t.id === 'selBucket') { if (S.bucket === '상세' && t.value !== '상세') delete S.filt.src; S.bucket = t.value; if (t.value === '상세') S.filtOpen = true; render(true); }
-  else if (t.id === 'selRange') { S.range[S.grain] = t.value === 'all' ? 'all' : +t.value; render(true); }
+  else if (t.id === 'selRange') { S.range[S.grain] = t.value === 'all' || t.value === 'wk' ? t.value : +t.value; render(true); }
   else if (t.id === 'fileOpen') { if (t.files.length) openFiles(t.files); t.value = ''; }
   else if (t.id === 'chkCmp') { S.showCmp = t.checked; render(true); }
   else if (t.id === 'chkPrevY') { S.prevY = t.checked; render(true); }
