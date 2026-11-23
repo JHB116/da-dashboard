@@ -640,10 +640,10 @@ function tgtVal(m, t, days) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// 리뷰 메모 — 1차 초안은 자동으로 쓰고, 고치면 그 글을 저장 (백업에 함께 담김)
+// 리뷰 메모 — 기본 초안(규칙)을 보여 주고, '초안 다시 쓰기'를 눌렀을 때만 Gemini 가 쓴다. 고치면 그 글을 저장 (백업에 함께 담김)
 // ════════════════════════════════════════════════════════════════════
 const memoDrafts = {}, aiPending = {}, aiFail = {};
-let memoEdit = '', aiTimer = null;
+let memoEdit = '';
 const gem = () => window.DA_GEMINI || null;
 function memoKey(sec, at) { return [sec, S.grain, at.key === 'custom' ? `${S.cu.r0}~${S.cu.r1}` : at.key, S.bucket, filterSummary(), S.mode].join('|'); }
 function memoHTML(sec, title, at, draft) {
@@ -651,13 +651,13 @@ function memoHTML(sec, title, at, draft) {
   memoDrafts[key] = draft;
   const text = saved ? saved.text : draft, editing = memoEdit === key, g = gem();
   const when = saved ? new Date(saved.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const tag = saved ? (saved.src === 'ai' ? `Gemini 초안 · ${when}` : `직접 수정 · ${when}`) : aiPending[key] ? 'Gemini 로 쓰는 중…' : aiFail[key] ? esc(aiFail[key]) : '';
+  const tag = saved ? (saved.src === 'ai' ? `Gemini 초안 · ${when}` : `직접 수정 · ${when}`) : aiPending[key] ? 'Gemini 로 쓰는 중…' : aiFail[key] ? esc(aiFail[key]) : g && g.ready ? "기본 초안 · '초안 다시 쓰기'를 누르면 Gemini 가 씁니다" : '';
   return `<details class="memo" open data-memo="${esc(key)}"><summary>${esc(title)} <span class="hint">${tag}</span></summary>
     <div class="memo-b">${editing
       ? `<textarea id="memoTa" data-key="${esc(key)}" rows="${Math.max(8, text.split('\n').length + 2)}">${esc(text)}</textarea>
          <div class="memo-t"><button class="btn pri" data-memo-save="${esc(key)}">저장</button><button class="btn" data-memo-cancel="1">취소</button></div>`
       : `<div class="memo-v">${esc(text).replace(/\n/g, '<br>')}</div>
-         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${saved || aiFail[key] ? `<button class="lnk" data-memo-reset="${esc(key)}" title="${g && g.ready ? '저장된 메모를 지우고 Gemini 가 다시 씁니다' : '저장된 메모를 지우고 기본 초안으로 되돌립니다'}">초안 다시 쓰기</button>` : ''}</div>`}</div></details>`;
+         <div class="memo-t"><button class="btn" data-memo-edit="${esc(key)}">편집</button>${saved || aiFail[key] || (g && g.ready) ? `<button class="lnk" data-memo-reset="${esc(key)}"${aiPending[key] ? ' disabled' : ''} title="${g && g.ready ? 'Gemini 가 초안을 다시 씁니다 (저장된 메모는 지워집니다)' : '저장된 메모를 지우고 기본 초안으로 되돌립니다'}">초안 다시 쓰기</button>` : ''}</div>`}</div></details>`;
 }
 async function memoSave(key, text, src = 'user') {
   P.memos = { ...(P.memos || {}) };
@@ -666,11 +666,10 @@ async function memoSave(key, text, src = 'user') {
   await idbPut(P);
   if (!memoEdit) render(true);
 }
-// Gemini 에 초안 요청 — 화면이 계산한 숫자(기본 초안)만 보낸다. 같은 메모는 한 번만 자동으로 쓴다
-function memoAsk(key, force) {
+// Gemini 에 초안 요청 — 화면이 계산한 숫자(기본 초안)만 보낸다. '초안 다시 쓰기'를 눌렀을 때만 부른다(자동 호출 없음)
+function memoAsk(key) {
   const g = gem();
   if (!g || !g.ready || !P || aiPending[key] || !memoDrafts[key]) return;
-  if (!force && ((P.memos || {})[key] || aiFail[key])) return;
   aiPending[key] = true; delete aiFail[key];
   g.request({ type: 'gemini_memo', id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, key, facts: memoDrafts[key] });
   const hint = document.querySelector(`details.memo[data-memo="${CSS.escape(key)}"] summary .hint`); if (hint) hint.textContent = 'Gemini 로 쓰는 중…';
@@ -681,7 +680,6 @@ window.DA_GEMINI_RECEIVE = r => {
   if (r.ok && r.text && P) { const cur = (P.memos || {})[r.key]; if (!cur || cur.src === 'ai') memoSave(r.key, r.text, 'ai'); }
   else { aiFail[r.key] = r.message || 'Gemini 초안을 받지 못해 기본 초안을 보여 줍니다'; if (!memoEdit) render(true); }
 };
-window.DA_GEMINI_STATUS = () => { if (P && !memoEdit) { clearTimeout(aiTimer); aiTimer = setTimeout(() => document.querySelectorAll('details.memo[data-memo]').forEach(d => memoAsk(d.dataset.memo)), 1200); } };
 // 초안 문구 도우미
 const pctS = p => (p == null ? '–' : C.signed(p));
 // ── 리뷰 메모: 데이터 점검 · 순결제 ROAS 판단 · 원인 분해 ─────────────────────
@@ -1012,7 +1010,6 @@ function renderSummary(main) {
   h += notes();
   main.innerHTML = h;
   drawYearCharts(ys, C.SUMMARY, 'ch-');
-  clearTimeout(aiTimer); aiTimer = setTimeout(() => memoAsk(memoKey('summary', at)), 1200);
 }
 function drawYearCharts(ys, keys, prefix) {
   for (const k of keys) {
@@ -1187,7 +1184,7 @@ function notes() {
     <li><b>비용출처</b> TOTAL · 거래액확대 · 신규고객확대 · 인지도제고는 기존 대시보드와 같은 목록(공백 · 대소문자 무시)으로 합산합니다. <b>비용출처(상세)</b>를 고르면 원천의 비용출처가 모두 나오고 원하는 것만 골라 볼 수 있습니다(처음엔 전부 선택).</li>
     <li><b>목표 · 목표비</b> 보고서 엑셀(③ 목표 파일)의 월 · 주차 목표 — TOTAL · TOTAL(서비스비용 제외)에서만, 진행 중인 달은 주차 목표 MTD · 진행 중인 주는 목표 × 경과일/7 (기존 대시보드와 같다). ${P.targets ? `지금 목표: ${esc(P.targets.file || '')}` : '목표 파일 없음'}</li>
     <li><b>직접 지정</b> 기준에서 '직접 지정'을 고르면 실적 기간 · 비교 기간을 날짜로 정합니다. 카드는 실적 vs 비교 기간(+ 전년 동요일), 표 · 그래프는 실적 기간 안의 기간만 보여 줍니다.</li>
-    <li><b>리뷰 메모</b> 요약 시트 전체(카드 · 실적 요약표 · 추이)를 한 번에 정리합니다. Gemini 가 연결돼 있으면 화면이 계산한 숫자로 Gemini 가 1차 초안을 쓰고(원본 데이터는 보내지 않음), 아니면 규칙으로 만든 기본 초안이 보입니다. '편집'으로 고쳐 저장하면 그 글이 남습니다(기간 · 단위 · 비용출처 · 필터별). 메모는 이 브라우저와 '백업 내려받기' 파일에 함께 저장됩니다.</li>
+    <li><b>리뷰 메모</b> 요약 시트 전체(카드 · 실적 요약표 · 추이)를 한 번에 정리합니다. 처음에는 규칙으로 만든 기본 초안이 보이고, Gemini 가 연결돼 있으면 '초안 다시 쓰기'를 눌렀을 때만 화면이 계산한 숫자로 Gemini 가 초안을 씁니다(자동으로 다시 쓰지 않음 · 원본 데이터는 보내지 않음). '편집'으로 고쳐 저장하면 그 글이 남습니다(기간 · 단위 · 비용출처 · 필터별). 메모는 이 브라우저와 '백업 내려받기' 파일에 함께 저장됩니다.</li>
     <li><b>ROAS</b> = 거래액 ÷ 광고비 · <b>CPA</b> = 광고비 ÷ 가입수/첫구매수/신규고객수(당년신규 순결제) · <b>CR</b> = 결제고객수 ÷ UV · <b>CR(클릭기준)</b> = 총결제고객수 ÷ 클릭 · <b>CTR</b> = 클릭 ÷ 노출 · 비율 · 단가는 기간 합계끼리 나눕니다(일평균의 평균 아님).</li>
     <li><b>일평균</b> = 기간 합계 ÷ 집행일수(고른 조건에 데이터가 있는 날짜 수). 비율 · 단가 지표는 일평균 모드에서도 같은 값입니다.</li>
     <li><b>전년비</b> = 동요일 기준(364일 전 같은 요일들) · <b>전전년비</b> = 728일 전 · 진행 중인 기간은 데이터가 있는 날짜만 비교(MTD). <b>전월비</b> = 전월(진행 중이면 같은 일자까지) · <b>전주비</b> = 7일 전 · <b>전일비</b> = 하루 전.</li>
@@ -1422,7 +1419,7 @@ document.addEventListener('click', e => {
   if (ds.memoEdit) { memoEdit = ds.memoEdit; render(true); const ta = $id('memoTa'); if (ta) ta.focus(); return; }
   if (ds.memoCancel) { memoEdit = ''; render(true); return; }
   if (ds.memoSave) { memoSave(ds.memoSave, $id('memoTa').value); return; }
-  if (ds.memoReset) { const k = ds.memoReset; if (!(P.memos || {})[k] || confirm('저장된 메모를 지우고 초안을 다시 쓸까요? (직접 고친 내용은 사라집니다)')) { delete aiFail[k]; memoSave(k, null); } return; }
+  if (ds.memoReset) { const k = ds.memoReset, cur = (P.memos || {})[k], g = gem(); if (!cur || cur.src === 'ai' || confirm('저장된 메모를 지우고 초안을 다시 쓸까요? (직접 고친 내용은 사라집니다)')) { delete aiFail[k]; memoSave(k, null).then(() => { if (g && g.ready) { memoAsk(k); if (!memoEdit) render(true); } }); } return; }
   if (t.id === 'cuYoy') { const sh = d => C.iso(C.dnum(d) - 364); S.cu = { ...S.cu, c0: sh(S.cu.r0), c1: sh(S.cu.r1), auto: true }; render(true); return; }
   if (ds.grp != null) { const o = new Set(S.grpOpen || []); o.has(ds.grp) ? o.delete(ds.grp) : o.add(ds.grp); S.grpOpen = [...o]; render(true); return; }
   if (ds.grpAll != null) { S.grpOpen = ds.grpAll === '1' ? GROUPS.slice(1).map(([g]) => g) : []; render(true); return; }

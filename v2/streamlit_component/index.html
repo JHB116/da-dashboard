@@ -23,7 +23,6 @@
     w.DA_GEMINI = { ready: !!st.configured, model: st.model || '', request: req => send('streamlit:setComponentValue', { value: req }) };
     const r = args.memoResponse;
     if (r && r.id && r.id !== lastResp && typeof w.DA_GEMINI_RECEIVE === 'function') { lastResp = r.id; w.DA_GEMINI_RECEIVE(r); }
-    if (typeof w.DA_GEMINI_STATUS === 'function') w.DA_GEMINI_STATUS(st);
   }
   child.addEventListener('load', () => { loaded = true; bridge(); setHeight(); });
   window.addEventListener('message', e => {
