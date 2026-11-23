@@ -352,14 +352,14 @@ const LONG_DIMS = new Set(['camp', 'sub']);     // 이름이 길고 많은 구�
 const CHIP_MAX = 300;                            // 한 번에 그리는 칩 수 (넘으면 찾기로 좁힘)
 const NAME_DIMS = [['camp', '캠페인명'], ['sub', '하위캠페인명'], ['pno', '기획전번호'], ['bp', '브랜드/기획전']];
 const TOP_NAMES = new Set(['camp', 'sub', 'pno']);   // 필터 맨 위 '이름 검색' 줄 (나머지는 필터 아래쪽)
-const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [[14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
+const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [[7, '최근 7일'], [14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
 // 요약 화면 타일 · 차트 묶음
 const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt', 'crct']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa']]];
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa'];
 const STORE_KEY = 'da-dashboard-v2';
-const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 14 }, bucket: 'TOTAL',
+const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 7 }, bucket: 'TOTAL',
   unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '' }, sv: 6 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '' }, sv: 7 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -372,6 +372,7 @@ function load() {
       if (s.sv < 4) { if (s.drill) { delete s.drill.open; delete s.drill.hideSmall; } s.sv = 4; }   // 드릴다운: 다 펼친 상태 · 비교는 끈 상태가 기본
       if (s.sv < 5) { if (s.names) { delete s.names.camp; delete s.names.sub; } s.sv = 5; }          // 캠페인 · 하위캠페인은 이름 검색 → 칩(찾기)으로
       if (s.sv < 6) { if (s.drill) s.drill.sort = 'roas'; s.sv = 6; }   // 드릴다운 기본 정렬 = ROAS(순결제)
+      if (s.sv < 7) { s.range = { ...(s.range || {}), day: 7 }; s.sv = 7; }   // 일별 기본 범위 = 최근 7일
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
