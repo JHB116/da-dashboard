@@ -1206,7 +1206,7 @@ function renderDrill(main) {
   const showPromo = promoAt >= 0 && !D.dims.includes('pno') && ds.dims.pno;
   const t = C.tree(ds, filt, D.dims, cmpOk ? [cur, cmpIdx] : [cur], showPromo ? 'pno' : null);
   const keys = D.cols === 'all' ? C.DETAIL : DRILL_CORE, ms = keys.map(k => C.METRIC[k]);
-  const dimSel = L => `<select data-dim="${L}" aria-label="${L + 1}단계">${L > 0 ? '<option value="">(없음)</option>' : ''}${avail.map(k => `<option value="${k}"${D.dims[L] === k ? ' selected' : ''}>${DIM_NAME[k]}</option>`).join('')}</select>`;
+  const dimSel = L => `<select data-dim="${L}" aria-label="${L + 1}단계">${L > 0 || D.dims.length > 1 ? '<option value="">(없음)</option>' : ''}${avail.map(k => `<option value="${k}"${D.dims[L] === k ? ' selected' : ''}>${DIM_NAME[k]}</option>`).join('')}</select>`;
   const slots = Math.min(6, D.dims.length + 1);
   const span = curR.length ? `${C.iso(R.dn[curR[0]])} ~ ${C.iso(R.dn[curR[curR.length - 1]])}` : at.range;
   const title = hasPeriod && !c.custom ? `${c.sh[0].label} ~ ${at.label}` : `${at.label}${at.partial ? ' (진행 중)' : ''}`;
@@ -1646,7 +1646,7 @@ document.addEventListener('change', e => {
       S.cu = cu; render(true);
     }
   }
-  else if (t.dataset.dim != null) { const L = +t.dataset.dim, d = S.drill.dims.slice(); if (t.value) d[L] = t.value; else d.length = L; S.drill.dims = d.filter((x, i) => x && d.indexOf(x) === i); S.drill.tg = []; S.drill.sel = ''; render(true); }
+  else if (t.dataset.dim != null) { const L = +t.dataset.dim, d = S.drill.dims.slice(); if (t.value) d[L] = t.value; else d.splice(L, 1); /* (없음) = 그 단계만 빼고 뒤 단계는 한 칸씩 당긴다 */ S.drill.dims = d.filter((x, i) => x && d.indexOf(x) === i); S.drill.tg = []; S.drill.sel = ''; render(true); }
   else if (t.id === 'drSort') { S.drill.sort = t.value; render(true); }
   else if (t.id === 'drImp') { S.drill.impOnly = t.checked; render(true); }
   else if (t.id === 'drCmp') { S.drill.cmp = t.checked; render(true); }
