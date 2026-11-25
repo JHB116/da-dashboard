@@ -307,12 +307,20 @@ header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#
       </div>
     </div>
     <div class="bar2" id="barRow">
-      <div class="seg" role="group" aria-label="기간 단위">
+      <div class="seg" role="group" aria-label="드릴다운 기간" id="segSpan" hidden>
+        <button data-dspan="all" title="데이터 전체 기간">전체</button>
+        <button data-dspan="year" title="마지막 데이터 날짜가 속한 해의 1월 1일부터">올해</button>
+        <button data-dspan="month" title="마지막 데이터 날짜가 속한 달의 1일부터">이번달</button>
+        <button data-dspan="week" title="마지막 데이터 날짜가 속한 주의 월요일부터">이번주</button>
+        <button data-dspan="cu">직접 지정</button>
+      </div>
+      <span class="field" id="fDrCu" hidden><input type="date" id="drR0" aria-label="시작일"> ~ <input type="date" id="drR1" aria-label="종료일"></span>
+      <div class="seg" role="group" aria-label="기간 단위" id="segGrain">
         <button data-set="grain" data-v="month">월별</button>
         <button data-set="grain" data-v="week">주별</button>
         <button data-set="grain" data-v="day">일별</button>
       </div>
-      <label class="field">기준 <select id="selAt" aria-label="기준 기간"></select></label>
+      <label class="field" id="fAt">기준 <select id="selAt" aria-label="기준 기간"></select></label>
       <span class="field" id="fCustom" hidden>실적 <input type="date" id="cuR0"> ~ <input type="date" id="cuR1"> · 비교 <input type="date" id="cuC0"> ~ <input type="date" id="cuC1"> <button class="lnk" id="cuYoy" type="button" title="실적 기간의 364일 전 같은 요일로">비교 = 전년 동요일</button></span>
       <label class="field" id="fRange" title="표 · 그래프에 보여 줄 기간 수 — 기준 기간에서 끝나는 최근 N개">범위 <select id="selRange" aria-label="표시 범위"></select></label>
       <div class="seg" role="group" aria-label="집계 방식">
@@ -362,7 +370,7 @@ const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fc
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 7 }, bucket: 'TOTAL',
   unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '' }, sv: 7 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '', span: 'all', r0: '', r1: '' }, sv: 8 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -376,6 +384,7 @@ function load() {
       if (s.sv < 5) { if (s.names) { delete s.names.camp; delete s.names.sub; } s.sv = 5; }          // 캠페인 · 하위캠페인은 이름 검색 → 칩(찾기)으로
       if (s.sv < 6) { if (s.drill) s.drill.sort = 'roas'; s.sv = 6; }   // 드릴다운 기본 정렬 = ROAS(순결제)
       if (s.sv < 7) { s.range = { ...(s.range || {}), day: 7 }; s.sv = 7; }   // 일별 기본 범위 = 최근 7일
+      if (s.sv < 8) { if (s.drill) s.drill.span = 'all'; s.sv = 8; }   // 드릴다운은 자체 기간 탭(전체 · 올해 · 이번달 · 이번주 · 직접 지정) — 기본 전체
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
@@ -629,7 +638,7 @@ function ctx() {
   const s = series(), ps = plist();
   if (S.cu) {
     const cu = S.cu, idx = C.rangeIdx(R, cu.r0, cu.r1);
-    const at = { key: 'custom', label: `직접 지정 ${ymd(cu.r0)}~${ymd(cu.r1)}`, short: '직접 지정', y: +cu.r1.slice(0, 4), m: +cu.r1.slice(5, 7),
+    const at = { key: 'custom', label: cu.label || `직접 지정 ${ymd(cu.r0)}~${ymd(cu.r1)}`, short: cu.short || '직접 지정', y: +cu.r1.slice(0, 4), m: +cu.r1.slice(5, 7),
       start: C.dnum(cu.r0), end: C.dnum(cu.r1), idx, partial: false, range: `${cu.r0} ~ ${cu.r1}`, custom: true };
     const a = at.start, b = at.end;
     const sh = ps.filter(p => p.end >= a && p.start <= b).map(p => { const ix = p.idx.filter(i => R.dn[i] >= a && R.dn[i] <= b); return { ...p, idx: ix, clipped: ix.length < p.idx.length, partial: p.partial || ix.length < p.idx.length, lastN: R.dn[ix[ix.length - 1]] }; }).filter(p => p.idx.length);
@@ -1071,6 +1080,30 @@ function drillDims() {
   return avail;
 }
 const drillHasPeriod = () => S.drill.dims.some(d => PERIOD_DIMS.has(d));
+// 드릴다운 기간 탭 — 요약의 월별 · 주별 · 일별 · 기준과 따로. 마지막 데이터 날짜 기준
+//   전체 · 올해 · 이번달 · 이번주 · 직접 지정 → 실적 기간 r0~r1, 비교 = 364일 전 같은 요일(전체는 비교 안 함)
+const DSPAN_N = { all: '전체', year: '올해', month: '이번달', week: '이번주', cu: '직접 지정' };
+function drillSpan() {
+  const D = S.drill, lo = R.dates[0], hi = lastDate(), n = C.dnum(hi);
+  if (!DSPAN_N[D.span]) D.span = 'all';
+  let r0 = lo, r1 = hi;
+  if (D.span === 'year') r0 = hi.slice(0, 4) + '-01-01';
+  else if (D.span === 'month') r0 = hi.slice(0, 8) + '01';
+  else if (D.span === 'week') r0 = C.iso(n - ((C.dow(n) + 6) % 7));
+  else if (D.span === 'cu') { r0 = D.r0 || hi; r1 = D.r1 || hi; }
+  const cl = d => (d < lo ? lo : d > hi ? hi : d);
+  r0 = cl(r0); r1 = cl(r1); if (r0 > r1) [r0, r1] = [r1, r0];
+  const days = C.dnum(r1) - C.dnum(r0) + 1;
+  const sh = d => C.iso(C.dnum(d) - 364);
+  return { r0, r1, c0: sh(r0), c1: sh(r1), auto: true, label: `${DSPAN_N[D.span]} ${ymd(r0)}~${ymd(r1)}`, short: DSPAN_N[D.span],
+    grain: days > 92 ? 'month' : days > 31 ? 'week' : 'day', noCmp: D.span === 'all' };
+}
+// 드릴다운은 기간 탭으로 정한 기간을 '직접 지정'처럼 계산한다 — 요약 화면의 설정(S.cu · S.grain)은 그리는 동안만 바꾸고 되돌린다
+function renderDrillPage(main) {
+  const keep = { cu: S.cu, grain: S.grain }, sp = drillSpan();
+  S.cu = sp; S.grain = sp.grain;
+  try { renderDrill(main); } finally { S.cu = keep.cu; S.grain = keep.grain; }
+}
 function renderDrill(main) {
   const D = S.drill, c = ctx(), { s, at } = c;
   const avail = drillDims();
@@ -1080,11 +1113,11 @@ function renderDrill(main) {
   const curR = hasPeriod && !c.custom ? c.sh.flatMap(p => C.curIdx(p, s)) : C.curIdx(at, s);
   const cmp = c.custom ? 'custom' : S.cmp;
   let cmpR = [];
-  const cmpWant = D.cmp && !hasPeriod;
+  const cmpWant = D.cmp && !hasPeriod && !(S.cu && S.cu.noCmp);
   if (cmpWant) cmpR = c.custom ? c.cmpIdx : cmp === 'pop' ? C.compareIdx(R, at, S.grain, 'pop', curR) : fullCmp(at, S.grain, cmp, curR);
   const cur = mapIdx(ds, curR), cmpIdx = mapIdx(ds, cmpR);
   const cmpOk = cmpWant && cmpIdx.length && cmpIdx.length >= cmpR.length;
-  const cmpL = c.custom ? '비교 기간' : C.cmpLabel(cmp, S.grain), cmpY = c.custom ? 0 : cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0;
+  const cmpL = c.custom ? '전년 동기간' : C.cmpLabel(cmp, S.grain), cmpY = c.custom ? 0 : cmp === 'yoy' ? 1 : cmp === 'yoy2' ? 2 : 0;
   // 드릴다운 기획전번호 검색 — 그 기획전번호 행만 집계 (쉼표로 여러 개 · 제외는 -)
   const pqFn = C.nameMatcher(D.pq), pnoV = v => String(v == null ? '' : v).replace(/\.0$/, '');
   const where = pqFn && ds.dims.pno ? { ...S.filt, pno: ds.dims.pno.filter(v => pqFn(pnoV(v))) } : S.filt;
@@ -1105,7 +1138,8 @@ function renderDrill(main) {
   const notes = [];
   if (useAf) notes.push(`AF코드는 최근 ${P.af.dates.length}일(${P.af.dates[0]} ~ ${P.af.dates[P.af.dates.length - 1]})만 담겨 있어${cur.length < curR.length ? ` 이 기간 중 ${cur.length}일만` : ''} 계산합니다`);
   if (qHidden) notes.push(`검색어 '${q}' — 단계에 없는 ${['md', 'camp', 'sub'].filter(d => !D.dims.includes(d) && ds.dims[d]).map(d => DIM_NAME[d]).join(' · ')} 이름까지 찾아, 맞는 행만 합계에 넣습니다`);
-  if (D.cmp && hasPeriod) notes.push('기간 단계가 있으면 비교는 표시하지 않습니다');
+  if (D.cmp && S.cu && S.cu.noCmp) notes.push('전체 기간은 비교를 표시하지 않습니다 — 올해 · 이번달 · 이번주 · 직접 지정에서 전년 같은 요일 기간과 비교합니다');
+  else if (D.cmp && hasPeriod) notes.push('기간 단계가 있으면 비교는 표시하지 않습니다');
   else if (D.cmp && !cmpOk) notes.push(`${cmpL} 데이터가 없어 비교를 표시하지 않습니다`);
   setHTMLKeep(main, `<section><div class="sec-h"><h2>드릴다운 · ${esc(title)}</h2><span class="desc">${esc(span)} · ${S.mode === 'avg' ? '일평균' : '누계'} · 실적 ${t.total[0].days}일${cmpOk ? ` vs ${cmpL} ${t.total[1].days}일` : ''} · 비용출처 ${esc(bucketName())} · 이름을 누르면 아래에 추이</span></div>
     <div class="card pad"><div class="bar2" style="padding:0">
@@ -1434,15 +1468,20 @@ function syncBar() {
   if (!R) return;
   const ps = plist(), ai = atIndex(ps);
   $id('selAt').innerHTML = `<option value="__custom"${S.cu ? ' selected' : ''}>직접 지정…</option>` + ps.map((p, i) => `<option value="${p.key}"${!S.cu && i === ai ? ' selected' : ''}>${esc(p.label)}${p.partial ? ' (진행 중)' : ''}</option>`).reverse().join('');
-  $id('fCustom').hidden = !S.cu;
+  const onDr = S.page === 'drill';
+  $id('segSpan').hidden = !onDr; $id('segGrain').hidden = $id('fAt').hidden = onDr;
+  document.querySelectorAll('[data-dspan]').forEach(b => b.setAttribute('aria-pressed', S.drill.span === b.dataset.dspan));
+  $id('fDrCu').hidden = !onDr || S.drill.span !== 'cu';
+  if (onDr && S.drill.span === 'cu') { const sp = drillSpan(); $id('drR0').value = sp.r0; $id('drR1').value = sp.r1; for (const id of ['drR0', 'drR1']) { $id(id).min = R.dates[0]; $id(id).max = lastDate(); } }
+  $id('fCustom').hidden = !S.cu || onDr;
   if (S.cu) { $id('cuR0').value = S.cu.r0; $id('cuR1').value = S.cu.r1; $id('cuC0').value = S.cu.c0; $id('cuC1').value = S.cu.c1; for (const id of ['cuR0', 'cuR1', 'cuC0', 'cuC1']) { $id(id).min = R.dates[0]; $id(id).max = lastDate(); } }
   // 비용출처(상세) — 원천의 비용출처 전체를 칩으로
   const sr = $id('srcRow'); $id('srcBar').hidden = S.bucket !== '상세';
   if (S.bucket === '상세' && R.dims.src) { const sel = S.filt.src ? new Set(S.filt.src) : null, A = (filtAvail().src || {}).ok; sr.innerHTML = R.dims.src.map((v, i) => (A && !A[i] && !(sel && sel.has(v)) ? '' : `<button class="chip${A && !A[i] ? ' off' : ''}" data-fk="src" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" >${esc(v || '(빈 값)')}</button>`)).join('') + '<button class="lnk" data-fall="src">모두</button>'; }
   // 범위: 요약 월별 · 직접 지정은 안 씀, 드릴다운은 기간(일 · 주 · 월) 단계를 골랐을 때만
-  $id('fRange').hidden = !!S.cu || (S.page === 'summary' && S.grain === 'month') || (S.page === 'drill' && !drillHasPeriod());
+  $id('fRange').hidden = !!S.cu || onDr || (S.page === 'summary' && S.grain === 'month');
   // 비교 기준: 드릴다운에서 '비교 표시'를 켰을 때만 (요약 카드 · 표는 전년 · 전전년 고정)
-  $id('fCmp').hidden = $id('segCmp').hidden = S.page !== 'drill' || !S.drill.cmp || !!S.cu || drillHasPeriod();
+  $id('fCmp').hidden = $id('segCmp').hidden = true;    // 요약은 전년 · 전전년 고정, 드릴다운은 전년 동기간 고정
   $id('selRange').innerHTML = RANGES[S.grain].map(([v, l]) => `<option value="${v}"${String(S.range[S.grain]) === String(v) ? ' selected' : ''}>${l}</option>`).join('');
   // 필터 맨 위 이름 검색 — 입력 중인 칸은 건드리지 않는다 (한글 조합이 깨지지 않게)
   document.querySelectorAll('#topQ [data-name]').forEach(n => { const k = n.dataset.name; n.closest('label').hidden = !(R.dims[k] && R.dims[k].length > 1); if (n !== document.activeElement) n.value = S.names[k] || ''; });
@@ -1452,7 +1491,7 @@ function syncBar() {
   $id('btnFilt').setAttribute('aria-expanded', S.filtOpen);
   renderFilt();
 }
-const PAGES = { summary: renderSummary, drill: renderDrill };
+const PAGES = { summary: renderSummary, drill: renderDrillPage };
 function render(keepScroll) {
   if (!P) return showEmpty();
   if (!PAGES[S.page]) S.page = 'summary';
@@ -1505,8 +1544,12 @@ document.addEventListener('click', e => {
   }
   if (ds.fall) { delete S.filt[ds.fall]; render(true); return; }
   if (ds.drSpan) {                                     // 드릴다운 빈 표 → 조건에 맞는 집행 기간을 직접 지정으로
-    const [r0, r1] = ds.drSpan.split('|'), sh = d => C.iso(C.dnum(d) - 364);
-    S.cu = { r0, r1, c0: sh(r0), c1: sh(r1), auto: true }; S.cmp = 'cu'; render(true); return;
+    const [r0, r1] = ds.drSpan.split('|');
+    Object.assign(S.drill, { span: 'cu', r0, r1 }); render(true); return;
+  }
+  if (ds.dspan) {
+    if (ds.dspan === 'cu' && S.drill.span !== 'cu') { const sp = drillSpan(); S.drill.r0 = sp.r0; S.drill.r1 = sp.r1; }   // 지금 보던 기간에서 시작
+    S.drill.span = ds.dspan; S.drill.sel = ''; render(true); return;
   }
   if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; render(true); return; }
   if (t.id === 'btnFilt') { S.filtOpen = !S.filtOpen; syncBar(); save(); return; }
@@ -1524,6 +1567,7 @@ document.addEventListener('change', e => {
     } else { S.cu = null; S.at = t.value; if (S.cmp === 'cu') S.cmp = 'yoy'; }
     render(true);
   }
+  else if (t.id === 'drR0' || t.id === 'drR1') { if (t.value) { S.drill[t.id === 'drR0' ? 'r0' : 'r1'] = t.value; render(true); } }
   else if (['cuR0', 'cuR1', 'cuC0', 'cuC1'].includes(t.id)) {
     if (t.value) {
       const k = { cuR0: 'r0', cuR1: 'r1', cuC0: 'c0', cuC1: 'c1' }[t.id], cu = { ...S.cu, [k]: t.value };
