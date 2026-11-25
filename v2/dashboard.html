@@ -531,12 +531,12 @@ function yearChart(el, o) {
   for (const l of vis) {
     const st = sty(l.k);
     let d = '', pen = false;
-    // 값 없는 날(분모 0 이하 등)은 건너뛰고 앞뒤 점을 잇는다 — 선이 끊기지 않게
-    l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv == null) return; d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(sv).toFixed(1); pen = true; });
+    // 값 없는 날(광고비 0 → ROAS '–' 등)은 선을 끊는다
+    l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv == null) { pen = false; return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(sv).toFixed(1); pen = true; });
     g += `<path class="ln" d="${d}" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`;
-    // 점이 하나뿐이면 선이 안 그려지므로 점으로 표시
-    const sv = l.values.map(v => C.scaled(m, v)), nn = sv.filter(v => v != null).length;
-    sv.forEach((v, i) => { if (v != null && nn === 1) g += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="${st.color}"/>`; });
+    // 앞뒤가 비어 선이 안 그려지는 점은 점으로 표시
+    const sv = l.values.map(v => C.scaled(m, v));
+    sv.forEach((v, i) => { if (v != null && sv[i - 1] == null && sv[i + 1] == null) g += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="${st.color}"/>`; });
     if (l.k === 0) {
       if (o.showText) l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv != null) g += `<text class="vl" x="${x(i)}" y="${y(sv) - 7}" text-anchor="middle"${o.textColor ? ` style="fill:${o.textColor}"` : ''}>${C.fmt(m, v, S.mode)}</text>`; });
       let li = l.values.length - 1; while (li >= 0 && C.scaled(m, l.values[li]) == null) li--;
