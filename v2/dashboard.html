@@ -134,8 +134,7 @@ main section+section{margin-top:12px}
 .xax{stroke:#c3c2b7;stroke-width:1;shape-rendering:crispEdges}
 .lgs{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:#52514e;margin:2px 0 0}
 .lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-button.lg{background:none;border:0;padding:1px 2px;font:inherit;color:inherit;cursor:pointer;border-radius:4px}button.lg:hover{background:var(--grid)}
-button.lg.off{opacity:.4;text-decoration:line-through}
+
 .cc-b .lgs svg{display:inline-block;flex:none;width:22px;height:8px;overflow:visible}
 .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
 .dot{stroke:var(--surface);stroke-width:2}
@@ -385,7 +384,7 @@ const CHART_KEYS = CHART_GROUPS.flatMap(([, ks]) => ks);
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa'];
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 7 }, bucket: 'TOTAL',
-  unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false, mdK: 'cost', yrOff: [],
+  unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false, mdK: 'cost', bkK: 'cost', yrOff: [],
   drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', pq: '', span: 'all', r0: '', r1: '' }, sv: 8 };
 let S = load();
 let P = null, R = null;
@@ -511,12 +510,12 @@ function niceStep(v) { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor
 // o = {metric, labels(x 눈금), head(x별 툴팁 제목), lines:[{k, name, values, tips}], showText}
 function yearChart(el, o) {
   const m = o.metric, W = Math.max(260, el.clientWidth || 600), H = o.h || 250, L = 50, Rr = 16, T = 18, B = 22;
-  // 범례를 눌러 숨긴 연도(S.yrOff — 0 = 올해 · 1 = 전년 · 2 = 전전년, 모든 그래프 공통)는 그리지 않고 세로축에서도 뺀다
+  // 연도 버튼(yearBtns)으로 숨긴 연도(S.yrOff — 0 = 올해 · 1 = 전년 · 2 = 전전년, 모든 그래프 공통)는 그리지 않고 세로축에서도 뺀다
   const off = new Set(S.yrOff || []);
   const n = o.labels.length, vis = o.lines.filter(l => !off.has(l.k)).sort((a, b) => b.k - a.k);      // 이전 연도부터 그려 당해년도가 위
   const sty = k => (k === 0 && o.color ? { ...YEAR_STYLE[0], color: o.color } : YEAR_STYLE[Math.min(k, 2)]);
   const vals = vis.flatMap(l => l.values.map(v => C.scaled(m, v)).filter(v => v != null));
-  const legend = [...o.lines].sort((a, b) => a.k - b.k).map(l => { const st = sty(l.k), hid = off.has(l.k); return `<button type="button" class="lg${hid ? ' off' : ''}" data-yoff="${l.k}" aria-pressed="${!hid}" title="${hid ? '눌러서 다시 보기' : '눌러서 숨기기'} (모든 그래프)"><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/></svg>${esc(l.name)}</button>`; }).join('') + (o.note ? `<span class="hint">${esc(o.note)}</span>` : '');
+  const legend = [...vis].sort((a, b) => a.k - b.k).map(l => { const st = sty(l.k); return `<span class="lg"><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/></svg>${esc(l.name)}</span>`; }).join('') + (o.note ? `<span class="hint">${esc(o.note)}</span>` : '');
   if (!vals.length) { el.innerHTML = `<div class="lgs">${legend}</div><div class="hint" style="padding:40px 0;text-align:center">${vis.length < o.lines.length ? '보이는 연도에 데이터가 없습니다' : '표시할 데이터가 없습니다'}</div>`; return; }
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (o.range) { lo = o.clip ? o.range[0] : Math.min(lo, o.range[0]); hi = o.clip ? o.range[1] : Math.max(hi, o.range[1]); }   // 여러 그래프 세로축 맞추기 (clip = 범위 밖 값은 가장자리에)
@@ -1048,19 +1047,27 @@ function mediaSeries() {
   for (const g of [top, sub, sns]) for (const [k, v] of C.daily(R, filt, g)) out.set(k, v);
   return (cache[key] = out);
 }
-function drawMedia(c) {
-  const el = $id('mdSec');
+// 연도 버튼 — 누르면 그 연도를 모든 추이 그래프에서 뺀다(선 · 범례 · 세로축 · 툴팁). 0 = 올해(실적 기간) · 1 = 전년(비교 기간) · 2 = 전전년
+function yearBtns(c) {
+  const off = new Set(S.yrOff || []), at = c.at;
+  const ys = c.custom ? [[0, '실적 기간'], [1, '비교 기간']] : [[2, `${String(at.y - 2).slice(2)}년`], [1, `${String(at.y - 1).slice(2)}년`], [0, `${String(at.y).slice(2)}년`]];
+  return `<div class="tools"><span class="hint">연도</span><div class="seg" role="group" aria-label="보일 연도">${ys.map(([k, n]) => `<button type="button" data-yoff="${k}" aria-pressed="${!off.has(k)}" title="${off.has(k) ? '눌러서 보이기' : '눌러서 빼기'} (모든 그래프)">${n}</button>`).join('')}</div></div>`;
+}
+// 묶음별 추이(매체별 · 비용출처별) 공통 — 지표 탭 하나 + 같은 세로축의 큰 그래프 여러 개
+//  cfg = { id, title, stateKey, items: [{ name, s(일자 시리즈), color?, textColor? }], note, desc }
+function drawGroupCharts(c, cfg) {
+  const el = $id(cfg.id);
   if (!el) return;
-  const { ps, sh, at } = c, k = C.METRIC[S.mdK] ? S.mdK : 'cost', m = C.METRIC[k], ss = mediaSeries();
-  const tabs = CHART_GROUPS.map(([g, ks]) => `<span class="hint md-g">${g}</span>${ks.map(x => `<button class="chip" data-mdk="${x}" aria-pressed="${x === k}">${esc(C.METRIC[x].n)}</button>`).join('')}`).join('');
-  const per = MEDIA.map(name => {
-    const sg = ss.get(name);
-    if (!sg) return { name };
+  const { ps, sh, at } = c, k = C.METRIC[S[cfg.stateKey]] ? S[cfg.stateKey] : 'cost', m = C.METRIC[k];
+  const tabs = CHART_GROUPS.map(([g, ks]) => `<span class="hint md-g">${g}</span>${ks.map(x => `<button class="chip" data-gk="${cfg.stateKey}" data-gv="${x}" aria-pressed="${x === k}">${esc(C.METRIC[x].n)}</button>`).join('')}`).join('');
+  const per = cfg.items.map(it => {
+    const sg = it.s;
+    if (!sg) return { ...it };
     const ys = yearSeries(sg, ps, sh, at), cur = C.curIdx(at, sg), v = vy(m, C.sumIdx(sg, cur), at.y);
     const cv = c.custom ? vy(m, C.sumIdx(sg, c.cmpIdx), cuYear()) : vy(m, C.sumIdx(sg, fullCmp(at, S.grain, 'yoy', cur)), at.y - 1);
     const empty = l => l.sums.every(t => !t || m.base.every(b => !t[b]));
     const lines = ys.lines.filter(l => l.sums.some(Boolean) && !(l.k > 0 && empty(l))).map(l => ({ k: l.k, name: l.name, tips: l.tips, values: l.sums.map(t => (t ? val(m, t) : null)) }));
-    return { name, ys, lines, v, cv };
+    return { ...it, ys, lines, v, cv };
   });
   const offY = new Set(S.yrOff || []);
   const all = per.flatMap(p => (p.lines || []).filter(l => !offY.has(l.k)).flatMap(l => l.values.map(x => C.scaled(m, x)).filter(x => x != null)));
@@ -1071,11 +1078,31 @@ function drawMedia(c) {
     const r = [Math.max(range[0], q1 - 3 * iq), Math.min(range[1], q3 + 3 * iq)];
     if (iq > 0 && (r[0] > range[0] || r[1] < range[1])) { range = r; clip = true; }
   }
-  el.innerHTML = `<div class="sec-h"><h2>주요 매체별 추이 · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 8개 그래프 세로축 같음${clip ? '(튀는 값은 가장자리에 · 마우스를 올리면 실제 값)' : ''} · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'} · 비용출처 ${esc(bucketName())}</span></div>
+  const pre = cfg.id + '-';
+  el.innerHTML = `<div class="sec-h"><h2>${esc(cfg.title)} · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${per.length}개 그래프 세로축 같음${clip ? '(튀는 값은 가장자리에 · 마우스를 올리면 실제 값)' : ''} · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'}${cfg.desc ? ' · ' + esc(cfg.desc) : ''}</span>${yearBtns(c)}</div>
     <div class="card pad md-tabs">${tabs}</div>
-    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b><i class="md-dot" style="background:${MEDIA_COLOR(p.name)}"></i>${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="md-${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
-    <p class="hint" style="margin:6px 2px 0">카카오 · 네이버 = 매체 이름에 그 말이 들어간 전체 · 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 안의 상품 · SNS = 채널 SNS · 버즈빌 = 매체 · 채널 이름에 버즈빌 · 위쪽 필터 적용</p>`;
-  per.forEach((p, i) => { if (p.lines) yearChart($id('md-' + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: p.ys.labels.length <= 16, range, clip, color: MEDIA_COLOR(p.name), textColor: MEDIA_TEXT(p.name), label: `${p.name} ${m.n} 추이` }); });
+    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b>${p.color ? `<i class="md-dot" style="background:${p.color}"></i>` : ''}${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="${pre}${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
+    <p class="hint" style="margin:6px 2px 0">${esc(cfg.note)}</p>`;
+  per.forEach((p, i) => { if (p.lines) yearChart($id(pre + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: p.ys.labels.length <= 16, range, clip, color: p.color, textColor: p.textColor, label: `${p.name} ${m.n} 추이` }); });
+}
+function drawMedia(c) {
+  const ss = mediaSeries();
+  drawGroupCharts(c, { id: 'mdSec', title: '주요 매체별 추이', stateKey: 'mdK', desc: `비용출처 ${bucketName()}`,
+    items: MEDIA.map(name => ({ name, s: ss.get(name), color: MEDIA_COLOR(name), textColor: MEDIA_TEXT(name) })),
+    note: '카카오 · 네이버 = 매체 이름에 그 말이 들어간 전체 · 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 안의 상품 · SNS = 채널 SNS · 버즈빌 = 매체 · 채널 이름에 버즈빌 · 위쪽 필터 · 비용출처 적용' });
+}
+// 비용출처별 추이 — 상단 비용출처 선택과 같은 묶음(TOTAL · TOTAL(서비스비용 제외) · 거래액확대 · 신규고객확대 · 인지도제고), 위쪽 필터는 적용
+function bucketSeries() {
+  const where = { ...S.filt }; delete where.src;               // 비용출처(상세) 칩 선택은 묶음 그래프에서는 쓰지 않는다
+  const key = 'bk:' + JSON.stringify([where, S.names]);
+  if (cache[key]) return cache[key];
+  return (cache[key] = new Map(BUCKETS.filter(([b]) => b !== '상세').map(([b]) => [b, C.daily(R, { bucket: b, where, names: S.names })])));
+}
+function drawBuckets(c) {
+  const ss = bucketSeries();
+  drawGroupCharts(c, { id: 'bkSec', title: '비용출처별 추이', stateKey: 'bkK',
+    items: BUCKETS.filter(([b]) => b !== '상세').map(([b, n]) => { const sg = ss.get(b); return { name: n, s: sg && sg.has.some(Boolean) ? sg : null }; }),
+    note: '비용출처 묶음은 위쪽 비용출처 선택과 같은 기준(지표 정의 · 집계 기준 참고) · 위쪽 필터(채널 · 매체 · 캠페인 등)는 적용, 비용출처 선택은 그래프마다 그 묶음' });
 }
 function renderSummary(main) {
   const c = ctx(), { s, ps, sh, at } = c;
@@ -1102,14 +1129,15 @@ function renderSummary(main) {
   const draft = draftCards(c, sAt, c.custom ? sCu : sY1, c.custom ? '비교 기간' : '전년', c.custom ? c.cmpIdx : y1Idx, atCur, tgt) + '\n' + draftTrend(c, ys);
   h += `<section>${memoHTML('summary', '리뷰 메모', at, draft)}</section>`;
   const span = c.custom ? `실적 기간 ${S.cu.r0} ~ ${S.cu.r1} vs 비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (같은 만큼 당긴 날짜)` : S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
-  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'} · 범례의 연도를 누르면 모든 그래프에서 숨기기 · 다시 보기</span></div>
+  h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'}</span>${yearBtns(c)}</div>
     ${CHART_GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
-  h += '<section id="mdSec"></section>';
+  h += '<section id="mdSec"></section><section id="bkSec"></section>';
   h += periodTableHTML(c);
   h += notes();
   main.innerHTML = h;
   drawYearCharts(ys, CHART_KEYS, 'ch-');
   drawMedia(c);
+  drawBuckets(c);
 }
 function drawYearCharts(ys, keys, prefix) {
   for (const k of keys) {
@@ -1307,7 +1335,7 @@ function renderDrill(main) {
     s2 = o;
   }
   const ys = yearSeries(s2, c.ps, c.sh, at), tk = keys;   // 위 표의 핵심 지표 · 전체 지표와 같은 목록
-  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기 · ${D.cols === 'all' ? '전체' : '핵심'} 지표 ${keys.length}개(위 표와 같음)${useAf ? ' · AF코드는 최근 92일만' : ''}</span></div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
+  $id('drSelSec').innerHTML = `<div class="sec-h"><h2>선택 항목 추이 · ${esc(name)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 연도 겹쳐보기 · ${D.cols === 'all' ? '전체' : '핵심'} 지표 ${keys.length}개(위 표와 같음)${useAf ? ' · AF코드는 최근 92일만' : ''}</span>${yearBtns(c)}</div><div class="charts">${tk.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="dc-${k}"></div></div>`).join('')}</div>`;
   drawYearCharts(ys, tk, 'dc-');
 }
 
@@ -1606,7 +1634,7 @@ document.addEventListener('click', e => {
   if (ds.memoReset) { const k = ds.memoReset, cur = (P.memos || {})[k], g = gem(); if (!cur || cur.src === 'ai' || confirm('저장된 메모를 지우고 초안을 다시 쓸까요? (직접 고친 내용은 사라집니다)')) { delete aiFail[k]; memoSave(k, null).then(() => { if (g && g.ready) { memoAsk(k); if (!memoEdit) render(true); } }); } return; }
   if (t.id === 'cuYoy') { const sh = d => C.iso(C.dnum(d) - 364); S.cu = { ...S.cu, c0: sh(S.cu.r0), c1: sh(S.cu.r1), auto: true }; render(true); return; }
   if (ds.yoff != null) { const k = +ds.yoff, o = new Set(S.yrOff || []); o.has(k) ? o.delete(k) : o.add(k); S.yrOff = [...o]; render(true); return; }
-  if (ds.mdk) { S.mdK = ds.mdk; save(); drawMedia(ctx()); return; }
+  if (ds.gk) { S[ds.gk] = ds.gv; save(); const c = ctx(); (ds.gk === 'bkK' ? drawBuckets : drawMedia)(c); return; }
   if (ds.grp != null) { const o = new Set(S.grpOpen || []); o.has(ds.grp) ? o.delete(ds.grp) : o.add(ds.grp); S.grpOpen = [...o]; render(true); return; }
   if (ds.grpAll != null) { S.grpOpen = ds.grpAll === '1' ? GROUPS.slice(1).map(([g]) => g) : []; render(true); return; }
   if (ds.csvFor) { const tb = $id(ds.csvFor); if (tb) tableCSV(tb, ds.name || '표'); return; }
