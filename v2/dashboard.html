@@ -493,8 +493,8 @@ function shown(ps) {
   return ps.slice(ai + 1 - n, ai + 1);
 }
 function hasYoy2() { return R && R.dates.length && (C.dnum(R.dates[R.dates.length - 1]) - C.dnum(R.dates[0]) >= 728 - 31); }
-// 비율 · 단가 지표는 분모(광고비 · 노출 · UV 등)가 0 이하면 값 없음 — 환불 · 정산 조정으로 광고비가 음수인 날 ROAS 가 수백만 %로 튀지 않게
-const val = (m, sums) => (m.base.length > 1 && sums && !(sums[m.base[1]] > 0) ? null : C.value(m, sums, S.mode));
+// 비율 · 단가 지표: 분모가 0 이면 '–'(나눌 수 없음), 음수면 계산한 그대로 음수 (기존 dashboard.py safe_div 와 같다)
+const val = (m, sums) => C.value(m, sums, S.mode);
 function deltaHTML(m, cur, prev, label) {
   const p = C.pct(cur, prev);
   if (p == null) return `${label ? label + ' ' : ''}<span>–</span>`;
