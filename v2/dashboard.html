@@ -112,6 +112,7 @@ select{cursor:pointer;max-width:260px}
 .md-tabs .md-g{margin:0 2px 0 10px;font-weight:600}.md-tabs .md-g:first-child{margin-left:0}
 .charts.md{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 @media (min-width:1240px){.charts.md{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.md-dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .md-v{margin-left:auto;font-size:13px;font-weight:600;white-space:nowrap}.md-v small{font-weight:400;color:var(--muted)}
 .cc-t:has(.md-v){display:flex;gap:8px;align-items:baseline}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
@@ -492,7 +493,8 @@ function shown(ps) {
   return ps.slice(ai + 1 - n, ai + 1);
 }
 function hasYoy2() { return R && R.dates.length && (C.dnum(R.dates[R.dates.length - 1]) - C.dnum(R.dates[0]) >= 728 - 31); }
-const val = (m, sums) => C.value(m, sums, S.mode);
+// 비율 · 단가 지표는 분모(광고비 · 노출 · UV 등)가 0 이하면 값 없음 — 환불 · 정산 조정으로 광고비가 음수인 날 ROAS 가 수백만 %로 튀지 않게
+const val = (m, sums) => (m.base.length > 1 && sums && !(sums[m.base[1]] > 0) ? null : C.value(m, sums, S.mode));
 function deltaHTML(m, cur, prev, label) {
   const p = C.pct(cur, prev);
   if (p == null) return `${label ? label + ' ' : ''}<span>–</span>`;
@@ -508,17 +510,18 @@ function niceStep(v) { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor
 function yearChart(el, o) {
   const m = o.metric, W = Math.max(260, el.clientWidth || 600), H = o.h || 250, L = 50, Rr = 16, T = 18, B = 22;
   const n = o.labels.length, vis = [...o.lines].sort((a, b) => b.k - a.k);      // 이전 연도부터 그려 당해년도가 위
+  const sty = k => (k === 0 && o.color ? { ...YEAR_STYLE[0], color: o.color } : YEAR_STYLE[Math.min(k, 2)]);
   const vals = vis.flatMap(l => l.values.map(v => C.scaled(m, v)).filter(v => v != null));
   if (!vals.length) { el.innerHTML = '<div class="hint" style="padding:40px 0;text-align:center">표시할 데이터가 없습니다</div>'; return; }
   let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (o.range) { lo = Math.min(lo, o.range[0]); hi = Math.max(hi, o.range[1]); }   // 여러 그래프 세로축 맞추기
+  if (o.range) { lo = o.clip ? o.range[0] : Math.min(lo, o.range[0]); hi = o.clip ? o.range[1] : Math.max(hi, o.range[1]); }   // 여러 그래프 세로축 맞추기 (clip = 범위 밖 값은 가장자리에)
   if (hi === lo) { const d = Math.abs(hi) * 0.1 || 1; lo -= d; hi += d; }
   const pad = (hi - lo) * 0.08;
   lo -= pad; hi += pad * (o.showText ? 2.2 : 1);                                   // 값 라벨 자리
   if (Math.min(...vals, ...(o.range || [])) >= 0 && lo < 0) lo = 0;
   const step = niceStep((hi - lo) / 4), y0 = Math.floor(lo / step) * step, y1 = Math.ceil(hi / step) * step;
   const x = i => n <= 1 ? (L + W - Rr) / 2 : L + (W - L - Rr) * i / (n - 1);
-  const y = v => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+  const y = v => T + (H - T - B) * (1 - (Math.max(y0, Math.min(y1, v)) - y0) / (y1 - y0));
   const dp = Math.min(2, (String(+step.toFixed(4)).split('.')[1] || '').length);
   let g = '';
   for (let v = y0; v <= y1 + step / 2; v += step) g += `<line class="gl" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text class="yt" x="${L - 6}" y="${y(v) + 3.5}">${C.fmtNum(v, dp)}</text>`;
@@ -526,7 +529,7 @@ function yearChart(el, o) {
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor((W - L - Rr) / 46))));
   o.labels.forEach((lb, i) => { if (i % every === 0 || n <= 12) g += `<text class="xt" x="${x(i)}" y="${H - 6}" text-anchor="middle">${esc(lb)}</text>`; });
   for (const l of vis) {
-    const st = YEAR_STYLE[Math.min(l.k, 2)];
+    const st = sty(l.k);
     let d = '', pen = false;
     l.values.forEach((v, i) => { const sv = C.scaled(m, v); if (sv == null) { pen = false; return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(sv).toFixed(1); pen = true; });
     g += `<path class="ln" d="${d}" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`;
@@ -540,18 +543,18 @@ function yearChart(el, o) {
     }
   }
   g += `<line class="guide" x1="0" x2="0" y1="${T}" y2="${H - B}" visibility="hidden"/><g class="hov"></g><rect x="${L}" y="0" width="${W - L - Rr}" height="${H}" fill="transparent" class="hit"/>`;
-  const legend = [...o.lines].sort((a, b) => a.k - b.k).map(l => { const st = YEAR_STYLE[Math.min(l.k, 2)]; return `<span class="lg"><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/></svg>${esc(l.name)}</span>`; }).join('') + (o.note ? `<span class="hint">${esc(o.note)}</span>` : '');
+  const legend = [...o.lines].sort((a, b) => a.k - b.k).map(l => { const st = sty(l.k); return `<span class="lg"><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="${st.color}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/></svg>${esc(l.name)}</span>`; }).join('') + (o.note ? `<span class="hint">${esc(o.note)}</span>` : '');
   el.innerHTML = `<div class="lgs">${legend}</div><svg class="plot" viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(o.label || '')}">${g}</svg><div class="tip" hidden></div>`;
   const svg = el.querySelector('svg.plot'), guide = svg.querySelector('.guide'), hov = svg.querySelector('.hov'), tip = el.querySelector('.tip'), hit = svg.querySelector('.hit');
   const move = ev => {
     const bb = svg.getBoundingClientRect(), px = (ev.clientX - bb.left) / bb.width * W;
     const i = n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round((px - L) / (W - L - Rr) * (n - 1))));
     guide.setAttribute('x1', x(i)); guide.setAttribute('x2', x(i)); guide.setAttribute('visibility', 'visible');
-    hov.innerHTML = vis.map(l => { const v = C.scaled(m, l.values[i]); return v == null ? '' : `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${YEAR_STYLE[Math.min(l.k, 2)].color}" stroke="#fcfcfb" stroke-width="2"/>`; }).join('');
+    hov.innerHTML = vis.map(l => { const v = C.scaled(m, l.values[i]); return v == null ? '' : `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${sty(l.k).color}" stroke="#fcfcfb" stroke-width="2"/>`; }).join('');
     const cur = (o.lines.find(l => l.k === 0) || { values: [] }).values[i];
     const rows = [...o.lines].sort((a, b) => a.k - b.k).map(l => {
       const v = l.values[i], dlt = l.k > 0 ? C.pct(cur, v) : null;
-      return `<div class="r"><span><i class="sw" style="background:${YEAR_STYLE[Math.min(l.k, 2)].color}"></i>${esc(l.name)}${l.tips && l.tips[i] ? ` <span class="hint">${esc(l.tips[i])}</span>` : ''}</span><span>${C.fmt(m, v, S.mode)}${dlt != null ? ` <span class="${(m.lowerBetter ? dlt < 0 : dlt > 0) ? 'pos' : 'neg'}">${C.signed(dlt)}</span>` : ''}</span></div>`;
+      return `<div class="r"><span><i class="sw" style="background:${sty(l.k).color}"></i>${esc(l.name)}${l.tips && l.tips[i] ? ` <span class="hint">${esc(l.tips[i])}</span>` : ''}</span><span>${C.fmt(m, v, S.mode)}${dlt != null ? ` <span class="${(m.lowerBetter ? dlt < 0 : dlt > 0) ? 'pos' : 'neg'}">${C.signed(dlt)}</span>` : ''}</span></div>`;
     }).join('');
     tip.innerHTML = `<b>${esc(o.head[i])} <span class="hint">${esc(C.unit(m, S.mode))}</span></b>${rows}`;
     tip.hidden = false;
@@ -1017,7 +1020,8 @@ function periodTableHTML(c) {
 //  카카오 · 네이버 = 매체 이름에 카카오 · 네이버가 들어간 것 전부, 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 매체 중 상품(또는 매체) 이름에 그 말이 들어간 것
 //  SNS = 채널이 SNS, 버즈빌 = 매체 · 채널 이름에 버즈빌. 위쪽 필터 · 비용출처는 그대로 적용
 // ════════════════════════════════════════════════════════════════════
-const MEDIA = ['카카오', '카카오 비즈보드', '카카오 모먼트', '네이버', '네이버 스마트채널', '네이버 홈피드', 'SNS', '버즈빌'];
+const MEDIA = ['카카오', '카카오 비즈보드', '카카오 모먼트', '버즈빌', '네이버', '네이버 스마트채널', '네이버 홈피드', 'SNS'];
+const MEDIA_COLOR = n => (n.startsWith('카카오') ? '#E8B300' : n.startsWith('네이버') ? '#03A94E' : n === 'SNS' ? '#2a78d6' : '#F07C1E');   // 올해 선 색 — 카카오 노랑 · 네이버 초록 · SNS 파랑 · 버즈빌 주황
 function mediaSeries() {
   const key = 'md:' + filtKey();
   if (cache[key]) return cache[key];
@@ -1053,12 +1057,18 @@ function drawMedia(c) {
     return { name, ys, lines, v, cv };
   });
   const all = per.flatMap(p => (p.lines || []).flatMap(l => l.values.map(x => C.scaled(m, x)).filter(x => x != null)));
-  const range = all.length ? [Math.min(...all), Math.max(...all)] : null;
-  el.innerHTML = `<div class="sec-h"><h2>주요 매체별 추이 · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 8개 그래프 세로축 같음 · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'} · 비용출처 ${esc(bucketName())}</span></div>
+  // 세로축 — 금액 · 수는 전체 범위, 비율 · 단가는 하루 이틀 튀는 값(분모가 아주 작은 날)에 축이 끌려가지 않게 사분위 범위 × 3 밖은 가장자리에
+  let range = all.length ? [Math.min(...all), Math.max(...all)] : null, clip = false;
+  if (range && m.base.length > 1 && all.length >= 8) {
+    const q = [...all].sort((a, b) => a - b), at_ = f => q[Math.floor(f * (q.length - 1))], q1 = at_(0.25), q3 = at_(0.75), iq = q3 - q1;
+    const r = [Math.max(range[0], q1 - 3 * iq), Math.min(range[1], q3 + 3 * iq)];
+    if (iq > 0 && (r[0] > range[0] || r[1] < range[1])) { range = r; clip = true; }
+  }
+  el.innerHTML = `<div class="sec-h"><h2>주요 매체별 추이 · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 8개 그래프 세로축 같음${clip ? '(튀는 값은 가장자리에 · 마우스를 올리면 실제 값)' : ''} · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'} · 비용출처 ${esc(bucketName())}</span></div>
     <div class="card pad md-tabs">${tabs}</div>
-    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b>${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="md-${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
+    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b><i class="md-dot" style="background:${MEDIA_COLOR(p.name)}"></i>${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="md-${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
     <p class="hint" style="margin:6px 2px 0">카카오 · 네이버 = 매체 이름에 그 말이 들어간 전체 · 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 안의 상품 · SNS = 채널 SNS · 버즈빌 = 매체 · 채널 이름에 버즈빌 · 위쪽 필터 적용</p>`;
-  per.forEach((p, i) => { if (p.lines) yearChart($id('md-' + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: false, range, label: `${p.name} ${m.n} 추이` }); });
+  per.forEach((p, i) => { if (p.lines) yearChart($id('md-' + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: false, range, clip, color: MEDIA_COLOR(p.name), label: `${p.name} ${m.n} 추이` }); });
 }
 function renderSummary(main) {
   const c = ctx(), { s, ps, sh, at } = c;
