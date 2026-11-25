@@ -108,6 +108,12 @@ select{cursor:pointer;max-width:260px}
 .grid .sub .bd{padding:0 5px;line-height:1.5}
 
 /* 차트 */
+.md-tabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:12px;padding:10px 12px}
+.md-tabs .md-g{margin:0 2px 0 10px;font-weight:600}.md-tabs .md-g:first-child{margin-left:0}
+.charts.md{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+@media (min-width:1240px){.charts.md{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.md-v{margin-left:auto;font-size:13px;font-weight:600;white-space:nowrap}.md-v small{font-weight:400;color:var(--muted)}
+.cc-t:has(.md-v){display:flex;gap:8px;align-items:baseline}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
 @media (max-width:440px){.charts{grid-template-columns:minmax(0,1fr)}}
 main section+section{margin-top:12px}
@@ -366,10 +372,17 @@ const TOP_NAMES = new Set(['camp', 'sub', 'pno']);   // 필터 맨 위 '이름 �
 const RANGES = { month: [[13, '최근 13개월'], [25, '최근 25개월'], ['all', '전체']], week: [[8, '최근 8주'], [13, '최근 13주'], [26, '최근 26주'], [53, '최근 53주'], ['all', '전체']], day: [['wk', '이번주(월~)'], [7, '최근 7일'], [14, '최근 14일'], [31, '최근 31일'], [60, '최근 60일'], [92, '최근 92일'], ['all', '전체']] };
 // 요약 화면 타일 · 차트 묶음
 const GROUPS = [['주요', ['cost', 'nrev', 'roas']], ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'crt', 'crct']], ['유입 · 클릭', ['uv', 'ctr', 'cpc', 'cpuv']], ['가입 · 첫구매', ['join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa']]];
+// 지표별 추이 차트 — 전체 지표(카드 묶음 GROUPS 와 따로)
+const CHART_GROUPS = [['주요', ['cost', 'nrev', 'roas']],
+  ['매출 · 효율', ['trev', 'troas', 'npr', 'aovt', 'aovn', 'crt', 'crn', 'crct', 'npay', 'tpay']],
+  ['유입 · 클릭', ['imp', 'clk', 'ctr', 'cpm', 'cpc', 'uv', 'uvc', 'cpuv']],
+  ['가입 · 첫구매', ['join', 'jr', 'jcpa', 'fp', 'fpu', 'fcpa', 'fpr', 'fps']],
+  ['신규 · 윈백', ['nb', 'nbr', 'nbs', 'ncpa', 'wb', 'wbr', 'wbs']]];
+const CHART_KEYS = CHART_GROUPS.flatMap(([, ks]) => ks);
 const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fcpa', 'nbr', 'ncpa'];
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 7 }, bucket: 'TOTAL',
-  unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
+  unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false, mdK: 'cost',
   drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', pq: '', span: 'all', r0: '', r1: '' }, sv: 8 };
 let S = load();
 let P = null, R = null;
@@ -498,10 +511,11 @@ function yearChart(el, o) {
   const vals = vis.flatMap(l => l.values.map(v => C.scaled(m, v)).filter(v => v != null));
   if (!vals.length) { el.innerHTML = '<div class="hint" style="padding:40px 0;text-align:center">표시할 데이터가 없습니다</div>'; return; }
   let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (o.range) { lo = Math.min(lo, o.range[0]); hi = Math.max(hi, o.range[1]); }   // 여러 그래프 세로축 맞추기
   if (hi === lo) { const d = Math.abs(hi) * 0.1 || 1; lo -= d; hi += d; }
   const pad = (hi - lo) * 0.08;
   lo -= pad; hi += pad * (o.showText ? 2.2 : 1);                                   // 값 라벨 자리
-  if (Math.min(...vals) >= 0 && lo < 0) lo = 0;
+  if (Math.min(...vals, ...(o.range || [])) >= 0 && lo < 0) lo = 0;
   const step = niceStep((hi - lo) / 4), y0 = Math.floor(lo / step) * step, y1 = Math.ceil(hi / step) * step;
   const x = i => n <= 1 ? (L + W - Rr) / 2 : L + (W - L - Rr) * i / (n - 1);
   const y = v => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
@@ -998,6 +1012,54 @@ function periodTableHTML(c) {
     <tbody>${rows.map(r => `<tr class="${r.p.key === at.key ? 'cur' : ''}"><td data-csv="${esc(r.p.label)}" title="${esc(r.p.range)}">${esc(r.p.label)}${r.p.partial ? ' <span class="hint">진행 중</span>' : ''}</td>${ms.map(m => cell(m, r)).join('')}</tr>`).join('')}
     <tr class="tot"><td data-csv="합계">합계 · ${sh.length}개 기간</td>${ms.map(m => cell(m, tot)).join('')}</tr></tbody></table></div></section>`;
 }
+// ════════════════════════════════════════════════════════════════════
+// 주요 매체별 추이 — 지표 하나를 골라 8개 매체를 같은 세로축의 큰 그래프로 (연도 겹쳐보기)
+//  카카오 · 네이버 = 매체 이름에 카카오 · 네이버가 들어간 것 전부, 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 매체 중 상품(또는 매체) 이름에 그 말이 들어간 것
+//  SNS = 채널이 SNS, 버즈빌 = 매체 · 채널 이름에 버즈빌. 위쪽 필터 · 비용출처는 그대로 적용
+// ════════════════════════════════════════════════════════════════════
+const MEDIA = ['카카오', '카카오 비즈보드', '카카오 모먼트', '네이버', '네이버 스마트채널', '네이버 홈피드', 'SNS', '버즈빌'];
+function mediaSeries() {
+  const key = 'md:' + filtKey();
+  if (cache[key]) return cache[key];
+  const nm = v => String(v == null ? '' : v).replace(/\s/g, '').toLowerCase();
+  const col = k => (R.dims[k] ? { f: R.f[k], v: R.dims[k].map(nm) } : null);
+  const md = col('md'), pr = col('pr'), ch = col('ch');
+  const get = (c, i) => (c ? c.v[c.f[i]] : '');
+  const filt = { bucket: bucketArg(), where: S.filt, names: S.names };
+  const top = i => { const m = get(md, i), c = get(ch, i); return m.includes('카카오') ? '카카오' : m.includes('네이버') ? '네이버' : (m.includes('버즈빌') || c.includes('버즈빌')) ? '버즈빌' : null; };
+  const sub = i => {
+    const m = get(md, i), t = m + '|' + get(pr, i);
+    if (m.includes('카카오')) return t.includes('비즈보드') ? '카카오 비즈보드' : t.includes('모먼트') ? '카카오 모먼트' : null;
+    if (m.includes('네이버')) return t.includes('스마트채널') ? '네이버 스마트채널' : t.includes('홈피드') ? '네이버 홈피드' : null;
+    return null;
+  };
+  const sns = i => (get(ch, i) === 'sns' ? 'SNS' : null);
+  const out = new Map();
+  for (const g of [top, sub, sns]) for (const [k, v] of C.daily(R, filt, g)) out.set(k, v);
+  return (cache[key] = out);
+}
+function drawMedia(c) {
+  const el = $id('mdSec');
+  if (!el) return;
+  const { ps, sh, at } = c, k = C.METRIC[S.mdK] ? S.mdK : 'cost', m = C.METRIC[k], ss = mediaSeries();
+  const tabs = CHART_GROUPS.map(([g, ks]) => `<span class="hint md-g">${g}</span>${ks.map(x => `<button class="chip" data-mdk="${x}" aria-pressed="${x === k}">${esc(C.METRIC[x].n)}</button>`).join('')}`).join('');
+  const per = MEDIA.map(name => {
+    const sg = ss.get(name);
+    if (!sg) return { name };
+    const ys = yearSeries(sg, ps, sh, at), cur = C.curIdx(at, sg), v = vy(m, C.sumIdx(sg, cur), at.y);
+    const cv = c.custom ? vy(m, C.sumIdx(sg, c.cmpIdx), cuYear()) : vy(m, C.sumIdx(sg, fullCmp(at, S.grain, 'yoy', cur)), at.y - 1);
+    const empty = l => l.sums.every(t => !t || m.base.every(b => !t[b]));
+    const lines = ys.lines.filter(l => l.sums.some(Boolean) && !(l.k > 0 && empty(l))).map(l => ({ k: l.k, name: l.name, tips: l.tips, values: l.sums.map(t => (t ? val(m, t) : null)) }));
+    return { name, ys, lines, v, cv };
+  });
+  const all = per.flatMap(p => (p.lines || []).flatMap(l => l.values.map(x => C.scaled(m, x)).filter(x => x != null)));
+  const range = all.length ? [Math.min(...all), Math.max(...all)] : null;
+  el.innerHTML = `<div class="sec-h"><h2>주요 매체별 추이 · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · 8개 그래프 세로축 같음 · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'} · 비용출처 ${esc(bucketName())}</span></div>
+    <div class="card pad md-tabs">${tabs}</div>
+    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b>${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="md-${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
+    <p class="hint" style="margin:6px 2px 0">카카오 · 네이버 = 매체 이름에 그 말이 들어간 전체 · 비즈보드 · 모먼트 · 스마트채널 · 홈피드 = 그 안의 상품 · SNS = 채널 SNS · 버즈빌 = 매체 · 채널 이름에 버즈빌 · 위쪽 필터 적용</p>`;
+  per.forEach((p, i) => { if (p.lines) yearChart($id('md-' + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: false, range, label: `${p.name} ${m.n} 추이` }); });
+}
 function renderSummary(main) {
   const c = ctx(), { s, ps, sh, at } = c;
   const filt = filterSummary(), hasY2 = hasYoy2();
@@ -1024,11 +1086,13 @@ function renderSummary(main) {
   h += `<section>${memoHTML('summary', '리뷰 메모', at, draft)}</section>`;
   const span = c.custom ? `실적 기간 ${S.cu.r0} ~ ${S.cu.r1} vs 비교 기간 ${S.cu.c0} ~ ${S.cu.c1} (같은 만큼 당긴 날짜)` : S.grain === 'month' ? '1~12월 연도 겹쳐보기(범위와 무관)' : `${sh.length}개 기간 · 같은 요일로 맞춘 연도 겹쳐보기`;
   h += `<section><div class="sec-h"><h2>지표별 추이</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${span}${c.custom ? '' : ' · 진행 중인 기간의 전년 · 전전년은 같은 요일 기간(MTD)'}</span></div>
-    ${GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
+    ${CHART_GROUPS.map(([g, ks]) => `<div class="grp">${g}</div><div class="charts">${ks.map(k => `<div class="card cc"><div class="cc-t">${C.METRIC[k].n}<span class="hint">${C.unit(C.METRIC[k], S.mode)}</span></div><div class="cc-b" id="ch-${k}"></div></div>`).join('')}</div>`).join('')}</section>`;
+  h += '<section id="mdSec"></section>';
   h += periodTableHTML(c);
   h += notes();
   main.innerHTML = h;
-  drawYearCharts(ys, C.SUMMARY, 'ch-');
+  drawYearCharts(ys, CHART_KEYS, 'ch-');
+  drawMedia(c);
 }
 function drawYearCharts(ys, keys, prefix) {
   for (const k of keys) {
@@ -1524,6 +1588,7 @@ document.addEventListener('click', e => {
   if (ds.memoSave) { memoSave(ds.memoSave, $id('memoTa').value); return; }
   if (ds.memoReset) { const k = ds.memoReset, cur = (P.memos || {})[k], g = gem(); if (!cur || cur.src === 'ai' || confirm('저장된 메모를 지우고 초안을 다시 쓸까요? (직접 고친 내용은 사라집니다)')) { delete aiFail[k]; memoSave(k, null).then(() => { if (g && g.ready) { memoAsk(k); if (!memoEdit) render(true); } }); } return; }
   if (t.id === 'cuYoy') { const sh = d => C.iso(C.dnum(d) - 364); S.cu = { ...S.cu, c0: sh(S.cu.r0), c1: sh(S.cu.r1), auto: true }; render(true); return; }
+  if (ds.mdk) { S.mdK = ds.mdk; save(); drawMedia(ctx()); return; }
   if (ds.grp != null) { const o = new Set(S.grpOpen || []); o.has(ds.grp) ? o.delete(ds.grp) : o.add(ds.grp); S.grpOpen = [...o]; render(true); return; }
   if (ds.grpAll != null) { S.grpOpen = ds.grpAll === '1' ? GROUPS.slice(1).map(([g]) => g) : []; render(true); return; }
   if (ds.csvFor) { const tb = $id(ds.csvFor); if (tb) tableCSV(tb, ds.name || '표'); return; }
