@@ -1055,6 +1055,8 @@ function yearBtns(c) {
 }
 // 묶음별 추이(매체별 · 비용출처별) 공통 — 지표 탭 하나 + 같은 세로축의 큰 그래프 여러 개
 //  cfg = { id, title, stateKey, items: [{ name, s(일자 시리즈), color?, textColor? }], note, desc }
+// items 의 grp(소제목)별로 나눈 [소제목, [[item, 번호]…]] — grp 가 없으면 한 묶음
+function groupsOf(per) { const out = []; per.forEach((p, i) => { const g = p.grp || ''; let last = out[out.length - 1]; if (!last || last[0] !== g) out.push(last = [g, []]); last[1].push([p, i]); }); return out; }
 function drawGroupCharts(c, cfg) {
   const el = $id(cfg.id);
   if (!el) return;
@@ -1081,7 +1083,7 @@ function drawGroupCharts(c, cfg) {
   const pre = cfg.id + '-';
   el.innerHTML = `<div class="sec-h"><h2>${esc(cfg.title)} · ${esc(m.n)}</h2><span class="desc">${GRAIN_N[S.grain]} · ${S.mode === 'avg' ? '일평균' : '누계'} · ${per.length}개 그래프 세로축 같음${clip ? '(튀는 값은 가장자리에 · 마우스를 올리면 실제 값)' : ''} · 제목 옆 = ${esc(at.label)} 값과 ${c.custom ? '비교 기간비' : '전년비'}${cfg.desc ? ' · ' + esc(cfg.desc) : ''}</span>${yearBtns(c)}</div>
     <div class="card pad md-tabs">${tabs}</div>
-    <div class="charts md">${per.map((p, i) => `<div class="card cc"><div class="cc-t"><b>${p.color ? `<i class="md-dot" style="background:${p.color}"></i>` : ''}${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="${pre}${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>
+    ${groupsOf(per).map(([g, ps_]) => `${g ? `<div class="grp">${esc(g)}</div>` : ''}<div class="charts md">${ps_.map(([p, i]) => `<div class="card cc"><div class="cc-t"><b>${p.color ? `<i class="md-dot" style="background:${p.color}"></i>` : ''}${esc(p.name)}</b><span class="md-v">${p.lines ? `${C.fmt(m, p.v, S.mode)}${/%$/.test(C.fmt(m, p.v, S.mode)) ? '' : `<small> ${esc(C.unit(m, S.mode))}</small>`} ${deltaHTML(m, p.v, p.cv, c.custom ? '비교 기간비' : '전년비')}` : ''}</span></div><div class="cc-b" id="${pre}${i}">${p.lines ? '' : '<div class="hint" style="padding:40px 0;text-align:center">조건에 맞는 데이터가 없습니다</div>'}</div></div>`).join('')}</div>`).join('')}
     <p class="hint" style="margin:6px 2px 0">${esc(cfg.note)}</p>`;
   per.forEach((p, i) => { if (p.lines) yearChart($id(pre + i), { metric: m, labels: p.ys.labels, head: p.ys.head, lines: p.lines, showText: p.ys.labels.length <= 16, range, clip, color: p.color, textColor: p.textColor, label: `${p.name} ${m.n} 추이` }); });
 }
@@ -1096,13 +1098,19 @@ function bucketSeries() {
   const where = { ...S.filt }; delete where.src;               // 비용출처(상세) 칩 선택은 묶음 그래프에서는 쓰지 않는다
   const key = 'bk:' + JSON.stringify([where, S.names]);
   if (cache[key]) return cache[key];
-  return (cache[key] = new Map(BUCKETS.filter(([b]) => b !== '상세').map(([b]) => [b, C.daily(R, { bucket: b, where, names: S.names })])));
+  const out = { buckets: new Map(BUCKETS.filter(([b]) => b !== '상세').map(([b]) => [b, C.daily(R, { bucket: b, where, names: S.names })])), src: [] };
+  if (R.dims.src) {                                             // 원천 비용출처 하나하나 — 전체 기간 광고비 큰 순
+    const by = C.daily(R, { where, names: S.names }, i => R.f.src[i]), cost = s => s.cost.reduce((a, b) => a + b, 0);
+    out.src = [...by].map(([ix, sr]) => ({ name: R.dims.src[ix] || '(빈 값)', s: sr, c: cost(sr) })).sort((a, b) => b.c - a.c || nameCmp(a.name, b.name));
+  }
+  return (cache[key] = out);
 }
 function drawBuckets(c) {
   const ss = bucketSeries();
   drawGroupCharts(c, { id: 'bkSec', title: '비용출처별 추이', stateKey: 'bkK',
-    items: BUCKETS.filter(([b]) => b !== '상세').map(([b, n]) => { const sg = ss.get(b); return { name: n, s: sg && sg.has.some(Boolean) ? sg : null }; }),
-    note: '비용출처 묶음은 위쪽 비용출처 선택과 같은 기준(지표 정의 · 집계 기준 참고) · 위쪽 필터(채널 · 매체 · 캠페인 등)는 적용, 비용출처 선택은 그래프마다 그 묶음' });
+    items: [...BUCKETS.filter(([b]) => b !== '상세').map(([b, n]) => { const sg = ss.buckets.get(b); return { grp: '묶음 (위쪽 비용출처 선택과 같은 기준)', name: n, s: sg && sg.has.some(Boolean) ? sg : null }; }),
+      ...ss.src.map(x => ({ grp: `비용출처 하나씩 (${ss.src.length}개 · 전체 기간 광고비 큰 순)`, name: x.name, s: x.s }))],
+    note: '묶음은 위쪽 비용출처 선택과 같은 기준(지표 정의 · 집계 기준 참고) · 아래는 원천 비용출처 값 그대로 · 위쪽 필터(채널 · 매체 · 캠페인 등)는 적용, 비용출처 선택은 그래프마다 자기 것' });
 }
 function renderSummary(main) {
   const c = ctx(), { s, ps, sh, at } = c;
