@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "marketing-team": {
+      "source": {
+        "source": "github",
+        "repo": "steveaimkt/marketing-team"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "marketing-team@marketing-team": true
+  }
+}
