@@ -1174,9 +1174,19 @@ function renderDrill(main) {
     }
   };
   walk('', 0);
+  // 이 기간에 실적이 없을 때 — 필터 칩은 전체 기간 기준이라 고를 수 있어도 기준 기간에는 집행이 없을 수 있다
+  const emptyWhy = () => {
+    if (t.total[0].days) return '조건에 맞는 항목이 없습니다';
+    const all = C.daily(ds, { bucket: bucketArg(), where, names: S.names, any });
+    let f = -1, l = -1;
+    for (let i = 0; i < all.has.length; i++) if (all.has[i]) { if (f < 0) f = i; l = i; }
+    if (l < 0) return '조건에 맞는 실적이 전체 기간에 없습니다';
+    const d0 = ds.dates[f], d1 = ds.dates[l];
+    return `이 기간(${esc(span)})에는 조건에 맞는 실적이 없습니다 — 조건에 맞는 집행은 <b>${d0} ~ ${d1}</b> 입니다 <button class="lnk" data-dr-span="${d0}|${d1}">이 기간으로 보기</button>`;
+  };
   if (cut) body += `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">행이 많아 ${DRILL_MAX_ROWS.toLocaleString()}행까지만 보여 줍니다 — 단계별 상위 N 을 줄이거나 일부를 접으세요</td></tr>`;
   $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${showPromo ? '<th class="pno">기획전번호</th>' : ''}${ms.map(m => `<th${m.k === 'roas' ? ' class="roas"' : ''}><b>${m.n}</b>${tUnit(m)}</th>`).join('')}</tr></thead>
-    <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">조건에 맞는 항목이 없습니다</td></tr>`}</tbody>`;
+    <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">${emptyWhy()}</td></tr>`}</tbody>`;
   // 선택 항목 추이 (연도 겹쳐보기) — 기간 단계는 조건에서 뺀다, AF코드는 최근 92일만
   const selKey = D.sel && t.nodes.has(D.sel) ? D.sel : '';
   const name = selKey ? selKey.split('|').map((ix, L) => ds.dims[D.dims[L]][+ix] || '(빈 값)').join(' › ') : '합계';
@@ -1295,7 +1305,7 @@ function renderFilt() {
     if (more) ix = ix.slice(0, CHIP_MAX);
     const nOk = vals.length - hidden;
     h += `<div class="bar2${long ? ' long' : ''}"><span class="flabel">${n}</span>${long || vals.length > 12 ? `<input type="search" data-chipq="${k}" placeholder="${n} 찾기" value="${esc(chipQ[k] || '')}" style="width:${long ? 180 : 120}px">` : ''}
-      <div class="chips${long ? ' long' : ''}" role="group" aria-label="${n} 선택">${ix.map(i => { const v = vals[i]; return `<button class="chip${A.ok[i] ? '' : ' off'}" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" title="${esc(v || '(빈 값)')}${A.ok[i] ? '' : ' — 다른 필터 조건에는 없음'}">${esc(v || '(빈 값)')}</button>`; }).join('')}${more ? `<span class="hint">외 ${more.toLocaleString()}개 — 찾기로 좁혀 주세요</span>` : ''}${q && !ix.length ? '<span class="hint">찾는 이름이 없습니다</span>' : ''}</div>
+      <div class="chips${long ? ' long' : ''}" role="group" aria-label="${n} 선택">${ix.map(i => { const v = vals[i]; return `<button class="chip${A.ok[i] ? '' : ' off'}" data-fk="${k}" data-fv="${esc(v)}" aria-pressed="${!sel || sel.has(v)}" title="${esc(v || '(빈 값)')}${A.ok[i] ? (A.last[i] >= 0 && R.dates[A.last[i]] ? ` · 마지막 집행 ${R.dates[A.last[i]]}` : '') : ' — 다른 필터 조건에는 없음'}">${esc(v || '(빈 값)')}</button>`; }).join('')}${more ? `<span class="hint">외 ${more.toLocaleString()}개 — 찾기로 좁혀 주세요</span>` : ''}${q && !ix.length ? '<span class="hint">찾는 이름이 없습니다</span>' : ''}</div>
       <button class="lnk" data-fall="${k}">모두</button><span class="hint">${sel ? `${sel.size}개 선택 · ` : ''}${hidden ? `${nOk.toLocaleString()}/${vals.length.toLocaleString()}개` : `${vals.length.toLocaleString()}개`}</span></div>`;
   }
   h += `<div class="bar2">${NAME_DIMS.filter(([k]) => !TOP_NAMES.has(k) && R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
@@ -1494,6 +1504,10 @@ document.addEventListener('click', e => {
     render(true); return;
   }
   if (ds.fall) { delete S.filt[ds.fall]; render(true); return; }
+  if (ds.drSpan) {                                     // 드릴다운 빈 표 → 조건에 맞는 집행 기간을 직접 지정으로
+    const [r0, r1] = ds.drSpan.split('|'), sh = d => C.iso(C.dnum(d) - 364);
+    S.cu = { r0, r1, c0: sh(r0), c1: sh(r1), auto: true }; S.cmp = 'cu'; render(true); return;
+  }
   if (t.id === 'filtReset') { S.filt = {}; S.names = {}; chipQ = {}; render(true); return; }
   if (t.id === 'btnFilt') { S.filtOpen = !S.filtOpen; syncBar(); save(); return; }
   if (t.id === 'btnOpen') { $id('fileOpen').click(); return; }
