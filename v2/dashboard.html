@@ -297,7 +297,7 @@ header.top .btn.drop-hot{background:var(--mint);border-color:var(--mint);color:#
     <div class="bar1">
       <div class="brand"><h1>DA 광고 실적</h1><span class="asof" id="asof"></span></div>
       <nav class="menu" aria-label="화면">
-        <button data-page="summary">요약</button>
+        <button data-page="summary">추이</button>
         <button data-page="drill">드릴다운</button>
       </nav>
       <div class="bk-tools">
@@ -370,7 +370,7 @@ const CORE = ['cost', 'nrev', 'roas', 'trev', 'troas', 'join', 'jcpa', 'fp', 'fc
 const STORE_KEY = 'da-dashboard-v2';
 const DEF = { page: 'summary', grain: 'month', mode: 'sum', cmp: 'yoy', at: '', range: { month: 13, week: 8, day: 7 }, bucket: 'TOTAL',
   unit: 'm', filt: {}, names: {}, filtOpen: false, cols: 'core', showCmp: true, grpOpen: [], cu: null, prevY: false,
-  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', top: 20, pq: '', span: 'all', r0: '', r1: '' }, sv: 8 };
+  drill: { dims: ['src', 'ch', 'md', 'pr', 'camp'], exp: 'all', tg: [], sel: '', q: '', impOnly: true, cmp: false, sort: 'roas', cols: 'core', pq: '', span: 'all', r0: '', r1: '' }, sv: 8 };
 let S = load();
 let P = null, R = null;
 const cache = {};
@@ -384,7 +384,8 @@ function load() {
       if (s.sv < 5) { if (s.names) { delete s.names.camp; delete s.names.sub; } s.sv = 5; }          // 캠페인 · 하위캠페인은 이름 검색 → 칩(찾기)으로
       if (s.sv < 6) { if (s.drill) s.drill.sort = 'roas'; s.sv = 6; }   // 드릴다운 기본 정렬 = ROAS(순결제)
       if (s.sv < 7) { s.range = { ...(s.range || {}), day: 7 }; s.sv = 7; }   // 일별 기본 범위 = 최근 7일
-      if (s.sv < 8) { if (s.drill) s.drill.span = 'all'; s.sv = 8; }   // 드릴다운은 자체 기간 탭(전체 · 올해 · 이번달 · 이번주 · 직접 지정) — 기본 전체
+      if (s.sv < 8) { if (s.drill) s.drill.span = 'all'; s.sv = 8; }
+      if (s.drill) delete s.drill.top;                  // 단계별 상위 N 없앰 — 늘 전체   // 드릴다운은 자체 기간 탭(전체 · 올해 · 이번달 · 이번주 · 직접 지정) — 기본 전체
       return deepMerge(structuredClone(DEF), s);
     }
   } catch (e) { /* 저장소 차단 */ }
@@ -1147,14 +1148,13 @@ function renderDrill(main) {
       <label class="field">검색 <input type="search" id="drQ" placeholder="매체 · 캠페인 이름" value="${esc(D.q || '')}"></label>
       ${ds.dims.pno ? `<label class="field" title="그 기획전번호 행만 집계합니다 · 쉼표로 여러 개 · 제외는 -">기획전번호 <input type="search" id="drPq" placeholder="기획전번호" value="${esc(D.pq || '')}" style="width:110px"></label>` : ''}
       <label class="field">정렬 <select id="drSort">${ms.map(m => `<option value="${m.k}"${D.sort === m.k ? ' selected' : ''}>${m.n}</option>`).join('')}<optgroup label="기간 · 이름">${DRILL_SORTS.map(([k, n]) => `<option value="${k}"${D.sort === k ? ' selected' : ''}>${n}</option>`).join('')}</optgroup></select></label>
-      <label class="field">단계별 <select id="drTop">${[[10, '상위 10'], [20, '상위 20'], [50, '상위 50'], [0, '전체']].map(([v, l]) => `<option value="${v}"${+D.top === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field" title="노출이 없는(집행되지 않은) 항목을 숨깁니다 — 기존 대시보드와 같은 기준. 노출 없이 비용 · 매출만 있는 서비스비용 같은 항목도 숨겨지니 합계와 맞춰 볼 때는 끄세요"><input type="checkbox" id="drImp"${D.impOnly ? ' checked' : ''}> 노출수 0 초과만 보기</label>
       <label class="field" title="각 칸 아래에 비교 기간 대비 증감 — 비교 기준은 위쪽 조작 줄에서"><input type="checkbox" id="drCmp"${D.cmp ? ' checked' : ''}> 비교 표시</label>
       <div class="seg" role="group" aria-label="지표 묶음"><button data-dcols="core" aria-pressed="${D.cols !== 'all'}">핵심 지표</button><button data-dcols="all" aria-pressed="${D.cols === 'all'}">전체 지표</button></div>
       <button class="lnk" id="drExp" type="button">${D.exp === 'all' && !D.tg.length ? '모두 접기' : '모두 펼치기'}</button>
       <button class="btn" data-csv-for="drTbl" data-name="DA_드릴다운_${esc(at.key)}">CSV</button>
     </div>${notes.length ? `<p class="hint" style="margin:6px 0 0">${notes.map(esc).join(' · ')}</p>` : ''}</div></section>
-    <section><div class="card tbl-wrap"><table class="grid dr" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">${cmpOk ? `칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 · AF코드 단계는 매년 바뀌어 증감을 달지 않습니다 · ` : ''}단계별 상위 N = 정렬 순서 기준 · ▸ ▾ 로 접고 펴기 · 숫자 칸 드래그 = 합계</p></section>
+    <section><div class="card tbl-wrap"><table class="grid dr" id="drTbl"></table></div><p class="hint" style="margin:6px 2px 0">${cmpOk ? `칸 아래 = ${cmpL} · 캠페인 · 하위캠페인 · 기획전번호 · AF코드 단계는 매년 바뀌어 증감을 달지 않습니다 · ` : ''}▸ ▾ 로 접고 펴기 · 숫자 칸 드래그 = 합계</p></section>
     <section id="drSelSec"></section>`);
   const v = (m, sm, yr) => vy(m, sm, yr);
   const cellRow = (n, dim) => ms.map(m => {
@@ -1189,8 +1189,6 @@ function renderDrill(main) {
     kids = kids.filter(n => n.s[0].days > 0 && (isP || !D.impOnly || n.s[0].imp > 0));
     if (q) kids = kids.filter(n => visible(n.key));
     sortKids(kids, isP);
-    const top = isP ? 0 : +D.top || 0, extra = top && kids.length > top ? kids.slice(top) : [];
-    if (extra.length) kids = kids.slice(0, top);
     for (const n of kids) {
       if (rows >= DRILL_MAX_ROWS) { cut++; continue; }
       const canOpen = level < D.dims.length - 1;
@@ -1200,11 +1198,6 @@ function renderDrill(main) {
       rows++;
       body += `<tr data-key="${esc(n.key)}" class="d${Math.min(level, 7)}${D.sel === n.key ? ' sel' : ''}"><td style="padding-left:${10 + level * 18}px" data-csv="${esc('  '.repeat(level) + n.v)}">${canOpen ? `<button class="tw" data-tw="${esc(n.key)}" aria-expanded="${isOpen}" aria-label="${isOpen ? '접기' : '펼치기'}">${isOpen ? '▾' : '▸'}</button>` : '<span class="tw"></span>'}<button class="nm" data-dsel="${esc(n.key)}" title="${esc(n.v)}">${esc(n.v || '(빈 값)')}</button></td>${showPromo ? `<td class="pno">${esc(pno)}</td>` : ''}${cellRow(n, n.dim)}</tr>`;
       if (isOpen) walk(n.key, level + 1);
-    }
-    if (extra.length && rows < DRILL_MAX_ROWS) {
-      rows++;
-      const agg = t.total.map((_, k) => { const o = { days: Math.max(...extra.map(n => n.s[k].days)) }; for (const b of C.BASE) o[b] = extra.reduce((a, n) => a + n.s[k][b], 0); return o; });
-      body += `<tr class="etc d${Math.min(level, 7)}"><td style="padding-left:${28 + level * 18}px" data-csv="${esc('  '.repeat(level) + `그 외 ${extra.length}개`)}"><span class="hint">그 외 ${extra.length}개 (합계)</span></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: agg }, 'camp')}</tr>`;
     }
   };
   walk('', 0);
@@ -1218,7 +1211,7 @@ function renderDrill(main) {
     const d0 = ds.dates[f], d1 = ds.dates[l];
     return `이 기간(${esc(span)})에는 조건에 맞는 실적이 없습니다 — 조건에 맞는 집행은 <b>${d0} ~ ${d1}</b> 입니다 <button class="lnk" data-dr-span="${d0}|${d1}">이 기간으로 보기</button>`;
   };
-  if (cut) body += `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">행이 많아 ${DRILL_MAX_ROWS.toLocaleString()}행까지만 보여 줍니다 — 단계별 상위 N 을 줄이거나 일부를 접으세요</td></tr>`;
+  if (cut) body += `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">행이 많아 ${DRILL_MAX_ROWS.toLocaleString()}행까지만 보여 줍니다 — 일부를 접거나 필터 · 검색으로 좁혀 주세요</td></tr>`;
   $id('drTbl').innerHTML = `<thead><tr><th>${D.dims.map(d => DIM_NAME[d]).join(' › ')}</th>${showPromo ? '<th class="pno">기획전번호</th>' : ''}${ms.map(m => `<th${m.k === 'roas' ? ' class="roas"' : ''}><b>${m.n}</b>${tUnit(m)}</th>`).join('')}</tr></thead>
     <tbody><tr class="tot" data-key=""><td><button class="nm" data-dsel="">합계</button></td>${showPromo ? '<td class="pno"></td>' : ''}${cellRow({ s: t.total })}</tr>${body || `<tr><td colspan="${ms.length + 1 + (showPromo ? 1 : 0)}" class="hint">${emptyWhy()}</td></tr>`}</tbody>`;
   // 선택 항목 추이 (연도 겹쳐보기) — 기간 단계는 조건에서 뺀다, AF코드는 최근 92일만
@@ -1580,7 +1573,6 @@ document.addEventListener('change', e => {
   }
   else if (t.dataset.dim != null) { const L = +t.dataset.dim, d = S.drill.dims.slice(); if (t.value) d[L] = t.value; else d.length = L; S.drill.dims = d.filter((x, i) => x && d.indexOf(x) === i); S.drill.tg = []; S.drill.sel = ''; render(true); }
   else if (t.id === 'drSort') { S.drill.sort = t.value; render(true); }
-  else if (t.id === 'drTop') { S.drill.top = +t.value; render(true); }
   else if (t.id === 'drImp') { S.drill.impOnly = t.checked; render(true); }
   else if (t.id === 'drCmp') { S.drill.cmp = t.checked; render(true); }
   else if (t.id === 'selBucket') { if (S.bucket === '상세' && t.value !== '상세') delete S.filt.src; S.bucket = t.value; if (t.value === '상세') S.filtOpen = true; render(true); }
