@@ -70,6 +70,9 @@ select{cursor:pointer;max-width:260px}
 .chips.long .chip{white-space:normal;text-align:left;border-radius:10px;max-width:100%;word-break:break-all}
 .bar2.long{flex-wrap:wrap}
 .chip.off{opacity:.45;text-decoration:line-through}
+.chip.dg-on{outline:2px solid var(--c1);outline-offset:1px;color:var(--ink);font-weight:600}
+.chip.dg-off{outline:2px dashed var(--muted);outline-offset:1px;opacity:.55}
+.chips.dragging{user-select:none;cursor:crosshair}
 .chip i{width:8px;height:8px;border-radius:50%;background:var(--ink-2);opacity:.25}
 .chip[aria-pressed="true"]{color:var(--ink);font-weight:600;border-color:var(--ink-2);background:var(--surface)}
 .chip[aria-pressed="true"] i{background:var(--accent);opacity:1}
@@ -1297,7 +1300,7 @@ function renderFilt() {
   }
   h += `<div class="bar2">${NAME_DIMS.filter(([k]) => !TOP_NAMES.has(k) && R.dims[k] && R.dims[k].length > 1).map(([k, n]) => `<label class="field">${n} <input type="search" data-name="${k}" placeholder="포함(쉼표로 여러 개) · 제외는 -" value="${esc(S.names[k] || '')}" style="width:220px"></label>`).join('')}
     <button class="lnk" id="filtReset">필터 모두 해제</button></div>
-    <p class="hint" style="margin:2px 0 6px">엑셀 피벗 필터처럼 다른 필터에 맞는 값만 보입니다(예: 매체 카카오 → 카카오에 있는 상품 · BPU · 디바이스 · 캠페인만). 캠페인 · 하위캠페인은 최근 집행 순.</p>`;
+    <p class="hint" style="margin:2px 0 6px">엑셀 피벗 필터처럼 다른 필터에 맞는 값만 보입니다(예: 매체 카카오 → 카카오에 있는 상품 · BPU · 디바이스 · 캠페인만). 캠페인 · 하위캠페인은 최근 집행 순. 칩을 누른 채 끌면 여러 개를 한 번에 고르고, 켜진 칩에서 시작하면 한 번에 뺍니다.</p>`;
   setHTMLKeep(el, h);
 }
 
@@ -1358,6 +1361,50 @@ document.addEventListener('mouseover', e => {
   if (pos.r !== SEL.f.r || pos.c !== SEL.f.c) { SEL.f = pos; paintSel(); }
 });
 document.addEventListener('mouseup', () => { SEL.drag = false; });
+
+// ════════════════════════════════════════════════════════════════════
+// 필터 칩 드래그 선택 — 칩 위를 누른 채 끌면 지나간 범위(화면 순서)를 한 번에 고르거나 뺀다
+//   모두 선택 상태에서 시작 → 그 범위만 · 꺼진 칩에서 시작 → 범위 추가 · 켜진 칩에서 시작 → 범위 빼기
+//   한 칩에서 떼면 평소 클릭과 같다
+// ════════════════════════════════════════════════════════════════════
+const CD = { k: null, box: null, a: null, f: null, moved: false, eat: false };
+const chipList = box => [...box.querySelectorAll('.chip[data-fk]')];
+function chipRange() { const l = chipList(CD.box), i = l.indexOf(CD.a), j = l.indexOf(CD.f); return i < 0 || j < 0 ? [] : l.slice(Math.min(i, j), Math.max(i, j) + 1); }
+const chipMode = () => !S.filt[CD.k] ? 'only' : CD.a.getAttribute('aria-pressed') === 'true' ? 'del' : 'add';
+function paintChips() {
+  CD.box.querySelectorAll('.dg-on,.dg-off').forEach(b => b.classList.remove('dg-on', 'dg-off'));
+  if (!CD.moved) return;
+  const cls = chipMode() === 'del' ? 'dg-off' : 'dg-on';
+  chipRange().forEach(b => b.classList.add(cls));
+}
+document.addEventListener('mousedown', e => {
+  const b = e.button === 0 && e.target.closest && e.target.closest('.chip[data-fk]');
+  if (!b || e.shiftKey || e.ctrlKey || e.metaKey) return;
+  CD.k = b.dataset.fk; CD.box = b.parentElement; CD.a = CD.f = b; CD.moved = false;
+  e.preventDefault();                                   // 글자 선택 막기
+});
+document.addEventListener('mouseover', e => {
+  if (!CD.a) return;
+  const b = e.target.closest && e.target.closest('.chip[data-fk]');
+  if (!b || b.parentElement !== CD.box || b === CD.f) return;
+  CD.f = b; CD.moved = true; CD.box.classList.add('dragging'); paintChips();
+});
+document.addEventListener('mouseup', () => {
+  if (!CD.a) return;
+  const moved = CD.moved && CD.f !== CD.a, range = moved ? chipRange().map(b => b.dataset.fv) : [], k = CD.k, mode = moved ? chipMode() : '';
+  CD.box.classList.remove('dragging'); CD.moved = false; CD.f = null;
+  CD.box.querySelectorAll('.dg-on,.dg-off').forEach(b => b.classList.remove('dg-on', 'dg-off'));
+  CD.a = CD.box = null;
+  if (!moved) return;                                   // 한 칩 = 평소 클릭
+  CD.eat = true; setTimeout(() => { CD.eat = false; }, 0);   // 뒤따르는 click 은 무시
+  const all = R.dims[k], sel = new Set(S.filt[k] || []);
+  if (mode === 'only') { sel.clear(); range.forEach(v => sel.add(v)); }
+  else if (mode === 'add') range.forEach(v => sel.add(v));
+  else range.forEach(v => sel.delete(v));
+  if (!sel.size || sel.size === all.length) delete S.filt[k]; else S.filt[k] = all.filter(v => sel.has(v));
+  render(true);
+});
+document.addEventListener('click', e => { if (CD.eat) { CD.eat = false; e.stopPropagation(); e.preventDefault(); } }, true);
 document.addEventListener('keydown', e => {
   if (!SEL.a) return;
   if (e.key === 'Escape') clearSel();
