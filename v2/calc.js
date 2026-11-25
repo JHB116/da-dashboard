@@ -113,14 +113,21 @@
   }
 
   // 조건 → 행 마스크 함수. where = {구분키: 값 배열|Set} · names = {구분키: 검색어} · bucket = 비용출처 묶음 이름
-  function rowTest(ds, { where = null, names = null, bucket = null } = {}) {
+  // any = {keys: [구분키…], q: 검색어} — 그중 하나라도 이름이 맞는 행 (드릴다운 검색: 단계에 없는 캠페인 이름도 찾는다)
+  function rowTest(ds, { where = null, names = null, bucket = null, any = null } = {}) {
     const conds = [];
     const add = (k, okVals) => { const set = okVals instanceof Set ? okVals : new Set(okVals); conds.push([ds.f[k], Uint8Array.from(ds.dims[k].map(v => set.has(v) ? 1 : 0))]); };
     if (where) for (const [k, v] of Object.entries(where)) if (v && ds.dims[k]) add(k, v);
     if (names) for (const [k, q] of Object.entries(names)) { const fn = nameMatcher(q); if (fn && ds.dims[k]) add(k, ds.dims[k].filter(fn)); }
     if (bucket && COST_BUCKETS[bucket] && ds.dims.src) add('src', bucketValues(ds.dims.src, bucket));
-    if (!conds.length) return null;
-    return i => { for (const [col, mask] of conds) if (!mask[col[i]]) return false; return true; };
+    const anyFn = any && nameMatcher(any.q);
+    const anyC = anyFn ? any.keys.filter(k => ds.dims[k]).map(k => [ds.f[k], Uint8Array.from(ds.dims[k].map(v => anyFn(v == null ? '' : v) ? 1 : 0))]) : [];
+    if (!conds.length && !anyC.length) return null;
+    return i => {
+      for (const [col, mask] of conds) if (!mask[col[i]]) return false;
+      if (anyC.length) { for (const [col, mask] of anyC) if (mask[col[i]]) return true; return false; }
+      return true;
+    };
   }
 
   // 일자별 합계 시리즈. group(i) 로 나누면 Map(그룹 → 시리즈), 아니면 시리즈 하나
